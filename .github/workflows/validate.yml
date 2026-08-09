@@ -25,6 +25,26 @@ jobs:
             echo "dist/musicflow-card.js is stale or missing - run 'npm run build' and commit it.";
             exit 1;
           }
+      - name: README must be pure ASCII (HACS decodes docs as ASCII and drops everything else)
+        run: |
+          python3 - <<'EOF'
+          import sys
+          bad = []
+          with open("README.md", "rb") as f:
+              for i, line in enumerate(f, 1):
+                  for ch in line.decode("utf-8"):
+                      if ord(ch) > 127:
+                          bad.append((i, ch))
+          if bad:
+              print("README.md contains non-ASCII characters - HACS strips them and the doc renders empty:")
+              for i, ch in bad[:10]:
+                  print(f"  line {i}: {ch!r}")
+              sys.exit(1)
+          print("README.md is pure ASCII")
+          EOF
+      - name: JSON files are valid
+        run: |
+          python3 -c "import json,glob; [json.load(open(f)) for f in glob.glob('*.json')]; print('json ok')"
 
   validate:
     name: HACS validation
