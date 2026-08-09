@@ -2,88 +2,64 @@
 
 ![MusicFlow Card](images/card-preview.svg)
 
-This repository builds a **Chinese-localized version** of
-[Yet Another Media Player (YAMP)](https://github.com/jianyu-li/yet-another-media-player)
-designed for the [MusicFlow](https://github.com/ray5378/MusicFlow) ecosystem.
+A Lovelace card that acts as a **full external controller** for a
+[MusicFlow](https://github.com/ray5378/MusicFlow) server.
 
-The card renders as the familiar YAMP multi-entity media player card: artwork,
-playback controls, queue, search, lyrics, volume, grouping and customizable
-action chips. All interface strings go through YAMP's `localize()` system, so
-the card automatically follows the Home Assistant language. We contribute a
-complete **Chinese (zh) language pack** in addition to YAMP's built-in locales.
+The card connects **directly** to the MusicFlow backend's real-time WebSocket
+(`/ws`) and REST API. It is an equal peer to the Web UI and the mobile App:
+every action taken on the card is pushed to all other clients through the same
+channel, and any change made elsewhere is reflected on the card immediately.
 
 > Chinese docs: [README.zh-CN.md](README.zh-CN.md)
->
-> Upstream: [jianyu-li/yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player)
+
+## Features
+
+- **Output switcher** - switch between players and groups (peers) in real time.
+- **Playback controls** - play/pause, previous/next, stop, shuffle/loop modes.
+- **Progress bar** - smooth, with live position interpolation and seek.
+- **Lyrics** - synced lyrics that scroll and highlight with the current line.
+- **Queue** - view, jump, remove, and drag-to-reorder the play queue.
+- **Search** - search the library and play or enqueue results.
+- **Add to playlist** - add the current or any searched song to a playlist.
+- **Like / favorite** - star or unstar the current song.
 
 ## Requirements
 
-| Component | Minimum |
-|---|---|
-| [MusicFlow](https://github.com/ray5378/MusicFlow) server | 1.1.x or newer |
-| [hass-musicflow](https://github.com/ray5378/hass-musicflow) integration | 1.2.x or newer |
-| Home Assistant | 2024.1 or newer |
+- Home Assistant **2024.12.0** or newer.
+- The [MusicFlow integration](https://github.com/ray5378/hass-musicflow)
+  configured (it supplies the backend URL and API key to the card).
+- The MusicFlow backend must allow your Home Assistant frontend origin in
+  `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
+  directly from the browser.
 
-## Install
+## Installation
 
-### HACS (recommended)
+1. In HACS, add the custom repository
+   `https://github.com/ray5378/hass-musicflow-card` (category: Dashboard).
+2. Install **MusicFlow Card**.
+3. Restart Home Assistant if needed.
 
-1. Open the three-dot menu in HACS and choose **Custom repositories**.
-2. Add `https://github.com/ray5378/hass-musicflow-card` with category
-   **Dashboard** (this is the HACS label for the plugin / frontend category).
-3. Go to **HACS -> Frontend** and click **Download** on the **MusicFlow Card**
-   entry, then reload the Lovelace dashboard (or restart Home Assistant).
+## Configuration
 
-### Manual
-
-1. Copy `dist/hass-musicflow-card.js` into your `config/www/` directory.
-2. Add it as a module resource in **Settings -> Dashboards -> three-dot menu
-   -> Resources**: `/local/hass-musicflow-card.js`, type **JavaScript Module**.
-
-## Usage
-
-The card is registered as **`yet-another-media-player`** (YAMP's native type),
-so any YAMP YAML works:
+Add a manual card with type `custom:hass-musicflow-card`:
 
 ```yaml
-type: custom:yet-another-media-player
-entities:
-  - entity: media_player.living_room
+type: custom:hass-musicflow-card
 ```
 
-Or, easier, open the dashboard edit mode, choose **Add card**, and pick
-**Yet Another Media Player** from the picker. The card has a full visual
-editor (entities, behavior, look & feel, artwork, actions).
+The card fetches the backend URL and API key automatically from the MusicFlow
+integration. If you prefer to hard-code them, provide them explicitly:
 
-For MusicFlow players, add your DLNA device or sync group entity as an
-`entities` entry. The UI will follow Home Assistant's language; when HA is set
-to Chinese, the card shows Simplified Chinese.
-
-## Building
-
-```bash
-npm install
-npm run build        # rollup: src/yet-another-media-player.js -> dist/hass-musicflow-card.js
+```yaml
+type: custom:hass-musicflow-card
+url: http://musicflow.local:3000
+api_key: YOUR_LONG_LIVED_API_KEY
 ```
 
-The compiled bundle lives at `dist/hass-musicflow-card.js` and must be
-committed so it can be validated (`.github/workflows/validate.yml`).
+## How it works
 
-## Adding / tweaking translations
-
-All UI strings live in `src/localize/languages/` (one file per language).
-`zh.js` is the Chinese pack. It is selected automatically by
-`src/localize/localize.js` when the HA language is `zh`/`zh-CN`/`zh-Hant`.
-
-## Related repositories
-
-| Repo | What it is |
-|---|---|
-| [MusicFlow](https://github.com/ray5378/MusicFlow) | The server: music library, DLNA playback sync groups |
-| [hass-musicflow](https://github.com/ray5378/hass-musicflow) | The HACS integration (media player entities) |
-| [hassio-addons](https://github.com/ray5378/hassio-addons) | HA add-on packaging of the server |
-| [yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player) | Upstream card this build is based on |
-
-## License
-
-MIT
+The card obtains the backend connection details from the integration via the
+`musicflow/backend_config` WebSocket command, then opens a live `/ws`
+connection using the user's API key. All playback, queue, lyrics, search,
+playlist, and favorite actions are sent straight to the backend REST API, so
+the card and every other MusicFlow client stay perfectly in sync.

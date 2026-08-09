@@ -6,7 +6,7 @@ import esbuild from 'rollup-plugin-esbuild';
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 export default {
-  input: 'src/yet-another-media-player.js',
+  input: 'src/musicflow-remote-card.js',
   output: {
     file: 'dist/hass-musicflow-card.js',
     format: 'es',
