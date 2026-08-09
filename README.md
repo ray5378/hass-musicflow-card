@@ -96,7 +96,7 @@ Any MusicFlow media player entity works - a DLNA device or a sync group.
 
 | Symptom | Fix |
 |---|---|
-| `Custom element doesn't exist: musicflow-player-card` (or `not found`) when adding the card | The JS was not loaded as a dashboard resource yet. Confirm the file is registered: **Settings -> Dashboards -> three-dot menu -> Resources**. The HACS install should add `/local/community/hass-musicflow-card/hass-musicflow-card.js` (type **module**) automatically - if missing, add it manually. Then reload the dashboard (Ctrl/Cmd+R). |
+| `Custom element doesn't exist: musicflow-player-card` (or `not found`) when adding the card | The JS was not loaded as a dashboard resource yet. Check **Settings -> Dashboards -> three-dot menu -> Resources**: HACS should have added `/hacsfiles/hass-musicflow-card/hass-musicflow-card.js` (type **module**) automatically. If the list is empty or the entry is missing, your dashboard may be in **YAML mode** (HACS cannot auto-register resources there) - add the resource manually, or temporarily switch the dashboard to storage mode. Then reload the dashboard (Ctrl/Cmd+R). |
 | Card does not show up in the **Add card** picker | The JS resource did not load. Same fix as above - register the resource, then refresh. The card declares itself via `window.customCards`, so once the resource is loaded it appears in the picker (search "musicflow"). |
 | `musicflow.like_track` not found when clicking the heart | The integration is older than 1.2.5. Update it via HACS and restart Home Assistant. |
 | Lyrics panel says "No lyrics" | The current track has no `.lrc` file alongside it on the server side. The MusicFlow server only fetches lyrics it can find. |
