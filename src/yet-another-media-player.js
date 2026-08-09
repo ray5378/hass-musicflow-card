@@ -80,8 +80,8 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some(card => card.type === "yet-another-media-player")) {
   window.customCards.push({
     type: "yet-another-media-player",
-    name: "Yet Another Media Player",
-    description: "YAMP is a multi-entity media card with custom actions",
+    name: "Yet Another Media Player (YAMP)",
+    description: "MusicFlow media card — YAMP with Chinese localization",
     preview: true,
     getEntitySuggestion: (hass, entityId) => {
       const domain = entityId.split(".")[0];
