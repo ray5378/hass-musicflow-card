@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="340" viewBox="0 0 520 340">
+  <rect x="0" y="0" width="520" height="340" rx="16" fill="#1c1c24"/>
+  <!-- card -->
+  <rect x="14" y="14" width="492" height="312" rx="12" fill="#26262f"/>
+  <!-- artwork -->
+  <rect x="34" y="36" width="72" height="72" rx="8" fill="#4a4a5a"/>
+  <circle cx="70" cy="72" r="14" fill="#8a8aa0"/>
+  <path d="M62 88l16-10 16 10" fill="none" stroke="#8a8aa0" stroke-width="3"/>
+  <!-- title / artist -->
+  <rect x="120" y="44" width="180" height="14" rx="4" fill="#d8d8e6"/>
+  <rect x="120" y="66" width="120" height="10" rx="3" fill="#5a5a6e"/>
+  <!-- heart -->
+  <path d="M252 52c0-4.5 3.6-8 8-8 2.6 0 5 1.2 6.4 3.1C267.8 45.2 270 44 272.5 44c4.4 0 8 3.5 8 8 0 6.5-6.4 11.6-12 16.4-5.6-4.8-12-9.9-12-16.4z" fill="#ff5a7a"/>
+  <!-- progress -->
+  <rect x="34" y="126" width="452" height="5" rx="2.5" fill="#3a3a4a"/>
+  <rect x="34" y="126" width="180" height="5" rx="2.5" fill="#ff5a7a"/>
+  <circle cx="214" cy="128" r="6" fill="#ff5a7a"/>
+  <!-- controls -->
+  <g transform="translate(120 152)" fill="#c8c8d8">
+    <path d="M0 22l16-12v24z"/>
+    <rect x="34" y="10" width="9" height="24" rx="2"/>
+    <rect x="46" y="10" width="9" height="24" rx="2"/>
+    <path d="M66 22l16-12v24z"/>
+    <rect x="92" y="8" width="12" height="28" rx="2"/>
+  </g>
+  <!-- volume -->
+  <rect x="36" y="196" width="300" height="4" rx="2" fill="#3a3a4a"/>
+  <rect x="36" y="196" width="120" height="4" rx="2" fill="#8a8aa0"/>
+  <circle cx="156" cy="198" r="5" fill="#8a8aa0"/>
+  <!-- selects -->
+  <rect x="36" y="216" width="200" height="20" rx="5" fill="#33333f"/>
+  <rect x="252" y="216" width="200" height="20" rx="5" fill="#33333f"/>
+  <!-- lyrics -->
+  <rect x="36" y="250" width="440" height="14" rx="4" fill="#3f3f50"/>
+  <rect x="36" y="272" width="440" height="14" rx="4" fill="#ff5a7a"/>
+  <rect x="36" y="294" width="420" height="14" rx="4" fill="#3f3f50"/>
+</svg>

@@ -1,5 +1,7 @@
 # MusicFlow Card
 
+![MusicFlow Card](images/card-preview.svg)
+
 A Lovelace custom card for the [MusicFlow](https://github.com/ray5378/MusicFlow)
 Home Assistant integration. It puts the full MusicFlow player control onto one
 card:
