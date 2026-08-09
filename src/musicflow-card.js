@@ -340,8 +340,21 @@ class MusicFlowPlayerCard extends LitElement {
   get _playing() { return this._state === "playing"; }
   get _on() { return this._state !== "off" && this._state !== "unavailable"; }
   get _position() {
+    /* 实时进度 = 基准 position + 已流逝时间(与 HA 原生 media_player 插值一致)。
+       播放中才插值;暂停/停止时用静止值;正在拖动时用拖到的值。 */
     if (this._seeking && this._seekPos != null) return this._seekPos;
-    return Number(this._attr.media_position || 0);
+    const attr = this._attr;
+    const pos = Number(attr.media_position || 0);
+    if (this._playing && attr.media_position_updated_at) {
+      const updated = Date.parse(attr.media_position_updated_at);
+      if (isFinite(updated)) {
+        const elapsed = (Date.now() - updated) / 1000;
+        const dur = Number(attr.media_duration || 0);
+        if (dur > 0) return Math.max(0, Math.min(pos + elapsed, dur));
+        return pos + elapsed;
+      }
+    }
+    return pos;
   }
   get _duration() { return Number(this._attr.media_duration || 0); }
   get _volume() { return Number(this._attr.volume_level || 0); }
