@@ -36,9 +36,14 @@
 1. 把 `dist/musicflow-card.js` 复制到你的 `config/www/` 目录；
 2. **设置 → 仪表盘 → ⋮ → 资源**里添加：`/local/musicflow-card.js`，类型 **JavaScript 模块**。
 
+装好后进入仪表盘**编辑模式 → 添加卡片**，在选择器里直接选 **MusicFlow Player**；若没显示，在搜索框输入 `musicflow` 就能找到——卡片通过 `window.customCards` 注册到 HA 前端，资源加载后即可被 GUI 发现，不需要写 YAML。
+
 ## 使用
 
-在仪表盘添加一张卡片，YAML 如下：
+两种方式都行：
+
+- **GUI**：仪表盘编辑模式 → 添加卡片 → 选 **MusicFlow Player**；
+- **YAML**：
 
 ```yaml
 type: custom:musicflow-player-card
@@ -63,6 +68,16 @@ entity: media_player.living_room
 - **切换输出设备**使用集成内置的 `select_source` 能力，队列与进度整体搬过去；
 - 歌词通过 `musicflow/lyrics` WebSocket 命令每首歌拉取一次，在卡片本地按
   `media_position` 高亮滚动。
+
+## 排查
+
+| 现象 | 解决 |
+|---|---|
+| 添加卡片时 `Custom element doesn't exist: musicflow-player-card`（或 `not found`） | JS 还没作为资源加载。检查 **设置 → 仪表盘 → ⋮ → 资源**：HACS 安装应自动加上 `/local/community/hass-musicflow-card/dist/musicflow-card.js`（类型 module）；缺的话手动加，然后强制刷新仪表盘（Ctrl/Cmd+R）。 |
+| **添加卡片**选择器里看不到 MusicFlow Player | 资源没加载成功，处理同上。卡片通过 `window.customCards` 自注册，资源加载后就会出现在选择器里（搜索 `musicflow`）。 |
+| 点心形按钮报 `musicflow.like_track` 不存在 | 集成版本低于 1.2.5，去 HACS 升级集成并重启 HA。 |
+| 歌词面板一直显示「暂无歌词」 | 当前曲目在服务端旁边没有 `.lrc` 文件。MusicFlow 服务端只会拉取它能找到的歌词。 |
+| 「添加到歌单」下拉是空的 | 服务端还没有可编辑的歌单，先去 MusicFlow 网页端创建一个。 |
 
 ## 相关仓库
 

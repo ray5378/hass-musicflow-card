@@ -45,6 +45,18 @@ The card adapts to the light / dark HA theme automatically.
 2. Add it as a module resource in **Settings -> Dashboards -> three-dot menu
    -> Resources**: `/local/musicflow-card.js`, type **JavaScript Module**.
 
+After installing, open the dashboard edit mode and choose **Add card** ->
+**MusicFlow Player** from the picker. If it does not show up there, type
+`musicflow` into the search box - the card registers itself with the HA
+frontend so it is discoverable from the GUI (no YAML required).
+
+```yaml
+type: custom:musicflow-player-card
+entity: media_player.living_room
+```
+
+Any MusicFlow media player entity works - a DLNA device or a sync group.
+
 ## Usage
 
 Add a card to your dashboard with the following YAML:
@@ -53,6 +65,9 @@ Add a card to your dashboard with the following YAML:
 type: custom:musicflow-player-card
 entity: media_player.living_room
 ```
+
+Or, easier, open the dashboard edit mode, choose **Add card**, and pick
+**MusicFlow Player** from the picker (search "musicflow" if needed).
 
 Any MusicFlow media player entity works - a DLNA device or a sync group.
 
@@ -76,6 +91,16 @@ Any MusicFlow media player entity works - a DLNA device or a sync group.
   integration, so the queue and playback position move to the target player.
 - Lyrics are fetched once per track via the `musicflow/lyrics` WebSocket
   command and highlighted locally against `media_position`.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Custom element doesn't exist: musicflow-player-card` (or `not found`) when adding the card | The JS was not loaded as a dashboard resource yet. Confirm the file is registered: **Settings -> Dashboards -> three-dot menu -> Resources**. The HACS install should add `/local/community/hass-musicflow-card/dist/musicflow-card.js` (type **module**) automatically - if missing, add it manually. Then reload the dashboard (Ctrl/Cmd+R). |
+| Card does not show up in the **Add card** picker | The JS resource did not load. Same fix as above - register the resource, then refresh. The card declares itself via `window.customCards`, so once the resource is loaded it appears in the picker (search "musicflow"). |
+| `musicflow.like_track` not found when clicking the heart | The integration is older than 1.2.5. Update it via HACS and restart Home Assistant. |
+| Lyrics panel says "暂无歌词" / "No lyrics" | The current track has no `.lrc` file alongside it on the server side. The MusicFlow server only fetches lyrics it can find. |
+| Add-to-playlist shows an empty dropdown | The server has no playlists yet, or none you can edit. Create one in the MusicFlow web UI first. |
 
 ## Related repositories
 

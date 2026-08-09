@@ -542,6 +542,9 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "musicflow-player-card",
   name: "MusicFlow Player",
-  description: "MusicFlow 完整播放控件:控制 / 喜欢 / 添加到歌单 / 滚动歌词 / 切换输出设备",
-  preview: false,
+  // HA 卡片选择器（仪表盘 → 添加卡片）按 description 显示卡片，
+  // 同时按 name 在搜索框里匹配。这里简短一句 + 一行引导，比全角中文更稳。
+  description:
+    "Full MusicFlow player card. Requires MusicFlow integration 1.2.6+ and a MusicFlow media_player entity.",
+  preview: true,
 });
