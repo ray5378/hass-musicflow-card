@@ -1,6 +1,6 @@
 {
   "name": "MusicFlow Card",
-  "filename": "dist/hass-musicflow-card.js",
+  "filename": "hass-musicflow-card.js",
   "content_in_root": false,
   "country": ["CN", "ALL"],
   "homeassistant": "2024.12.0",
