@@ -621,11 +621,12 @@ class MusicFlowRemoteCard extends LitElement {
   // lucide 风格 SVG 图标(stroke=currentColor;filled 时实心,用于播放/暂停/红心)
   _icon(name, size = 20, filled = false) {
     const body = MF_ICONS[name] || "";
-    return html`<svg viewBox="0 0 24 24" width="${size}" height="${size}"
-      fill="${filled ? "currentColor" : "none"}"
-      stroke="${filled ? "none" : "currentColor"}"
-      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-      aria-hidden="true">${unsafeHTML(body)}</svg>`;
+    // 关键:必须把完整 <svg> 根字符串一起注入 HTML 元素(span)——HTML 解析器遇到
+    // <svg> 会把子节点切到 SVG 命名空间;若只把子节点注入 lit 生成的 <svg>,
+    // unsafeHTML 经 <template> 按 HTML 解析,子节点变成 HTMLUnknownElement 不渲染
+    // (v1.5.7 图标全消失的根因)。
+    const svg = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="${filled ? "currentColor" : "none"}" stroke="${filled ? "none" : "currentColor"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+    return html`<span class="ic">${unsafeHTML(svg)}</span>`;
   }
 
   _cover(coverArt) {
@@ -653,7 +654,7 @@ class MusicFlowRemoteCard extends LitElement {
 
     return html`
       <ha-card>
-        <div class="wrap">
+        <div class="wrap ${u.connected ? "" : "off"}">
           ${this._renderOutputs()}
 
           <div class="now">
@@ -671,7 +672,6 @@ class MusicFlowRemoteCard extends LitElement {
                 <span class="t">${this._fmtTime(u.duration)}</span>
               </div>
             </div>
-            <span class="conn ${u.connected ? "on" : "off"}" title="后端连接状态">${u.connected ? "已连接" : "未连接"}</span>
           </div>
 
           <div class="controls">
@@ -1120,10 +1120,12 @@ class MusicFlowRemoteCard extends LitElement {
           radial-gradient(ellipse 62% 44% at 16% 0%, rgba(126, 110, 178, 0.16), transparent 62%),
           radial-gradient(ellipse 54% 42% at 88% 100%, rgba(246, 44, 85, 0.10), transparent 62%);
       }
-      .wrap { position: relative; z-index: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
-      .conn { font-size: 11px; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
-      .conn.on { color: #9fe07c; background: rgba(107, 171, 69, 0.18); }
-      .conn.off { color: rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.08); }
+      .wrap { position: relative; z-index: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px;
+        transition: opacity 0.3s ease, filter 0.3s ease; }
+      /* 未连接:整卡调暗降饱和做区分(不再显示"已连接/未连接"文字) */
+      .wrap.off { opacity: 0.45; filter: saturate(0.5) brightness(0.75); }
+      .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+      .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
       .outputs { display: flex; flex-wrap: wrap; gap: 6px; }
       .out { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
