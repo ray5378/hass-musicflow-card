@@ -1,0 +1,8 @@
+{
+  "name": "MusicFlow Card",
+  "filename": "dist/musicflow-card.js",
+  "content_in_root": false,
+  "country": ["CN", "ALL"],
+  "homeassistant": "2024.12.0",
+  "zip_release": false
+}
