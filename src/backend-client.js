@@ -2,28 +2,31 @@
 // Mirrors the Web frontend's player store (frontend/src/stores/player.ts) so
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
-//
-// Auth: every REST call and the WS upgrade carry the user's long-lived apiKey
-// as ?token=<apiKey> (backend auth.ts supports JWT-first then apiKey, same as
-// the WS upgrade path). The card obtains url + apiKey from the MusicFlow HA
-// integration via the `musicflow/backend_config` WS command, falling back to
-// explicit config (url + api_key) if provided.
 
 const RECONNECT_DELAY = 3000;
 
+function log(...args) {
+  console.log("[MusicFlow card]", ...args);
+}
+function warn(...args) {
+  console.warn("[MusicFlow card]", ...args);
+}
+function error(...args) {
+  console.error("[MusicFlow card]", ...args);
+}
+
 export class BackendClient {
   constructor(opts = {}) {
-    this.hass = opts.hass || null; // HomeAssistant object (for musicflow/backend_config)
-    this.url = opts.url || null; // backend base url, e.g. http://host:3000
+    this.hass = opts.hass || null;
+    this.url = opts.url || null;
     this.apiKey = opts.apiKey || null;
     this.ws = null;
-    this._listeners = new Map(); // event -> Set<cb>
+    this._listeners = new Map();
     this._connected = false;
     this._pendingInit = null;
     this._reconnectTimer = null;
   }
 
-  // ---- event subscription ----
   on(event, cb) {
     if (!this._listeners.has(event)) this._listeners.set(event, new Set());
     this._listeners.get(event).add(cb);
@@ -31,24 +34,25 @@ export class BackendClient {
   }
   _emit(event, payload) {
     this._listeners.get(event)?.forEach((cb) => {
-      try { cb(payload); } catch (e) { console.error("[mf-client] listener error", e); }
+      try { cb(payload); } catch (e) { error("listener error", e); }
     });
   }
 
   get connected() { return this._connected; }
 
-  // ---- bootstrap ----
   async init() {
     if (this.url && this.apiKey) return;
     if (!this.hass) throw new Error("MusicFlow 卡片: 缺少后端地址,且未提供 hass 以自动获取");
     if (this._pendingInit) return this._pendingInit;
     this._pendingInit = (async () => {
+      log("fetching backend_config from HA integration");
       const res = await this.hass.callWS({ type: "musicflow/backend_config" });
       const backends = (res && res.backends) || [];
       if (!backends.length) throw new Error("MusicFlow 集成未配置后端连接");
       const b = backends[0];
       this.url = b.url;
       this.apiKey = b.api_key;
+      log("backend_config ok", this.url);
     })();
     await this._pendingInit;
   }
@@ -61,7 +65,6 @@ export class BackendClient {
     const proto = u.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${u.host}/ws?token=${encodeURIComponent(this.apiKey)}`;
   }
-  // Append ?token= to a /rest path (path may already carry a query).
   _withToken(path, qs) {
     const base = this._restBase();
     const sep = path.includes("?") ? "&" : "?";
@@ -70,7 +73,6 @@ export class BackendClient {
     return `${base}${path}${extra}`;
   }
 
-  // ---- REST ----
   async rest(path, { method = "GET", body } = {}) {
     const url = this._withToken(path);
     const init = { method, headers: {} };
@@ -78,8 +80,13 @@ export class BackendClient {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
     }
+    log("REST", method, url.replace(/token=[^&]+/, "token=***"));
     const res = await fetch(url, init);
-    if (!res.ok) throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      error("REST failed", method, path, res.status, text.slice(0, 200));
+      throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
+    }
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
       const data = await res.json();
@@ -89,14 +96,13 @@ export class BackendClient {
     return res;
   }
 
-  // ---- WebSocket ----
   connect() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     let ws;
     try {
       ws = new WebSocket(this._wsUrl());
     } catch (e) {
-      console.error("[mf-client] WS open failed", e);
+      error("WS open failed", e);
       this._scheduleReconnect();
       return;
     }
@@ -106,9 +112,9 @@ export class BackendClient {
       try { msg = JSON.parse(ev.data); } catch { return; }
       this._handle(msg);
     };
-    ws.onopen = () => { this._connected = true; this._emit("open"); };
-    ws.onclose = () => { this._connected = false; this._emit("close"); this._scheduleReconnect(); };
-    ws.onerror = () => { try { ws.close(); } catch {} };
+    ws.onopen = () => { this._connected = true; log("WS open"); this._emit("open"); };
+    ws.onclose = () => { this._connected = false; warn("WS close"); this._emit("close"); this._scheduleReconnect(); };
+    ws.onerror = (e) => { error("WS error", e); try { ws.close(); } catch {} };
   }
   _scheduleReconnect() {
     if (this._reconnectTimer) return;
@@ -123,7 +129,11 @@ export class BackendClient {
   }
 
   _handle(msg) {
+    log("WS", msg.type, msg);
     switch (msg.type) {
+      case "snapshot":
+        this._emit("snapshot", msg.devices || {});
+        break;
       case "peer_snapshot":
         this._emit("peer_snapshot", msg.peers || []);
         break;
@@ -161,7 +171,7 @@ export class BackendClient {
     }
   }
 
-  // ============ High-level peer actions (paths mirror frontend peerApi) ============
+  // ============ Peer actions ============
   peerPath(peerId, suffix) {
     return `/api/v1/peers/${encodeURIComponent(peerId)}${suffix}`;
   }
@@ -175,7 +185,7 @@ export class BackendClient {
     return this.rest(this.peerPath(peerId, "/volume"), { method: "POST", body: { volume: Math.round(volume * 100) } });
   }
   setMute(peerId, mute) {
-    return this.rest(this.peerPath(peerId, "/mute"), { method: "POST", body: { mute } });
+    return this.rest(this.peerPath(peerId, "/mute"), { method: "POST", body: { muted: mute } });
   }
   setPlayMode(peerId, mode) {
     return this.rest(this.peerPath(peerId, "/play-mode"), { method: "POST", body: { mode } });
@@ -192,13 +202,8 @@ export class BackendClient {
   clearQueue(peerId) {
     return this.rest(this.peerPath(peerId, "/queue"), { method: "DELETE" });
   }
-  setQueueIndex(peerId, index) {
-    return this.rest(this.peerPath(peerId, "/queue/index"), { method: "POST", body: { index } });
-  }
   getQueue(peerId) { return this.rest(this.peerPath(peerId, "/queue")); }
   getStatus(peerId) { return this.rest(this.peerPath(peerId, "/status")); }
-  registerLocal(name) { return this.rest("/api/v1/peers/register", { method: "POST", body: { name } }); }
-  heartbeat(peerId) { return this.rest(this.peerPath(peerId, "/heartbeat"), { method: "POST" }); }
   getPeers() { return this.rest("/api/v1/peers"); }
 
   // ============ Subsonic endpoints ============
@@ -213,21 +218,17 @@ export class BackendClient {
   async getPlaylists() { return this.rest("/getPlaylists"); }
   async updatePlaylist(playlistId, { songIdsToAdd = [] } = {}) {
     const qs = songIdsToAdd.map((id) => `songIdToAdd=${encodeURIComponent(id)}`).join("&");
-    return this.rest(`/updatePlaylist?playlistId=${encodeURIComponent(playlistId)}&${qs}`);
+    return this.rest(`/updatePlaylist?playlistId=${encodeURIComponent(playlistId)}${qs ? "&" + qs : ""}`);
   }
   async getStarred() { return this.rest("/getStarred2"); }
-  scrobble(songId) { return this.rest(`/scrobble?id=${encodeURIComponent(songId)}`).catch(() => {}); }
 
   // ============ Media URLs ============
-  streamUrl(id) { return this._withToken(`/stream?id=${encodeURIComponent(id)}`); }
   coverUrl(coverId) {
     if (!coverId) return null;
     return this._withToken(`/getCoverArt?id=${encodeURIComponent(coverId)}&size=300`);
   }
 }
 
-// Convert a Subsonic child (search result / playlist entry) into a QueueItem
-// the backend's /queue/play expects.
 export function childToQueueItem(child) {
   const SUFFIX_MIME = {
     mp3: "audio/mpeg", flac: "audio/flac", wav: "audio/wav", aac: "audio/aac",
@@ -235,7 +236,7 @@ export function childToQueueItem(child) {
   };
   const suffix = (child.suffix || "").toLowerCase();
   return {
-    songId: child.id,
+    songId: child.id || child.songId,
     title: child.title || "未知",
     artist: child.artist || undefined,
     album: child.album || undefined,
@@ -246,7 +247,6 @@ export function childToQueueItem(child) {
   };
 }
 
-// Parse a Subsonic getLyricsBySongId response into [{time: seconds, text}].
 export function parseLyrics(subsonicResp) {
   const structured = subsonicResp?.lyricsList?.structuredLyrics || [];
   const first = structured.find((l) => l.synced) || structured[0];
