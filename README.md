@@ -3,17 +3,27 @@
 ![MusicFlow Card](images/card-preview.svg)
 
 A Lovelace custom card for the [MusicFlow](https://github.com/ray5378/MusicFlow)
-Home Assistant integration. It puts the full MusicFlow player control onto one
-card:
+Home Assistant integration. Visually mirrors the **HA native media_player
+card** with enhancements specific to MusicFlow:
 
-- Play / pause / stop / previous / next, seek bar, volume and mute
-- Play modes: shuffle toggle, order / all / one repeat cycle
-- **Favorite (heart)** - add or remove the current track from the server's
-  "liked songs", two-way synced
-- **Add to playlist** - append the current track to any of your playlists
-- **Scrolling lyrics** - LRC lyrics follow the playback position in real time
-- **Switch output** - move the current queue and position to another
-  MusicFlow player (DLNA device or sync group)
+- **Layout** - large artwork on the right, title / artist / compact lyric on
+  the left, progress bar, transport controls (prev / play-pause / next),
+  shuffle, repeat, volume, power - the same affordances you already know
+  from the built-in card.
+- **Favorite (heart)** - toggle the current track in the server's
+  "liked songs", two-way synced via the entity's `liked` attribute.
+- **Add to playlist** - inline dropdown to append the current track to any
+  of your playlists.
+- **Scrolling lyrics** - LRC lines fetched once per track and highlighted
+  against the playback position. Compact one-liner in the title row by
+  default; tap the cover to expand the full lyrics panel.
+- **Switch player** - a dropdown at the top right switches the control
+  target to any MusicFlow DLNA device or sync group. **The previous player
+  keeps playing** (queue + state unchanged) - only the card's control
+  focus moves, matching the MusicFlow web client's `switchPeer` behavior.
+- **Browse media library** - the library button opens the **HA native
+  media browser** for the active entity (more-info dialog). No custom
+  browser tree is reinvented.
 
 The card adapts to the light / dark HA theme automatically.
 
