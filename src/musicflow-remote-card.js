@@ -623,11 +623,6 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <ha-card>
         <div class="wrap">
-          <div class="topbar">
-            <span class="title">MusicFlow</span>
-            <span class="conn ${u.connected ? "on" : "off"}">${u.connected ? "已连接" : "未连接"}</span>
-          </div>
-
           ${this._renderOutputs()}
 
           <div class="now">
@@ -644,6 +639,7 @@ class MusicFlowRemoteCard extends LitElement {
                 <span class="t">${this._fmtTime(u.duration)}</span>
               </div>
             </div>
+            <span class="conn ${u.connected ? "on" : "off"}" title="后端连接状态">${u.connected ? "已连接" : "未连接"}</span>
           </div>
 
           <div class="controls">
@@ -937,6 +933,55 @@ class MusicFlowRemoteCard extends LitElement {
   _browserPlaySong(song) { this._appendAndPlay(song); }
   _browserEnqueueSong(song) { this._enqueueOnly(song); }
 
+  _collLabel(it) {
+    switch (it.kind) {
+      case "playlist": return "歌单";
+      case "album": return "专辑";
+      case "artist": return "艺人";
+      case "genre": return "流派";
+      default: return "列表";
+    }
+  }
+
+  // 点击封面:直接播放整个集合(歌单/专辑/艺人/流派)的全部歌曲,
+  // 用集合歌曲替换当前队列并从第 1 首开始播放。
+  async _browserPlayCollection(item) {
+    const pid = this._ui.currentPeerId;
+    if (!pid || !item) return;
+    let songs = [];
+    try {
+      if (item.kind === "playlist") {
+        const res = await this._client.getPlaylistSongs(item.id);
+        songs = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
+      } else if (item.kind === "album") {
+        const res = await this._client.getAlbum(item.id);
+        songs = (res?.album?.song || []).map((s) => this._toSongItem(s));
+      } else if (item.kind === "artist") {
+        const res = await this._client.getArtist(item.id);
+        const albums = res?.artist?.album || [];
+        for (const a of albums) {
+          const ar = await this._client.getAlbum(String(a.id));
+          songs.push(...(ar?.album?.song || []).map((s) => this._toSongItem(s)));
+        }
+      } else if (item.kind === "genre") {
+        const res = await this._client.getAlbumList2({ type: "byGenre", genre: item.id, size: 500 });
+        const albums = res?.albumList2?.album || [];
+        for (const a of albums) {
+          const ar = await this._client.getAlbum(String(a.id));
+          songs.push(...(ar?.album?.song || []).map((s) => this._toSongItem(s)));
+        }
+      }
+    } catch (e) {
+      err("browser play collection failed", e);
+      return;
+    }
+    if (!songs.length) { log("collection empty"); return; }
+    const items = songs.map((s) => childToQueueItem(s));
+    this._client.playQueue(pid, items, 0)
+      .then(() => log("playing", this._collLabel(item), item.name, songs.length, "songs"))
+      .catch((e) => err("playCollection failed", e));
+  }
+
   _renderBrowserItem(it) {
     const cover = it.coverArt ? this._cover(it.coverArt) : null;
     if (it.kind === "song") {
@@ -956,12 +1001,15 @@ class MusicFlowRemoteCard extends LitElement {
       : it.kind === "playlist" ? `${it.songCount || 0} 首`
       : "";
     return html`
-      <div class="bitem" style="cursor:pointer" @click=${() => this._browserItemClick(it)}>
-        <div class="bthumb">${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}</div>
-        <div class="bmeta" style="flex:1;min-width:0">
+      <div class="bitem">
+        <div class="bthumb" style="cursor:pointer" title="播放整个${this._collLabel(it)}" @click=${() => this._browserPlayCollection(it)}>
+          ${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}
+        </div>
+        <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserItemClick(it)}>
           <div class="bt">${it.name}</div>
           <div class="ba">${sub}</div>
         </div>
+        <button class="mini" title="进入查看" @click=${() => this._browserItemClick(it)}>›</button>
       </div>`;
   }
 
@@ -1020,9 +1068,7 @@ class MusicFlowRemoteCard extends LitElement {
       :host { display: block; }
       ha-card { background: var(--card-background-color, #fff); color: var(--primary-text-color, #333); }
       .wrap { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-      .topbar { display: flex; justify-content: space-between; align-items: center; }
-      .title { font-weight: 600; font-size: 15px; }
-      .conn { font-size: 12px; padding: 1px 8px; border-radius: 10px; }
+      .conn { font-size: 12px; padding: 1px 8px; border-radius: 10px; white-space: nowrap; }
       .conn.on { color: #fff; background: #2e9e5b; }
       .conn.off { color: #999; background: #eee; }
       .err { color: #c33; padding: 12px; }
@@ -1032,7 +1078,7 @@ class MusicFlowRemoteCard extends LitElement {
       .out.active { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
       .out.off { opacity: 0.5; }
       .hint { color: #999; font-size: 12px; }
-      .now { display: flex; gap: 12px; align-items: center; }
+      .now { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
       .cover { width: 72px; height: 72px; border-radius: 8px; overflow: hidden; flex: 0 0 auto;
         background: var(--secondary-background-color, #f0f0f0); display: flex; align-items: center; justify-content: center; }
       .cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -1076,7 +1122,7 @@ class MusicFlowRemoteCard extends LitElement {
       .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 999; }
       .picker { background: var(--card-background-color, #fff); color: var(--primary-text-color, #333);
         border-radius: 12px; padding: 12px; width: 280px; max-height: 70vh; overflow-y: auto; }
-      .ctl:hover, .act:hover, .mini:hover, .out:hover, .pitem:hover, .cat:hover {
+      .ctl:hover, .act:hover, .mini:hover, .out:hover, .pitem:hover, .cat:hover, .bthumb:hover {
         box-shadow: 0 0 0 2px var(--primary-color, #03a9f4);
       }
       .ctl:hover { border-radius: 50%; background: var(--secondary-background-color, #f0f0f0); }
