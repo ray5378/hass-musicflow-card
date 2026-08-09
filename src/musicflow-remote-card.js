@@ -3,10 +3,29 @@
 // real-time /ws channel + REST API (via the `musicflow/backend_config` HA WS
 // command), so it is an equal peer to the Web/App clients.
 import { LitElement, html, css } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { BackendClient, childToQueueItem, parseLyrics } from "./backend-client.js";
 
 const PLAY_MODES = ["order", "one", "all", "shuffle"];
 const PLAY_MODE_LABEL = { order: "顺序", one: "单曲", all: "循环", shuffle: "随机" };
+const PLAY_MODE_TIP = { order: "顺序播放", one: "单曲循环", all: "列表循环", shuffle: "随机播放" };
+// 与主项目一致(lucide):order→list-ordered / one→repeat-1 / all→repeat / shuffle→shuffle
+const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", shuffle: "shuffle" };
+
+// lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
+const MF_ICONS = {
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  prev: '<polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/>',
+  next: '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
+  shuffle: '<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.8-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  repeat1: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/>',
+  listOrdered: '<line x1="10" x2="21" y1="6" y2="6"/><line x1="10" x2="21" y1="12" y2="12"/><line x1="10" x2="21" y1="18" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  volume2: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  volumeX: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
+};
 
 function log(...args) { console.log("[MF card]", ...args); }
 function err(...args) { console.error("[MF card]", ...args); }
@@ -54,6 +73,7 @@ class MusicFlowRemoteCard extends LitElement {
       pickerSongId: null,
       showBrowser: false,
       browserStack: [],
+      showVolume: false,
     };
     this._tickTimer = null;
     this._pollTimer = null;
@@ -598,6 +618,16 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // ============ Rendering ============
+  // lucide 风格 SVG 图标(stroke=currentColor;filled 时实心,用于播放/暂停/红心)
+  _icon(name, size = 20, filled = false) {
+    const body = MF_ICONS[name] || "";
+    return html`<svg viewBox="0 0 24 24" width="${size}" height="${size}"
+      fill="${filled ? "currentColor" : "none"}"
+      stroke="${filled ? "none" : "currentColor"}"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+      aria-hidden="true">${unsafeHTML(body)}</svg>`;
+  }
+
   _cover(coverArt) {
     return this._client ? this._client.coverUrl(coverArt) : null;
   }
@@ -645,20 +675,24 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <div class="controls">
-            <button class="ctl" title="播放模式" @click=${this._cyclePlayMode}>🔀<small>${PLAY_MODE_LABEL[u.playMode]}</small></button>
-            <button class="ctl" title="上一首" @click=${this._prev}>⏮</button>
-            <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${u.isPlaying ? "⏸" : "▶"}</button>
-            <button class="ctl" title="下一首" @click=${this._next}>⏭</button>
-            <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${u.liked ? "♥" : "♡"}</button>
-          </div>
+            <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
+            <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
+            <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 24, true)}</button>
+            <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
+            <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
+            <button class="ctl ${u.showVolume ? "vol-open" : ""}" title="音量" @click=${() => { u.showVolume = !u.showVolume; this.requestUpdate(); }}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
 
-          <div class="vol-row">
-            <button class="vbtn" title="静音" @click=${this._toggleMute}>${u.muted ? "🔇" : "🔈"}</button>
-            <input class="vol" type="range" min="0" max="100" value="${vpct}"
-              style="background: linear-gradient(90deg, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%)"
-              @input=${this._setVolume} />
-            <span class="vpct">${vpct}%</span>
+            ${u.showVolume ? html`
+              <div class="volpop" @click=${(e) => e.stopPropagation()}>
+                <span class="vpct">${vpct}%</span>
+                <input class="vol-v" type="range" orient="vertical" min="0" max="100" value="${vpct}"
+                  style="background: linear-gradient(to top, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%)"
+                  @input=${this._setVolume} />
+                <button class="vbtn ${u.muted ? "muted" : ""}" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 18)}</button>
+              </div>
+            ` : ""}
           </div>
+          ${u.showVolume ? html`<div class="volpop-backdrop" @click=${() => { u.showVolume = false; this.requestUpdate(); }}></div>` : ""}
 
           <div class="actions">
             <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
@@ -1111,38 +1145,47 @@ class MusicFlowRemoteCard extends LitElement {
       .artist { font-size: 13px; color: rgba(255, 255, 255, 0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
       .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
-      .seek { flex: 1; }
-      .seek, .vol { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px;
+      .seek { flex: 1; height: 6px; border-radius: 3px; }
+      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 6px; height: 130px; border-radius: 3px; }
+      .seek, .vol-v { -webkit-appearance: none; appearance: none;
         background: rgba(255, 255, 255, 0.18); outline: none; cursor: pointer; }
-      .seek::-webkit-slider-thumb, .vol::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+      .seek::-webkit-slider-thumb, .vol-v::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
         width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid #f62c55;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease; }
-      .seek:hover::-webkit-slider-thumb, .vol:hover::-webkit-slider-thumb { transform: scale(1.2); }
-      .seek::-moz-range-track, .vol::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
-      .seek::-moz-range-progress, .vol::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
-      .seek::-moz-range-thumb, .vol::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
+      .seek:hover::-webkit-slider-thumb, .vol-v:hover::-webkit-slider-thumb { transform: scale(1.2); }
+      .seek::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
+      .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
+      .vol-v::-moz-range-track { width: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
+      .vol-v::-moz-range-progress { width: 6px; border-radius: 3px; background: #f62c55; }
+      .seek::-moz-range-thumb, .vol-v::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
-      .controls { display: flex; justify-content: center; align-items: center; gap: 14px; }
-      .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer; font-size: 19px;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
+      .controls { display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; }
+      .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
         width: 42px; height: 42px; padding: 0; border-radius: 50%;
         transition: background 0.2s, box-shadow 0.2s, transform 0.12s, color 0.2s; }
-      .ctl small { font-size: 9px; color: rgba(255, 255, 255, 0.45); margin-top: 1px; }
+      .ctl svg { display: block; }
       .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
-      .ctl.play { width: 54px; height: 54px; font-size: 22px; background: #f62c55; color: #fff;
+      .ctl.play { width: 54px; height: 54px; background: #f62c55; color: #fff;
         box-shadow: 0 4px 16px rgba(246, 44, 85, 0.4); }
       .ctl.play:hover { background: #e63954; box-shadow: 0 6px 22px rgba(246, 44, 85, 0.55); transform: scale(1.06); }
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
-      .vol-row { display: flex; align-items: center; gap: 10px; }
-      .vbtn { border: none; background: transparent; color: rgba(255, 255, 255, 0.75); font-size: 16px; cursor: pointer;
+      .ctl.vol-open { background: rgba(246, 44, 85, 0.16); color: #f62c55; }
+      .volpop-backdrop { position: fixed; inset: 0; z-index: 15; background: transparent; }
+      .volpop { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 20;
+        display: flex; flex-direction: column; align-items: center; gap: 10px;
+        background: #1f1c2a; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px;
+        padding: 12px 10px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
+      .vbtn { border: none; background: transparent; color: rgba(255, 255, 255, 0.75); cursor: pointer;
         width: 34px; height: 34px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-        transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
+        transition: background 0.2s, box-shadow 0.2s, transform 0.12s, color 0.2s; }
       .vbtn:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .vbtn:active { transform: scale(0.92); }
-      .vol { flex: 1; }
-      .vpct { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+      .vbtn.muted { color: #f62c55; }
+      .vbtn svg { display: block; }
+      .vpct { font-size: 11px; color: rgba(255, 255, 255, 0.5); font-variant-numeric: tabular-nums; }
       .actions { display: flex; gap: 8px; }
       .act { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
         border-radius: 10px; padding: 8px 4px; font-size: 12px; cursor: pointer;
