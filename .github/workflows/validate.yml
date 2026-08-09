@@ -21,8 +21,8 @@ jobs:
         run: npm run build
       - name: Verify dist is committed and up to date
         run: |
-          git diff --exit-code dist/musicflow-card.js || {
-            echo "dist/musicflow-card.js is stale or missing - run 'npm run build' and commit it.";
+          git diff --exit-code dist/hass-musicflow-card.js || {
+            echo "dist/hass-musicflow-card.js is stale or missing - run 'npm run build' and commit it.";
             exit 1;
           }
       - name: README must be pure ASCII (HACS decodes docs as ASCII and drops everything else)
