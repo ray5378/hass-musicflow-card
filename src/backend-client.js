@@ -81,7 +81,21 @@ export class BackendClient {
       init.body = JSON.stringify(body);
     }
     log("REST", method, url.replace(/token=[^&]+/, "token=***"));
-    const res = await fetch(url, init);
+    let res;
+    try {
+      res = await fetch(url, init);
+    } catch (e) {
+      // 网络层失败:不是 HTTP 状态码错误,而是请求根本没发出去/被浏览器拦截。
+      // 几乎总是以下三者之一:
+      //  1) CORS 未放行该来源(后端 CORS_ORIGINS 没包含 HA 前端域,也未设 *)
+      //  2) 混合内容:HA 前端是 HTTPS 而后端是 http://(浏览器禁止)
+      //  3) 后端地址对浏览器不可达(集成里填的是 localhost,但卡片在另一台设备浏览器运行)
+      const hint = (e instanceof TypeError)
+        ? "网络层失败: 通常是 (1)CORS 未放行 (2)混合内容 HTTPS页访问HTTP后端 (3)后端地址浏览器不可达。请确认后端已放行该来源,且卡片所用的 url 浏览器能直接访问"
+        : String(e);
+      error("REST network error", method, url.replace(/token=[^&]+/, "token=***"), hint);
+      throw e;
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       error("REST failed", method, path, res.status, text.slice(0, 200));
