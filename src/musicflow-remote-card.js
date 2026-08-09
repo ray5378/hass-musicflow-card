@@ -74,6 +74,7 @@ class MusicFlowRemoteCard extends LitElement {
       showBrowser: false,
       browserStack: [],
       showVolume: false,
+      volAnchor: null,
     };
     this._tickTimer = null;
     this._pollTimer = null;
@@ -435,6 +436,17 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
+  // 音量弹窗:fixed 定位锚定在喇叭按钮正上方(ha-card overflow:hidden 会裁 absolute 弹窗)
+  _toggleVolumePop(e) {
+    const u = this._ui;
+    if (!u.showVolume && e?.currentTarget?.getBoundingClientRect) {
+      const r = e.currentTarget.getBoundingClientRect();
+      u.volAnchor = { x: r.left + r.width / 2, top: r.top };
+    }
+    u.showVolume = !u.showVolume;
+    this.requestUpdate();
+  }
+
   _seek(e) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
@@ -651,6 +663,8 @@ class MusicFlowRemoteCard extends LitElement {
     const song = u.song;
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
     const vpct = Math.round(u.volume * 100);
+    const va = u.volAnchor || { x: 0, top: 0 };
+    const volpopStyle = `left:${va.x}px; bottom:${window.innerHeight - va.top + 10}px;`;
 
     return html`
       <ha-card>
@@ -680,10 +694,10 @@ class MusicFlowRemoteCard extends LitElement {
             <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 24, true)}</button>
             <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
             <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
-            <button class="ctl ${u.showVolume ? "vol-open" : ""}" title="音量" @click=${() => { u.showVolume = !u.showVolume; this.requestUpdate(); }}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
+            <button class="ctl ${u.showVolume ? "vol-open" : ""}" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
 
             ${u.showVolume ? html`
-              <div class="volpop" @click=${(e) => e.stopPropagation()}>
+              <div class="volpop" style="${volpopStyle}" @click=${(e) => e.stopPropagation()}>
                 <span class="vpct">${vpct}%</span>
                 <input class="vol-v" type="range" orient="vertical" min="0" max="100" value="${vpct}"
                   style="background: linear-gradient(to top, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%)"
@@ -1148,7 +1162,7 @@ class MusicFlowRemoteCard extends LitElement {
       .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
-      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 6px; height: 130px; border-radius: 3px; }
+      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 6px; height: 110px; border-radius: 3px; }
       .seek, .vol-v { -webkit-appearance: none; appearance: none;
         background: rgba(255, 255, 255, 0.18); outline: none; cursor: pointer; }
       .seek::-webkit-slider-thumb, .vol-v::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
@@ -1161,6 +1175,14 @@ class MusicFlowRemoteCard extends LitElement {
       .vol-v::-moz-range-progress { width: 6px; border-radius: 3px; background: #f62c55; }
       .seek::-moz-range-thumb, .vol-v::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
+      /* 音量滑块:主项目 Windows10 风格 —— 一道横线贯穿轨道,hover/拖动发白光 */
+      .vol-v::-webkit-slider-thumb { width: 16px; height: 4px; border-radius: 2px; border: none;
+        background: rgba(255, 255, 255, 0.85); box-shadow: none; }
+      .vol-v:hover::-webkit-slider-thumb, .vol-v:active::-webkit-slider-thumb { background: #fff;
+        box-shadow: 0 0 8px rgba(255, 255, 255, 0.9); transform: none; }
+      .vol-v::-moz-range-thumb { width: 16px; height: 4px; border-radius: 2px; border: none;
+        background: rgba(255, 255, 255, 0.85); box-shadow: none; }
+      .vol-v:hover::-moz-range-thumb { background: #fff; box-shadow: 0 0 8px rgba(255, 255, 255, 0.9); }
       .controls { display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; }
       .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
@@ -1175,11 +1197,11 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
       .ctl.vol-open { background: rgba(246, 44, 85, 0.16); color: #f62c55; }
-      .volpop-backdrop { position: fixed; inset: 0; z-index: 15; background: transparent; }
-      .volpop { position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 20;
+      .volpop-backdrop { position: fixed; inset: 0; z-index: 999; background: transparent; }
+      .volpop { position: fixed; z-index: 1000; transform: translateX(-50%);
         display: flex; flex-direction: column; align-items: center; gap: 10px;
         background: #1f1c2a; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px;
-        padding: 12px 10px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
+        padding: 10px 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
       .vbtn { border: none; background: transparent; color: rgba(255, 255, 255, 0.75); cursor: pointer;
         width: 34px; height: 34px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
         transition: background 0.2s, box-shadow 0.2s, transform 0.12s, color 0.2s; }
