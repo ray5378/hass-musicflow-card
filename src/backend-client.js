@@ -236,6 +236,18 @@ export class BackendClient {
   }
   async getStarred() { return this.rest("/getStarred2"); }
 
+  // ============ Media library browse (Subsonic) ============
+  async getAlbumList2({ type = "alphabeticalByName", genre = "", size = 300, offset = 0 } = {}) {
+    const qs = `type=${encodeURIComponent(type)}&size=${size}&offset=${offset}` +
+      (genre ? `&genre=${encodeURIComponent(genre)}` : "");
+    return this.rest(`/getAlbumList2?${qs}`);
+  }
+  async getArtists() { return this.rest("/getArtists"); }
+  async getArtist(id) { return this.rest(`/getArtist?id=${encodeURIComponent(id)}`); }
+  async getAlbum(id) { return this.rest(`/getAlbum?id=${encodeURIComponent(id)}`); }
+  async getGenres() { return this.rest("/getGenres"); }
+  async getPlaylistSongs(id) { return this.rest(`/getPlaylist?id=${encodeURIComponent(id)}`); }
+
   // ============ Media URLs ============
   coverUrl(coverId) {
     if (!coverId) return null;

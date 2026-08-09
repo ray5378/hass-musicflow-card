@@ -52,6 +52,8 @@ class MusicFlowRemoteCard extends LitElement {
       searchResults: [],
       playlists: [],
       pickerSongId: null,
+      showBrowser: false,
+      browserStack: [],
     };
     this._tickTimer = null;
     this._pollTimer = null;
@@ -128,8 +130,18 @@ class MusicFlowRemoteCard extends LitElement {
     return null;
   }
 
+  // 本卡片只控制 DLNA 设备,非 DLNA(local/group)不显示。
+  _isDlnaPeer(p) {
+    if (!p) return false;
+    if (typeof p.peerId === "string") return p.peerId.startsWith("dlna:");
+    return (p.kind || "") === "dlna";
+  }
+  _filterDlna(peers) {
+    return (peers || []).filter((p) => this._isDlnaPeer(p));
+  }
+
   _applyPeerSnapshot(peers) {
-    const list = (peers || []).slice();
+    const list = this._filterDlna(peers);
     this._ui.peers = list;
     const pinned = this._resolveDefaultPeerId(list);
     if (!this._ui.currentPeerId || pinned) {
@@ -153,7 +165,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _upsertPeer(peer) {
-    if (!peer) return;
+    if (!peer || !this._isDlnaPeer(peer)) return;
     const idx = this._ui.peers.findIndex((p) => p.peerId === peer.peerId);
     if (idx >= 0) this._ui.peers[idx] = { ...this._ui.peers[idx], ...peer };
     else this._ui.peers.push(peer);
@@ -269,7 +281,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _refreshPeers() {
     this._client.getPeers().then((res) => {
-      const peers = res?.peers || [];
+      const peers = this._filterDlna(res?.peers || []);
       if (peers.length) { this._ui.peers = peers; this.requestUpdate(); }
     }).catch((e) => err("getPeers failed", e));
   }
@@ -370,12 +382,6 @@ class MusicFlowRemoteCard extends LitElement {
     } else {
       this._client.prev(pid).catch((e) => err("prev failed", e));
     }
-  }
-
-  _stop() {
-    const pid = this._ui.currentPeerId;
-    if (!pid) return;
-    this._client.stop(pid).catch((e) => err("stop failed", e));
   }
 
   _cyclePlayMode() {
@@ -482,13 +488,31 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.clearQueue(pid).catch((e) => err("clearQueue failed", e));
   }
 
+  // 跳播:用完整队列 + 目标索引重放,保留队列其它曲目(不重建/不清空)
   _jumpTo(index) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    const song = this._ui.queue[index];
-    if (!song) return;
-    this._client.playQueue(pid, [childToQueueItem(song)], index)
+    if (!this._ui.queue[index]) return;
+    const items = this._ui.queue.map((it) => childToQueueItem(it));
+    this._client.playQueue(pid, items, index)
       .catch((e) => err("jumpTo failed", e));
+  }
+
+  // 加入播放队列并播放:现有队列 + 该曲,从新曲索引开始
+  _appendAndPlay(song) {
+    const pid = this._ui.currentPeerId;
+    if (!pid || !song) return;
+    const items = [...this._ui.queue.map((it) => childToQueueItem(it)), childToQueueItem(song)];
+    this._client.playQueue(pid, items, this._ui.queue.length)
+      .catch((e) => err("appendAndPlay failed", e));
+  }
+
+  // 仅加入队列(不改变当前播放)
+  _enqueueOnly(song) {
+    const pid = this._ui.currentPeerId;
+    if (!pid || !song) return;
+    this._client.enqueue(pid, [childToQueueItem(song)])
+      .catch((e) => err("enqueue failed", e));
   }
 
   _reorder(from, to) {
@@ -532,10 +556,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _searchPlay(song) {
-    const pid = this._ui.currentPeerId;
-    if (!pid) return;
-    this._client.playQueue(pid, [childToQueueItem(song)], 0)
-      .catch((e) => err("searchPlay failed", e));
+    this._appendAndPlay(song);
   }
 
   _searchEnqueue(song) {
@@ -630,7 +651,6 @@ class MusicFlowRemoteCard extends LitElement {
             <button class="ctl" title="上一首" @click=${this._prev}>⏮</button>
             <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${u.isPlaying ? "⏸" : "▶"}</button>
             <button class="ctl" title="下一首" @click=${this._next}>⏭</button>
-            <button class="ctl" title="停止并清空" @click=${this._stop}>⏹</button>
             <button class="ctl" title="静音" @click=${this._toggleMute}>${u.muted ? "🔇" : "🔈"}</button>
           </div>
 
@@ -641,15 +661,17 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <div class="actions">
-            <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showSearch = false; this.requestUpdate(); }}>歌词</button>
-            <button class="act ${u.showQueue ? "active" : ""}" @click=${() => { u.showQueue = !u.showQueue; u.showLyrics = false; u.showSearch = false; this.requestUpdate(); }}>队列</button>
-            <button class="act ${u.showSearch ? "active" : ""}" @click=${() => { u.showSearch = !u.showSearch; u.showLyrics = false; u.showQueue = false; this.requestUpdate(); }}>搜索</button>
+            <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
+            <button class="act ${u.showQueue ? "active" : ""}" @click=${() => { u.showQueue = !u.showQueue; u.showLyrics = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>队列</button>
+            <button class="act ${u.showSearch ? "active" : ""}" @click=${() => { u.showSearch = !u.showSearch; u.showLyrics = false; u.showQueue = false; u.showBrowser = false; this.requestUpdate(); }}>搜索</button>
+            <button class="act ${u.showBrowser ? "active" : ""}" @click=${this._openBrowser}>媒体库</button>
             <button class="act like ${u.liked ? "on" : ""}" @click=${this._toggleLike}>${u.liked ? "♥ 已喜欢" : "♡ 喜欢"}</button>
           </div>
 
           ${u.showLyrics ? this._renderLyrics() : ""}
           ${u.showQueue ? this._renderQueue() : ""}
           ${u.showSearch ? this._renderSearch() : ""}
+          ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
 
         ${u.showPlaylistPicker ? this._renderPlaylistPicker() : ""}
@@ -756,6 +778,243 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
+  // ============ Media library browser ============
+  _openBrowser() {
+    const u = this._ui;
+    u.showBrowser = true;
+    u.showLyrics = u.showQueue = u.showSearch = false;
+    u.browserStack = [{
+      type: "root",
+      items: [
+        { kind: "cat", cat: "playlists", name: "歌单" },
+        { kind: "cat", cat: "albums", name: "专辑" },
+        { kind: "cat", cat: "artists", name: "艺术家" },
+        { kind: "cat", cat: "genres", name: "流派" },
+        { kind: "cat", cat: "starred", name: "我喜欢的音乐" },
+      ],
+      query: "", loading: false,
+    }];
+    this.requestUpdate();
+  }
+
+  _crumbName(lv) {
+    switch (lv.type) {
+      case "root": return "媒体库";
+      case "playlists": return "歌单";
+      case "playlist": return lv.name || "歌单";
+      case "albums": return "专辑";
+      case "album": return lv.name || "专辑";
+      case "artists": return "艺术家";
+      case "artist": return lv.name || "艺术家";
+      case "genres": return "流派";
+      case "genre": return lv.name || "流派";
+      case "starred": return "我喜欢的音乐";
+      default: return "";
+    }
+  }
+
+  _toSongItem(s) {
+    return {
+      kind: "song", id: String(s.id), title: s.title || "未知",
+      artist: s.artist || "", album: s.album || "",
+      coverArt: s.coverArt, duration: s.duration || 0, suffix: s.suffix,
+    };
+  }
+
+  async _browserLoad(level) {
+    level.loading = true; this.requestUpdate();
+    try {
+      if (level.type === "playlists") {
+        const res = await this._client.getPlaylists();
+        level.items = (res?.playlists?.playlist || res?.playlists || []).map((p) => ({
+          kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+          coverArt: p.coverArt, songCount: p.songCount,
+        }));
+      } else if (level.type === "playlist") {
+        const res = await this._client.getPlaylistSongs(level.id);
+        level.items = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
+      } else if (level.type === "albums") {
+        const res = await this._client.getAlbumList2({ type: "alphabeticalByName", size: 300 });
+        level.items = (res?.albumList2?.album || []).map((a) => ({
+          kind: "album", id: String(a.id), name: a.name || "未知专辑",
+          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
+        }));
+      } else if (level.type === "album") {
+        const res = await this._client.getAlbum(level.id);
+        level.items = (res?.album?.song || []).map((s) => this._toSongItem(s));
+      } else if (level.type === "artists") {
+        const res = await this._client.getArtists();
+        const indexes = res?.artists?.index || [];
+        const flat = [];
+        for (const idx of indexes) for (const a of (idx.artist || [])) {
+          flat.push({ kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt });
+        }
+        level.items = flat;
+      } else if (level.type === "artist") {
+        const res = await this._client.getArtist(level.id);
+        level.items = (res?.artist?.album || []).map((a) => ({
+          kind: "album", id: String(a.id), name: a.name || "未知专辑",
+          artist: a.artist || "", coverArt: a.coverArt,
+        }));
+      } else if (level.type === "genres") {
+        const res = await this._client.getGenres();
+        level.items = (res?.genres?.genre || []).map((g) => ({
+          kind: "genre", id: g.value, name: g.value,
+          songCount: g.songCount, albumCount: g.albumCount,
+        }));
+      } else if (level.type === "genre") {
+        const res = await this._client.getAlbumList2({ type: "byGenre", genre: level.id, size: 300 });
+        level.items = (res?.albumList2?.album || []).map((a) => ({
+          kind: "album", id: String(a.id), name: a.name || "未知专辑",
+          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
+        }));
+      } else if (level.type === "starred") {
+        const res = await this._client.getStarred();
+        level.items = (res?.starred2?.song || []).map((s) => this._toSongItem(s));
+      }
+    } catch (e) {
+      err("browser load failed", e);
+      level.items = [];
+    }
+    level.loading = false;
+    this.requestUpdate();
+  }
+
+  _browserPush(level) {
+    this._ui.browserStack.push(level);
+    this._browserLoad(level);
+  }
+
+  _browserPopTo(index) {
+    while (this._ui.browserStack.length > index + 1) this._ui.browserStack.pop();
+    this.requestUpdate();
+  }
+
+  _browserSearch() {
+    const level = this._ui.browserStack[this._ui.browserStack.length - 1];
+    if (!level) return;
+    const q = (level.query || "").trim();
+    if (level.type === "albums") {
+      if (!q) { this._browserLoad(level); return; }
+      this._client.search(q, { count: 100 }).then((res) => {
+        level.items = (res?.searchResult3?.album || []).map((a) => ({
+          kind: "album", id: String(a.id), name: a.name || "未知专辑",
+          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
+        }));
+        this.requestUpdate();
+      }).catch((e) => err("browser album search failed", e));
+    } else if (level.type === "artists") {
+      if (!q) { this._browserLoad(level); return; }
+      this._client.search(q, { count: 100 }).then((res) => {
+        level.items = (res?.searchResult3?.artist || []).map((a) => ({
+          kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt,
+        }));
+        this.requestUpdate();
+      }).catch((e) => err("browser artist search failed", e));
+    } else {
+      this.requestUpdate();
+    }
+  }
+
+  _browserItemClick(item) {
+    if (!item) return;
+    if (item.kind === "cat") {
+      const map = { playlists: "playlists", albums: "albums", artists: "artists", genres: "genres", starred: "starred" };
+      this._browserPush({ type: map[item.cat], items: [], query: "", loading: false });
+    } else if (item.kind === "playlist") {
+      this._browserPush({ type: "playlist", id: item.id, name: item.name, items: [], query: "", loading: false });
+    } else if (item.kind === "album") {
+      this._browserPush({ type: "album", id: item.id, name: item.name, items: [], query: "", loading: false });
+    } else if (item.kind === "artist") {
+      this._browserPush({ type: "artist", id: item.id, name: item.name, items: [], query: "", loading: false });
+    } else if (item.kind === "genre") {
+      this._browserPush({ type: "genre", id: item.id, name: item.name, items: [], query: "", loading: false });
+    } else if (item.kind === "song") {
+      this._appendAndPlay(item);
+    }
+  }
+
+  _browserPlaySong(song) { this._appendAndPlay(song); }
+  _browserEnqueueSong(song) { this._enqueueOnly(song); }
+
+  _renderBrowserItem(it) {
+    const cover = it.coverArt ? this._cover(it.coverArt) : null;
+    if (it.kind === "song") {
+      return html`
+        <div class="bitem">
+          <div class="bthumb">${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}</div>
+          <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
+            <div class="bt">${it.title}</div>
+            <div class="ba">${it.artist || ""}</div>
+          </div>
+          <button class="mini" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>▶</button>
+          <button class="mini" title="加入队列" @click=${() => this._browserEnqueueSong(it)}>＋</button>
+        </div>`;
+    }
+    const sub = it.kind === "album" ? (it.artist || "")
+      : it.kind === "genre" ? `${it.albumCount || 0} 专辑`
+      : it.kind === "playlist" ? `${it.songCount || 0} 首`
+      : "";
+    return html`
+      <div class="bitem" style="cursor:pointer" @click=${() => this._browserItemClick(it)}>
+        <div class="bthumb">${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}</div>
+        <div class="bmeta" style="flex:1;min-width:0">
+          <div class="bt">${it.name}</div>
+          <div class="ba">${sub}</div>
+        </div>
+      </div>`;
+  }
+
+  _renderMediaBrowser() {
+    const stack = this._ui.browserStack;
+    const level = stack[stack.length - 1];
+    if (!level) return html``;
+    const q = (level.query || "").trim().toLowerCase();
+    let items = level.items || [];
+    if (q && (level.type === "playlists" || level.type === "genres" || level.type === "starred")) {
+      items = level.type === "starred"
+        ? items.filter((s) => (s.title || "").toLowerCase().includes(q))
+        : items.filter((s) => (s.name || "").toLowerCase().includes(q));
+    }
+    const showSearch = ["playlists", "albums", "artists", "genres", "starred"].includes(level.type);
+    return html`
+      <div class="overlay" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>
+        <div class="browser" @click=${(e) => e.stopPropagation()}>
+          <div class="br-head">
+            <span class="br-title">媒体库</span>
+            <button class="mini" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>关闭</button>
+          </div>
+          <div class="br-crumbs">
+            ${stack.map((lv, i) => html`
+              <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
+              ${i < stack.length - 1 ? html`<span class="crumb-sep">›</span>` : ""}
+            `)}
+          </div>
+          ${showSearch ? html`
+            <div class="br-search">
+              <input class="search-input" placeholder="搜索…" .value=${level.query}
+                @input=${(e) => { level.query = e.target.value; }}
+                @keydown=${(e) => { if (e.key === "Enter") this._browserSearch(); }} />
+              <button class="mini" @click=${this._browserSearch}>搜索</button>
+            </div>
+          ` : ""}
+          <div class="br-list">
+            ${level.loading ? html`<div class="empty">加载中…</div>` : ""}
+            ${!level.loading && level.type === "root" ? html`
+              <div class="cat-grid">
+                ${items.map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
+              </div>
+            ` : ""}
+            ${!level.loading && level.type !== "root" ? html`
+              ${items.length === 0 ? html`<div class="empty">无内容</div>` : ""}
+              ${items.map((it) => this._renderBrowserItem(it))}
+            ` : ""}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   static get styles() {
     return css`
       :host { display: block; }
@@ -817,6 +1076,33 @@ class MusicFlowRemoteCard extends LitElement {
       .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 999; }
       .picker { background: var(--card-background-color, #fff); color: var(--primary-text-color, #333);
         border-radius: 12px; padding: 12px; width: 280px; max-height: 70vh; overflow-y: auto; }
+      .ctl:hover, .act:hover, .mini:hover, .out:hover, .pitem:hover, .cat:hover {
+        box-shadow: 0 0 0 2px var(--primary-color, #03a9f4);
+      }
+      .ctl:hover { border-radius: 50%; background: var(--secondary-background-color, #f0f0f0); }
+      .browser { background: var(--card-background-color, #fff); color: var(--primary-text-color, #333);
+        border-radius: 12px; padding: 12px; width: 380px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column; }
+      .br-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .br-title { font-weight: 600; font-size: 15px; }
+      .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px;
+        color: var(--secondary-text-color, #777); margin-bottom: 6px; }
+      .crumb { cursor: pointer; }
+      .crumb.cur { color: var(--primary-color, #03a9f4); font-weight: 600; }
+      .crumb-sep { color: #bbb; }
+      .br-search { display: flex; gap: 6px; margin-bottom: 6px; }
+      .br-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; min-height: 140px; }
+      .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0; }
+      .cat { border: 1px solid var(--divider-color, #ddd); background: transparent; color: inherit;
+        border-radius: 10px; padding: 18px 8px; font-size: 14px; cursor: pointer; }
+      .bitem { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
+      .bitem:hover { background: var(--secondary-background-color, #f5f5f5); box-shadow: 0 0 0 1px var(--divider-color, #eee); }
+      .bthumb { width: 38px; height: 38px; border-radius: 6px; overflow: hidden; flex: 0 0 auto;
+        background: var(--secondary-background-color, #f0f0f0); display: flex; align-items: center; justify-content: center; }
+      .bthumb img { width: 100%; height: 100%; object-fit: cover; }
+      .bnocover { font-size: 18px; color: #bbb; }
+      .bmeta { min-width: 0; }
+      .bt { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ba { font-size: 11px; color: var(--secondary-text-color, #999); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     `;
   }
 }
