@@ -1,61 +1,54 @@
-# MusicFlow Card — 开发目标 (Development Goals)
+# MusicFlow Card — 开发记录 (Development Notes)
 
-> 本文档是 `hass-musicflow-card` 的开发蓝图。**动手前先读「复刻基线」一节。**
+本文档记录 `hass-musicflow-card` 的当前技术路线与踩坑点。
 
-## 一句话目标
+## 当前技术路线
 
-在 Home Assistant 里给 MusicFlow 提供一张**外观与交互完全等同于 HA 官方媒体控制卡片**、但叠加了 MusicFlow 特有能力的 Lovelace 卡片。
+本仓库构建的是 **YAMP(Yet Another Media Player)的中文本地化版**:
 
-## 复刻基线（最重要，先读）
+- 卡片基座 = 上游 [jianyu-li/yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player)
+  (多实体媒体播放器卡片:封面、播放控制、队列、搜索、歌词、分组、自定义操作芯片);
+- 卡片类型 = `custom:yet-another-media-player`(保留 YAMP 原生类型,便于同步上游);
+- 中文化 = 在 `src/localize/languages/zh.js` 提供完整简体中文包,由
+  `src/localize/localize.js` 根据 HA 语言自动选用(跟随 HA 系统语言,GUI 无需额外设置)。
 
-**本卡片的开发方式是：先完整复刻官方 `media-control` 卡片，再在其基础上一点点修改，而不是从零自绘。**
+## 目录结构
 
-- 官方文档：https://www.home-assistant.io/dashboards/media-control/
-- 官方卡片类型：`type: media-control`（实体 domain 为 `media_player`）
-- 官方源码：Home Assistant 前端仓库
-  `src/panels/lovelace/cards/hui-media-control-card.ts`
-  （依赖组件同目录 `card-features/`、`components/media-player/` 等）
-
-复刻时要求：
-1. **布局 1:1**：封面图、设备名、媒体标题/艺术家、进度条、控制按钮（上一首/播放暂停/下一首/停止等）、音量、更多信息入口——位置与官方一致；
-2. **交互 1:1**：按钮显隐按官方状态机（`MediaPlayerEntityFeature` 位掩码）、进度条实时插值（`position + (now - media_position_updated_at)`）、窄屏适配（官方 ResizeObserver 阈值）；
-3. **视觉 1:1**：MDI 图标 path 与官方逐字符一致、HA 主题变量（`--primary-color` 等）自适应明暗主题；
-4. **图标字体/组件**：优先复用 HA 内置元素（`state-badge`、`ha-icon-button`、`ha-slider` 等），无法复用再内联等价实现。
-
-> 教训：此前把 `hui-media-player-entity-row`（实体行）误当基线，与用户期望的 `media-control` 卡片样式不符，整体返工。**基线必须锁定 `media-control` 卡片。**
-
-## 已确认的增强（在官方基线上叠加）
-
-| 能力 | 说明 | 依赖 |
-|---|---|---|
-| **切换播放器** | 官方 `media-control` 卡片左侧的 DLNA 图标改为可点击，点击弹出 MusicFlow 播放器切换器（耳机图标列表，显示每台"N 首 · 播放中 · 曲名 / 空闲"）。**切换遵循服务器 `switchPeer` 语义：纯 UI 切换卡片控制目标实体，旧播放器播放队列与状态完全不变，随时可切回** | 集成 1.2.6+（实体 + WS 状态推送） |
-| **喜欢（❤）** | 把当前曲目加入/移出服务器「我喜欢的音乐」，双向同步（实体 `liked` 属性） | 集成 1.2.5+（`musicflow.like_track`） |
-| **浏览媒体库** | 复用 HA 原生媒体浏览入口（实体 more-info 弹窗内自带「浏览媒体」） | 集成 1.2.6+（browse 能力） |
-
-## 候选能力（未定，按用户确认逐个加）
-
-- 播放模式单按钮循环（`order → all → one → shuffle`，图标随模式切换）
-- 滚动歌词（依赖 `musicflow/lyrics` WebSocket 命令）
-- 添加到歌单（依赖 `musicflow/playlists` + `musicflow.add_to_playlist`）
-
-> 原则：**以官方为基线逐步微调**，不一次堆功能；用户确认一项、实现一项。
-
-## 仓库约定（踩过的坑，务必遵守）
-
-1. **产物文件名必须与仓库同名**：`dist/hass-musicflow-card.js`（HACS plugin 规则：dist 下必须有与仓库同名的 js）；
-2. **`hacs.json` 的 `filename` 必须是纯文件名** `hass-musicflow-card.js`，**不要带 `dist/` 前缀**（带前缀会走根模式下载，文件落 `dist/` 子目录而资源 URL 指向根 → 404）；
-3. **`README.md` 必须纯 ASCII**（HACS 用 `decode("ascii", errors="ignore")` 读文档，中文会被丢弃），中文放 `README.zh-CN.md`；
-4. HACS 校验要求 README 至少有一张图片（`images/` 放 SVG 即可）；
-5. HACS 资源 URL 形如 `/hacsfiles/<仓库名>/<文件名>`（HACS 自动注册，勿手写 `/local/community/...` 误导用户）；
-6. 发版：**改完先 push 让 CI 跑绿**（build 校验 dist 一致性 + HACS validation `category: plugin`），再打 tag 建 GitHub Release（HACS 需要 Release 才能更新版本）；
-7. bash heredoc 里不要写含反引号的正文（会被 shell 吞掉），Release body 有代码块时建完后用 API PATCH 补。
-
-## 开发流程
-
-```bash
-npm install        # 安装 esbuild / lit
-npm run build      # src/musicflow-card.js → dist/hass-musicflow-card.js（必须提交 dist）
-# 本地验证后提交推送 → GitHub Actions 跑 CI → 绿 → 打 tag → 建 Release
+```
+src/
+  yet-another-media-player.js   # 卡片入口(自定义元素 + 主逻辑)
+  yamp-editor.js                # 可视化编辑器
+  localize/
+    localize.js                 # 语言选择:localStorage / hass.language / en
+    languages/{en,zh,...}.js    # 每种语言一个文件
+  yamp-card-styles.js ...       # 其余模块
+rollup.config.js                # 构建 -> dist/hass-musicflow-card.js
 ```
 
-版本配套：卡片 v1.x 依赖集成 1.2.6+（`musicflow/lyrics`、`musicflow/playlists` WebSocket 命令）与服务端 1.1.8+。
+## 构建与校验
+
+```bash
+npm install
+npm run build   # rollup: src/yet-another-media-player.js -> dist/hass-musicflow-card.js
+```
+
+CI(`.github/workflows/validate.yml`)会:
+1. `git diff --exit-code dist/hass-musicflow-card.js` —— **产物必须提交且为最新**;
+2. 校验 `README.md` 必须纯 ASCII(HACS 按 ASCII 解码,中文会被丢弃);
+3. HACS `category: plugin` 校验。
+
+## 踩坑记录
+
+1. **产物文件名必须与仓库同名**:`dist/hass-musicflow-card.js`;
+2. **`hacs.json` 的 `filename` 必须是纯文件名** `hass-musicflow-card.js`,不带 `dist/` 前缀
+   (带前缀会走根模式下载,文件落 `dist/` 而资源 URL 指向根 → 404);
+3. **`README.md` 必须纯 ASCII**,中文放 `README.zh-CN.md`;
+4. HACS 要求 README 至少一张图片(`images/` 放 SVG 即可);
+5. 发版:先 push 让 CI 跑绿,再打 tag 建 GitHub Release(HACS 需要 Release 才能更新版本)。
+
+## 翻译说明
+
+- 所有界面文案都走 `localize('key.path')`,没有散落的硬编码界面文字;
+- 新增/修改文案改 `src/localize/languages/zh.js`,保持与 `en.js` 的 key 一一对应,
+  不必翻译的保持英文 key 会被回退到 en;
+- 跟随 HA 语言:HA 设为中文时卡片自动显示中文,不影响其他语言用户。

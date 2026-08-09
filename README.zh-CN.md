@@ -1,91 +1,82 @@
 # MusicFlow 卡片
 
-[MusicFlow](https://github.com/ray5378/MusicFlow) HA 集成的 Lovelace 自定义卡片，
-把 MusicFlow 的完整播放控件放到一张卡片上：
+![MusicFlow Card](images/card-preview.svg)
 
-- 播放 / 暂停 / 停止 / 上一首 / 下一首、进度拖动、音量与静音
-- 播放模式：随机开关、顺序 / 列表循环 / 单曲循环 循环切换
-- **喜欢（心形）**：把当前歌曲加入或移出服务器的「我喜欢的音乐」，双向实时同步
-- **添加到歌单**：把当前歌曲追加到你任意一个歌单
-- **滚动歌词**：LRC 歌词跟随播放进度实时高亮滚动
-- **切换输出设备**：把当前队列和播放进度整体转移到另一台 MusicFlow 播放器（DLNA 设备或播放组）
+本仓库构建的是 **中文本地化版** 的
+[Yet Another Media Player (YAMP)](https://github.com/jianyu-li/yet-another-media-player),
+与 [MusicFlow](https://github.com/ray5378/MusicFlow) 生态配套使用。
 
-卡片自动适配 HA 的明 / 暗主题。
+卡片就是熟悉的 YAMP 多实体媒体播放器卡片:封面、播放控制、队列、搜索、歌词、
+音量、播放器分组与可自定义的操作芯片。所有界面文字都走 YAMP 的 `localize()`
+多语言系统,自动跟随 Home Assistant 的语言设置;除了 YAMP 自带的多语言外,
+本仓库额外提供了完整的**简体中文 (zh) 语言包**。
 
 > English docs: [README.md](README.md)
+>
+> 上游项目: [jianyu-li/yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player)
 
 ## 版本要求
 
 | 组件 | 最低版本 |
 |---|---|
-| MusicFlow 集成 | **1.2.6**（新增歌词与歌单的 WebSocket 命令） |
-| MusicFlow 服务端 | 1.1.7 及以上 |
-| Home Assistant | 2024.12 及以上 |
+| [MusicFlow](https://github.com/ray5378/MusicFlow) 服务端 | 1.1.x 及以上 |
+| [hass-musicflow](https://github.com/ray5378/hass-musicflow) 集成 | 1.2.x 及以上 |
+| Home Assistant | 2024.1 及以上 |
 
 ## 安装
 
-### HACS（推荐）
+### HACS(推荐)
 
-1. HACS 右上角 ⋮ → **自定义存储库**；
-2. 添加 `https://github.com/ray5378/hass-musicflow-card`，类别选 **Dashboard**
-   （HACS UI 下拉里没有 "Lovelace"，前端卡片的类别就是 Dashboard）；
-3. 进入 **HACS → 前端**，在 **MusicFlow Card** 条目上点**下载**，然后刷新仪表盘（或重启 HA）。
+1. HACS 右上角 ⋮ → **自定义存储库**;
+2. 添加 `https://github.com/ray5378/hass-musicflow-card`,类别选 **Dashboard**
+   (HACS UI 下拉里没有 "Lovelace"，前端卡片的类别就是 Dashboard)；
+3. 进入 **HACS → 前端**,在 **MusicFlow Card** 条目上点**下载**,刷新仪表盘(或重启 HA)。
 
 ### 手动
 
-1. 把 `dist/hass-musicflow-card.js` 复制到你的 `config/www/` 目录；
-2. **设置 → 仪表盘 → ⋮ → 资源**里添加：`/local/hass-musicflow-card.js`，类型 **JavaScript 模块**。
-
-装好后进入仪表盘**编辑模式 → 添加卡片**，在选择器里直接选 **MusicFlow Player**；若没显示，在搜索框输入 `musicflow` 就能找到——卡片通过 `window.customCards` 注册到 HA 前端，资源加载后即可被 GUI 发现，不需要写 YAML。
+1. 把 `dist/hass-musicflow-card.js` 复制到你的 `config/www/` 目录;
+2. **设置 → 仪表盘 → ⋮ → 资源**里添加:`/local/hass-musicflow-card.js`,类型 **JavaScript 模块**。
 
 ## 使用
 
-两种方式都行：
-
-- **GUI**：仪表盘编辑模式 → 添加卡片 → 选 **MusicFlow Player**；
-- **YAML**：
+卡片注册名是 **`yet-another-media-player`**(YAMP 原生类型),所以任何 YAMP 的
+YAML 配置都直接可用:
 
 ```yaml
-type: custom:musicflow-player-card
-entity: media_player.living_room
+type: custom:yet-another-media-player
+entities:
+  - entity: media_player.living_room
 ```
 
-任意 MusicFlow 媒体播放器实体都可以——DLNA 设备或播放组均可。
+更方便的方式:仪表盘**编辑模式 → 添加卡片** → 选择 **Yet Another Media Player**。
+卡片自带完整的可视化编辑器(实体/行为/外观/封面/操作)。
 
-### 配置项
+MusicFlow 用户,把 DLNA 设备或播放组的 `media_player` 实体填进 `entities` 即可。
+卡片跟随 HA 的语言显示;HA 设为中文时,卡片自动显示简体中文。
 
-| 选项 | 默认 | 说明 |
-|---|---|---|
-| `entity` | （必填） | 要控制的 MusicFlow 播放器实体 |
-| `show_artwork` | `true` | 显示专辑封面缩略图 |
-| `show_lyrics` | `true` | 显示滚动歌词面板 |
-| `name` | - | 可选卡片标题 |
+## 构建
 
-## 行为说明
+```bash
+npm install
+npm run build        # rollup: src/yet-another-media-player.js -> dist/hass-musicflow-card.js
+```
 
-- **心形按钮**调用 `musicflow.like_track` 服务，状态来自实体的 `liked` 属性，自动刷新；
-- **添加到歌单**打开歌单选择器并调用 `musicflow.add_to_playlist`；导入的只读歌单由服务端过滤；
-- **切换输出设备**使用集成内置的 `select_source` 能力，队列与进度整体搬过去；
-- 歌词通过 `musicflow/lyrics` WebSocket 命令每首歌拉取一次，在卡片本地按
-  `media_position` 高亮滚动。
+产物在 `dist/hass-musicflow-card.js`,需要一并提交(`.github/workflows/validate.yml`
+会校验产物与源码一致)。
 
-## 排查
+## 修改/新增翻译
 
-| 现象 | 解决 |
-|---|---|
-| 添加卡片时 `Custom element doesn't exist: musicflow-player-card`（或 `not found`） | JS 还没作为资源加载。检查 **设置 → 仪表盘 → ⋮ → 资源**：HACS 安装应自动加上 `/hacsfiles/hass-musicflow-card/hass-musicflow-card.js`（类型 module）；缺的话手动加，然后强制刷新仪表盘（Ctrl/Cmd+R）。 |
-| **添加卡片**选择器里看不到 MusicFlow Player | 资源没加载成功，处理同上。卡片通过 `window.customCards` 自注册，资源加载后就会出现在选择器里（搜索 `musicflow`）。 |
-| 点心形按钮报 `musicflow.like_track` 不存在 | 集成版本低于 1.2.5，去 HACS 升级集成并重启 HA。 |
-| 歌词面板一直显示「暂无歌词」 | 当前曲目在服务端旁边没有 `.lrc` 文件。MusicFlow 服务端只会拉取它能找到的歌词。 |
-| 「添加到歌单」下拉是空的 | 服务端还没有可编辑的歌单，先去 MusicFlow 网页端创建一个。 |
+所有界面文字位于 `src/localize/languages/`(每种语言一个文件)。`zh.js` 是中文包;
+`src/localize/localize.js` 会在 HA 语言为 `zh` / `zh-CN` / `zh-Hant` 时自动选用它。
 
 ## 相关仓库
 
 | 仓库 | 说明 |
 |---|---|
-| [MusicFlow](https://github.com/ray5378/MusicFlow) | 服务端：曲库、DLNA 播放、播放组 |
-| [hass-musicflow](https://github.com/ray5378/hass-musicflow) | HACS 集成（媒体播放器实体） |
+| [MusicFlow](https://github.com/ray5378/MusicFlow) | 服务端:曲库、DLNA 播放、播放组 |
+| [hass-musicflow](https://github.com/ray5378/hass-musicflow) | HACS 集成(媒体播放器实体) |
 | [hassio-addons](https://github.com/ray5378/hassio-addons) | 服务端的 HA 加载项封装 |
+| [yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player) | 本卡片所基于的上游项目 |
 
 ## 许可证
 
