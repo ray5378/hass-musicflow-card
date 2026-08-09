@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "MusicFlow player card for Home Assistant: full playback controls, favorite, add-to-playlist, scrolling lyrics and output switching.",
   "type": "module",
-  "main": "dist/musicflow-card.js",
+  "main": "dist/hass-musicflow-card.js",
   "scripts": {
-    "build": "esbuild src/musicflow-card.js --bundle --format=esm --target=es2019 --outfile=dist/musicflow-card.js --minify",
-    "watch": "esbuild src/musicflow-card.js --bundle --format=esm --target=es2019 --outfile=dist/musicflow-card.js --minify --watch"
+    "build": "esbuild src/musicflow-card.js --bundle --format=esm --target=es2019 --outfile=dist/hass-musicflow-card.js --minify",
+    "watch": "esbuild src/musicflow-card.js --bundle --format=esm --target=es2019 --outfile=dist/hass-musicflow-card.js --minify --watch"
   },
   "keywords": [
     "home-assistant",
