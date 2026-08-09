@@ -548,3 +548,63 @@ window.customCards.push({
     "Full MusicFlow player card. Requires MusicFlow integration 1.2.6+ and a MusicFlow media_player entity.",
   preview: true,
 });
+
+/* ==================== 可视化配置编辑器 ====================
+ * HA 自定义卡片的可视化编辑器约定:注册同名 + "-editor" 后缀的元素,
+ * HA 会自动加载它做 GUI 配置。editor 使用内置的 ha-form 组件,
+ * schema 里用 entity selector 列出所有 media_player 实体(含 MusicFlow
+ * 生成的 DLNA/组),用户直接点选,不用手填 entity id。 */
+const EDITOR_SCHEMA = [
+  {
+    name: "entity",
+    required: true,
+    selector: { entity: { domain: "media_player" } },
+  },
+  {
+    name: "show_artwork",
+    selector: { boolean: {} },
+    default: true,
+  },
+  {
+    name: "show_lyrics",
+    selector: { boolean: {} },
+    default: true,
+  },
+];
+
+class MusicFlowPlayerCardEditor extends LitElement {
+  static properties = {
+    hass: { type: Object },
+    config: { type: Object },
+  };
+
+  setConfig(config) {
+    this.config = config;
+  }
+
+  render() {
+    if (!this.hass || !this.config) return nothing;
+    return html`
+      <ha-form
+        .hass=${this.hass}
+        .data=${this.config}
+        .schema=${EDITOR_SCHEMA}
+        .computeLabel=${(s) => s.label ?? s.name}
+        @value-changed=${this._onChange}
+      ></ha-form>
+    `;
+  }
+
+  _onChange(ev) {
+    // HA 用 config-changed 事件把新配置回传给 dashboard,这里只是转手
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { value: ev.detail.value },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+}
+
+customElements.define("musicflow-player-card-editor", MusicFlowPlayerCardEditor);

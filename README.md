@@ -67,7 +67,10 @@ entity: media_player.living_room
 ```
 
 Or, easier, open the dashboard edit mode, choose **Add card**, and pick
-**MusicFlow Player** from the picker (search "musicflow" if needed).
+**MusicFlow Player** from the picker (search "musicflow" if needed). The
+card has a visual editor: an entity picker lists every `media_player`
+entity, so you can just click on the MusicFlow device or sync group you
+want to control - no entity id needed.
 
 Any MusicFlow media player entity works - a DLNA device or a sync group.
 
