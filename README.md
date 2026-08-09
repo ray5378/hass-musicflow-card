@@ -31,12 +31,13 @@ The card adapts to the light / dark HA theme automatically.
 
 ### HACS (recommended)
 
-1. In HACS go to **Frontend**, open the three-dot menu and choose
-   **Custom repositories**.
+1. Open the three-dot menu in HACS and choose **Custom repositories**.
 2. Add `https://github.com/ray5378/hass-musicflow-card` with category
-   **Lovelace**.
-3. Click **Download** on the **MusicFlow Card** entry, then reload the
-   Lovelace dashboard (or restart Home Assistant).
+   **Dashboard** (this is the HACS label for the plugin / frontend
+   category).
+3. Go to **HACS -> Frontend** and click **Download** on the
+   **MusicFlow Card** entry, then reload the Lovelace dashboard (or
+   restart Home Assistant).
 
 ### Manual
 

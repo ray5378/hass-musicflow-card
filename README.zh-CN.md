@@ -26,9 +26,10 @@
 
 ### HACS（推荐）
 
-1. 打开 HACS → **前端**，右上角 ⋮ → **自定义存储库**；
-2. 添加 `https://github.com/ray5378/hass-musicflow-card`，类别选 **Lovelace**；
-3. 在 **MusicFlow Card** 条目上点**下载**，然后刷新仪表盘（或重启 HA）。
+1. HACS 右上角 ⋮ → **自定义存储库**；
+2. 添加 `https://github.com/ray5378/hass-musicflow-card`，类别选 **Dashboard**
+   （HACS UI 下拉里没有 "Lovelace"，前端卡片的类别就是 Dashboard）；
+3. 进入 **HACS → 前端**，在 **MusicFlow Card** 条目上点**下载**，然后刷新仪表盘（或重启 HA）。
 
 ### 手动
 
