@@ -10,14 +10,16 @@ const ICONS = {
   power: "M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.18 1-4.12 2.59-5.41L6.17 5.17A8.932 8.932 0 0 0 3 12a9 9 0 1 0 18 0c0-2.83-1.31-5.34-3.17-7.83z",
   heart: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
   heart_outline: "M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z",
-  /* HA 原生媒体浏览器按钮用的就是这个图标(三横线 + 音符) */
   queue_music: "M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-4z",
   shuffle: "M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z",
   repeat: "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z",
   repeat_one: "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z",
+  /* play_mode = order 用箭头直线表示"顺序" */
+  trending_flat: "M22 12l-4-4v3H3v2h15v3z",
   volume: "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z",
   volume_off: "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z",
-  swap_horiz: "M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z",
+  /* 切换播放器按钮:耳机样式(MusicFlow 主项目同款) */
+  headphones: "M12 3a9 9 0 0 0-9 9v7h2v-7a7 7 0 0 1 14 0v7h2v-7a9 9 0 0 0-9-9zm0 13a3 3 0 0 0-3 3v3a3 3 0 0 0 6 0v-3a3 3 0 0 0-3-3z",
   cast: "M3.27 1L1 3.27 4.73 7H1v4h5.73L3 14.73V18h3.27L9.45 21l1.41-1.41L5.27 14.18l5.46-5.46 6.09 6.09L21 18.55V22h-3.45l-3.18 3.18L21 21.91V1L3.27 1zM3 21v-3h3v3H3zm9.5-9.5L9.45 14.55 12 17.09l3.5-3.5L12 10l-.5 1.5zM21 19.09L17.91 16 21 12.91v6.18z",
   check: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   music: "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z",
@@ -50,8 +52,10 @@ class MusicFlowPlayerCard extends LitElement {
       font-family: var(--primary-font-family, inherit);
       color: var(--primary-text-color);
     }
-    /* Layout matches the HA native media_player card:
-       two columns - controls/title on the left, full-bleed artwork on the right */
+    /* Two-column layout that mirrors HA's native media_player card.
+       Left column: top / title / action / controls. Right column: artwork.
+       Progress bar at the bottom spans the full card width.
+       Volume in its own row under the artwork on the right column. */
     .card {
       background: var(--ha-card-background, var(--card-background-color, #fff));
       border-radius: var(--ha-card-border-radius, 12px);
@@ -59,17 +63,17 @@ class MusicFlowPlayerCard extends LitElement {
       padding: 12px;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-template-rows: auto auto auto auto auto;
+      grid-template-rows: auto auto auto auto auto auto auto;
       column-gap: 12px;
       row-gap: 8px;
       align-items: start;
+      position: relative;
     }
-    .left {
-      grid-column: 1;
-      display: contents;
-    }
+
+    /* Header strip: cast icon + device name (no picker button here anymore) */
     .top {
       grid-column: 1;
+      grid-row: 1;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -91,29 +95,152 @@ class MusicFlowPlayerCard extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .picker-wrap {
-      position: relative;
-      flex-shrink: 0;
+
+    .title-block {
+      grid-column: 1;
+      grid-row: 2;
+      min-width: 0;
     }
+    .title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--primary-text-color);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .secondary {
+      font-size: 13px;
+      color: var(--secondary-text-color);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Single enhancement button: favorite (always clickable) */
+    .actions {
+      grid-column: 1;
+      grid-row: 3;
+    }
+    .action {
+      background: none;
+      border: none;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .action:hover {
+      color: var(--primary-color);
+      background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
+    }
+    .action.on { color: var(--primary-color); }
+
+    /* Transport row: power | prev | play/pause | next | mode-cycle | player-switcher */
+    .controls {
+      grid-column: 1;
+      grid-row: 4;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .controls .action {
+      padding: 6px;
+    }
+
+    /* Full-bleed artwork on the right column (rows 1-6) */
+    .art {
+      grid-column: 2;
+      grid-row: 1 / 7;
+      min-height: 220px;
+      border-radius: 10px;
+      background: var(--secondary-background-color, #eee);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--disabled-text-color);
+      overflow: hidden;
+      position: relative;
+    }
+    .art img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    /* Browse media library button - bottom-right corner of artwork, like HA native */
+    .art-browse {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0, 0, 0, 0.45);
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+    }
+    .art-browse:hover {
+      background: rgba(0, 0, 0, 0.65);
+    }
+
+    /* Volume - right column, last row (under the artwork) */
+    .volume-bar {
+      grid-column: 2;
+      grid-row: 7;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .volume-bar input[type="range"] {
+      flex: 1;
+      accent-color: var(--primary-color);
+      min-width: 0;
+    }
+    .mute-toggle.on { color: var(--primary-color); }
+
+    /* Progress bar - bottom of the card, spans both columns (full width) */
+    .progress-bar {
+      grid-column: 1 / -1;
+      grid-row: 7;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .progress-bar .time {
+      font-size: 11px;
+      color: var(--secondary-text-color);
+      flex-shrink: 0;
+      min-width: 32px;
+      text-align: center;
+    }
+    .progress-bar input[type="range"] {
+      flex: 1;
+      accent-color: var(--primary-color);
+      min-width: 0;
+    }
+
+    /* Player switcher dropdown (anchored to the headphones button) */
+    .picker-wrap { position: relative; }
     .picker-toggle {
       background: none;
       border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
       color: var(--secondary-text-color);
       border-radius: 999px;
-      padding: 2px 8px;
+      padding: 2px 6px;
       cursor: pointer;
       font-size: 12px;
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      max-width: 38%;
-      min-width: 0;
-    }
-    .picker-toggle span {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
     }
     .picker-toggle.is-current {
       color: var(--primary-color);
@@ -172,118 +299,6 @@ class MusicFlowPlayerCard extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-
-    /* Title block */
-    .title-block {
-      grid-column: 1;
-      min-width: 0;
-    }
-    .title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--primary-text-color);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .secondary {
-      font-size: 13px;
-      color: var(--secondary-text-color);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* Enhancement buttons row (favorite, browse) */
-    .actions {
-      grid-column: 1;
-      display: flex;
-      gap: 4px;
-    }
-    .action {
-      background: none;
-      border: none;
-      color: var(--secondary-text-color);
-      cursor: pointer;
-      padding: 6px;
-      border-radius: 50%;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .action:hover {
-      color: var(--primary-color);
-      background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
-    }
-    .action.on { color: var(--primary-color); }
-
-    /* Transport controls - power at the LEFT (before prev), then prev/play/next */
-    .controls {
-      grid-column: 1;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      gap: 4px;
-    }
-    .controls .action {
-      padding: 8px;
-    }
-
-    /* Bottom row: progress + volume together (per request "播放进度跟着音量控件动") */
-    .bottom {
-      grid-column: 1 / -1;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .progress-wrap {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
-    }
-    .progress-wrap input[type="range"] {
-      flex: 1;
-      accent-color: var(--primary-color);
-      min-width: 0;
-    }
-    .time {
-      font-size: 11px;
-      color: var(--secondary-text-color);
-      flex-shrink: 0;
-    }
-    .volume-wrap {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex-shrink: 0;
-    }
-    .volume-wrap input[type="range"] {
-      width: 72px;
-      accent-color: var(--primary-color);
-    }
-    .mute-toggle.on { color: var(--primary-color); }
-
-    /* Full-bleed artwork (right column, spans all rows) */
-    .art {
-      grid-column: 2;
-      grid-row: 1 / 6;
-      min-height: 220px;
-      border-radius: 10px;
-      background: var(--secondary-background-color, #eee);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--disabled-text-color);
-      overflow: hidden;
-    }
-    .art img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
     }
   `;
 
@@ -348,9 +363,7 @@ class MusicFlowPlayerCard extends LitElement {
     return this.hass?.entities?.[entityId]?.platform === MF_DOMAIN;
   }
 
-  _peerLabel(p) {
-    return p.state.attributes?.friendly_name || p.entityId;
-  }
+  _peerLabel(p) { return p.state.attributes?.friendly_name || p.entityId; }
 
   _peerMeta(p) {
     const attr = p.state.attributes || {};
@@ -391,19 +404,31 @@ class MusicFlowPlayerCard extends LitElement {
   }
 
   _toggleLike() {
+    /* 始终可点(用户反馈:无歌时按钮被禁用导致"无法点击") */
     this._service("musicflow", "like_track");
   }
 
-  _toggleShuffle() {
-    this._service("musicflow", "set_play_mode", {
-      play_mode: this._attr.shuffle ? "order" : "shuffle",
-    });
+  _cyclePlayMode() {
+    /* 一个按钮按 order → all → one → shuffle → order 循环切换 */
+    const cycle = ["order", "all", "one", "shuffle"];
+    const cur = this._attr.play_mode || "order";
+    const idx = cycle.indexOf(cur);
+    const next = cycle[(idx + 1) % cycle.length];
+    this._service("musicflow", "set_play_mode", { play_mode: next });
   }
 
-  _cycleRepeat() {
-    const cur = this._attr.play_mode;
-    const next = cur === "one" ? "order" : cur === "all" ? "one" : "all";
-    this._service("musicflow", "set_play_mode", { play_mode: next });
+  _playModeIcon(mode) {
+    return mode === "shuffle" ? "shuffle"
+         : mode === "one" ? "repeat_one"
+         : mode === "all" ? "repeat"
+         : "trending_flat";
+  }
+
+  _playModeLabel(mode) {
+    return mode === "shuffle" ? "随机"
+         : mode === "one" ? "单曲循环"
+         : mode === "all" ? "列表循环"
+         : "顺序";
   }
 
   _setVolume(e) {
@@ -438,7 +463,7 @@ class MusicFlowPlayerCard extends LitElement {
 
   _openMediaBrowser() {
     /* 复用 HA 原生 Media player 详情卡里的"浏览媒体"入口
-     * (more-info 弹窗里有完整浏览树) */
+     * (more-info 弹窗里有完整浏览树),通过 fireEvent 打开 */
     this.dispatchEvent(
       new CustomEvent("hass-more-info", {
         detail: { entityId: this._activeEntity },
@@ -461,48 +486,17 @@ class MusicFlowPlayerCard extends LitElement {
     const showArtwork = this.config.show_artwork;
     const artwork = showArtwork ? attr.entity_picture : null;
     const playMode = attr.play_mode || "order";
-    const repeatActive = playMode !== "order";
+    const playModeActive = playMode !== "order";
     const peers = this._peers;
     const currentPeerLabel = this._peerLabel({ entityId: this._activeEntity, state: this._entity });
+    const isCurrentActive = peers.find((p) => p.entityId === this._activeEntity)?.available;
 
     return html`
       <ha-card class="card">
-        <!-- 顶部:cast 图标 + 设备名 + 播放器切换器 -->
+        <!-- 顶部:cast 图标 + 设备名 -->
         <div class="top">
           <span class="icon-badge">${icon("cast", 18)}</span>
           <span class="device-name" title="${currentPeerLabel}">${currentPeerLabel}</span>
-          <span class="picker-wrap">
-            <button
-              class="picker-toggle ${peers.find((p) => p.entityId === this._activeEntity)?.available ? "is-current" : ""}"
-              @click=${(ev) => { ev.stopPropagation(); this._showPlayerPicker = !this._showPlayerPicker; }}
-              title="切换播放器"
-            >
-              ${icon("swap_horiz", 14)}
-              <span>切换</span>
-            </button>
-            ${this._showPlayerPicker ? html`
-              <div class="picker" @click=${(ev) => ev.stopPropagation()}>
-                ${peers.length === 0
-                  ? html`<div class="picker-item-meta">没有 MusicFlow 播放器</div>`
-                  : peers.map((p) => html`
-                      <div
-                        class="picker-item ${classMap({
-                          active: p.entityId === this._activeEntity,
-                          offline: !p.available,
-                        })}"
-                        @click=${() => this._switchPeer(p.entityId)}
-                      >
-                        <span class="picker-item-icon">${icon("cast", 18)}</span>
-                        <div class="picker-item-info">
-                          <div class="picker-item-name">${this._peerLabel(p)}</div>
-                          <div class="picker-item-meta">${this._peerMeta(p)}</div>
-                        </div>
-                        ${p.entityId === this._activeEntity ? icon("check", 18) : nothing}
-                      </div>
-                    `)}
-              </div>
-            ` : nothing}
-          </span>
         </div>
 
         <!-- 标题 / 艺术家 -->
@@ -511,21 +505,16 @@ class MusicFlowPlayerCard extends LitElement {
           <div class="secondary">${artist}</div>
         </div>
 
-        <!-- 增强按钮行:❤喜欢 / 📋 浏览媒体库 -->
+        <!-- 增强按钮行:❤喜欢(始终可点) -->
         <div class="actions">
           <button
             class="action ${this._liked ? "on" : ""}"
             title="喜欢 / 取消喜欢"
             @click=${this._toggleLike}
           >${icon(this._liked ? "heart" : "heart_outline", 22)}</button>
-          <button
-            class="action"
-            title="浏览媒体库(打开 HA 原生媒体浏览)"
-            @click=${this._openMediaBrowser}
-          >${icon("queue_music", 22)}</button>
         </div>
 
-        <!-- 控制行:电源 ⏮ ⏯ ⏭ 🔀 🔁 -->
+        <!-- 控制行:[⏻关闭] [⏮] [▶/⏸] [⏭] [播放模式循环] [切换播放器(耳机)] -->
         <div class="controls">
           <button class="action" title="${this._on ? "关闭" : "开启"}" @click=${this._togglePower}>
             ${icon("power", 22)}
@@ -539,51 +528,88 @@ class MusicFlowPlayerCard extends LitElement {
           <button class="action" title="下一首" @click=${() => this._service("media_player", "media_next_track")}>
             ${icon("next", 26)}
           </button>
-          <button class="action ${attr.shuffle ? "on" : ""}" title="随机" @click=${this._toggleShuffle}>
-            ${icon("shuffle", 20)}
-          </button>
-          <button class="action ${repeatActive ? "on" : ""}" title="循环:${playMode}" @click=${this._cycleRepeat}>
-            ${icon(playMode === "one" ? "repeat_one" : "repeat", 20)}
-          </button>
+          <button
+            class="action ${playModeActive ? "on" : ""}"
+            title="播放模式:${this._playModeLabel(playMode)} (点击循环切换)"
+            @click=${this._cyclePlayMode}
+          >${icon(this._playModeIcon(playMode), 22)}</button>
+
+          <!-- 切换播放器(耳机图标,MusicFlow 主项目同款) -->
+          <span class="picker-wrap">
+            <button
+              class="picker-toggle ${isCurrentActive ? "is-current" : ""}"
+              @click=${(ev) => { ev.stopPropagation(); this._showPlayerPicker = !this._showPlayerPicker; }}
+              title="切换播放器"
+            >
+              ${icon("headphones", 20)}
+            </button>
+            ${this._showPlayerPicker ? html`
+              <div class="picker" @click=${(ev) => ev.stopPropagation()}>
+                ${peers.length === 0
+                  ? html`<div class="picker-item-meta">没有 MusicFlow 播放器</div>`
+                  : peers.map((p) => html`
+                      <div
+                        class="picker-item ${classMap({
+                          active: p.entityId === this._activeEntity,
+                          offline: !p.available,
+                        })}"
+                        @click=${() => this._switchPeer(p.entityId)}
+                      >
+                        <span class="picker-item-icon">${icon("headphones", 18)}</span>
+                        <div class="picker-item-info">
+                          <div class="picker-item-name">${this._peerLabel(p)}</div>
+                          <div class="picker-item-meta">${this._peerMeta(p)}</div>
+                        </div>
+                        ${p.entityId === this._activeEntity ? icon("check", 18) : nothing}
+                      </div>
+                    `)}
+              </div>
+            ` : nothing}
+          </span>
         </div>
 
-        <!-- 大封面(右列满铺) -->
+        <!-- 大封面(右列满铺),媒体库按钮绝对定位在封面右下角 -->
         <div class="art">
           ${artwork
             ? html`<img src="${artwork}" alt="" />`
             : icon("music", false, 64)}
+          <button
+            class="art-browse"
+            title="浏览媒体库(打开 HA 原生媒体浏览)"
+            @click=${this._openMediaBrowser}
+          >${icon("queue_music", 18)}</button>
         </div>
 
-        <!-- 底部:进度条 + 音量同行 -->
-        <div class="bottom">
-          <div class="progress-wrap">
-            <span class="time">${this._fmt(pos)}</span>
-            <input
-              type="range"
-              min="0"
-              max=${dur || 100}
-              step="1"
-              value=${Math.min(pos, dur || 100)}
-              @pointerdown=${this._seekStart}
-              @input=${this._seekInput}
-              @change=${this._seekEnd}
-              ?disabled=${!dur}
-            />
-            <span class="time">${this._fmt(dur)}</span>
-          </div>
-          <div class="volume-wrap">
-            <button class="action ${attr.is_volume_muted ? "on" : ""}" title="静音" @click=${this._toggleMute}>
-              ${icon(attr.is_volume_muted ? "volume_off" : "volume", 20)}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value=${this._volume}
-              @change=${this._setVolume}
-            />
-          </div>
+        <!-- 音量:右列底部独立 -->
+        <div class="volume-bar">
+          <button class="action ${attr.is_volume_muted ? "on" : ""}" title="静音" @click=${this._toggleMute}>
+            ${icon(attr.is_volume_muted ? "volume_off" : "volume", 20)}
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value=${this._volume}
+            @change=${this._setVolume}
+          />
+        </div>
+
+        <!-- 进度条:卡片底部跨整张,视觉上与音量完全分离 -->
+        <div class="progress-bar">
+          <span class="time">${this._fmt(pos)}</span>
+          <input
+            type="range"
+            min="0"
+            max=${dur || 100}
+            step="1"
+            value=${Math.min(pos, dur || 100)}
+            @pointerdown=${this._seekStart}
+            @input=${this._seekInput}
+            @change=${this._seekEnd}
+            ?disabled=${!dur}
+          />
+          <span class="time">${this._fmt(dur)}</span>
         </div>
       </ha-card>
     `;
@@ -634,6 +660,6 @@ window.customCards.push({
   type: "musicflow-player-card",
   name: "MusicFlow Player",
   description:
-    "MusicFlow media player card - an enhanced version of the HA native media_player card. Favorite, browse media library (opens HA native browser), switch between MusicFlow players. Requires MusicFlow integration 1.2.6+.",
+    "MusicFlow media player card - enhanced version of the HA native media_player card. Favorite, browse media library (opens HA native browser), switch between MusicFlow players. Requires MusicFlow integration 1.2.6+.",
   preview: true,
 });
