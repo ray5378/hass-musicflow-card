@@ -56,6 +56,22 @@ url: http://musicflow.local:3000
 api_key: YOUR_LONG_LIVED_API_KEY
 ```
 
+### Pin to a specific player
+
+If you want a card dedicated to one player (for example the HiVi H5MKII in the
+living room), set `entity` to the MusicFlow `media_player` entity. The card reads
+the entity's `peer_id` attribute and selects that output by default, so the card
+always opens on that player. You can still switch outputs with the chips.
+
+```yaml
+type: custom:hass-musicflow-card
+entity: media_player.hivi_h5mkii_2
+```
+
+Only MusicFlow-created `media_player` entities carry the `peer_id` attribute. For
+a generic media_player (not managed by MusicFlow) the `entity` option has no
+effect and the card falls back to the first available output.
+
 ## How it works
 
 The card obtains the backend connection details from the integration via the

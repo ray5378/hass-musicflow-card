@@ -121,11 +121,24 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // ============ Peer / output management ============
+  _resolveDefaultPeerId(peers) {
+    // 若配置了 entity(如 media_player.hivi_h5mkii_2),从该 MusicFlow 实体的
+    // peer_id 属性定位对应输出,实现"一台机器一张专用卡"。
+    const cfg = this._config || {};
+    if (cfg.entity && this._hass && this._hass.states && this._hass.states[cfg.entity]) {
+      const pid = this._hass.states[cfg.entity].attributes?.peer_id;
+      if (pid && peers.some((p) => p.peerId === pid)) return pid;
+    }
+    return null;
+  }
   _applyPeerSnapshot(peers) {
     const list = (peers || []).slice();
     this._ui.peers = list;
-    if (!this._ui.currentPeerId) {
-      const first = list.find((p) => p.available) || list[0];
+    const pinned = this._resolveDefaultPeerId(list);
+    if (!this._ui.currentPeerId || pinned) {
+      // 有 entity 配置则优先锁定到该 peer;否则选第一个可用的。
+      const preferred = pinned && list.find((p) => p.peerId === pinned);
+      const first = preferred || list.find((p) => p.available) || list[0];
       if (first) this._selectPeer(first.peerId, true);
     } else {
       this._refreshCurrentPeerView();
