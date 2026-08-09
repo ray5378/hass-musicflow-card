@@ -6,24 +6,20 @@ A Lovelace custom card for the [MusicFlow](https://github.com/ray5378/MusicFlow)
 Home Assistant integration. Visually mirrors the **HA native media_player
 card** with enhancements specific to MusicFlow:
 
-- **Layout** - large artwork on the right, title / artist / compact lyric on
-  the left, progress bar, transport controls (prev / play-pause / next),
-  shuffle, repeat, volume, power - the same affordances you already know
-  from the built-in card.
-- **Favorite (heart)** - toggle the current track in the server's
-  "liked songs", two-way synced via the entity's `liked` attribute.
-- **Add to playlist** - inline dropdown to append the current track to any
-  of your playlists.
-- **Scrolling lyrics** - LRC lines fetched once per track and highlighted
-  against the playback position. Compact one-liner in the title row by
-  default; tap the cover to expand the full lyrics panel.
+- **Layout** - two columns. Right column is **full-bleed artwork**. Left
+  column holds the cast icon, device name, player switcher, title / artist,
+  enhancement buttons, transport controls (power, prev, play-pause, next,
+  shuffle, repeat). Progress bar and volume slider sit side-by-side in the
+  bottom row - matching the native card.
+- **Favorite (heart)** - always clickable; toggles the current track in the
+  server's "liked songs", two-way synced via the entity's `liked` attribute.
+- **Browse media library** - the library button opens the **HA native
+  media browser** for the active entity (more-info dialog). No custom
+  browser tree is reinvented.
 - **Switch player** - a dropdown at the top right switches the control
   target to any MusicFlow DLNA device or sync group. **The previous player
   keeps playing** (queue + state unchanged) - only the card's control
   focus moves, matching the MusicFlow web client's `switchPeer` behavior.
-- **Browse media library** - the library button opens the **HA native
-  media browser** for the active entity (more-info dialog). No custom
-  browser tree is reinvented.
 
 The card adapts to the light / dark HA theme automatically.
 
