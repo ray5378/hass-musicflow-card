@@ -714,14 +714,10 @@ class MusicFlowRemoteCard extends LitElement {
     return html`<span class="ic">${unsafeHTML(svg)}</span>`;
   }
 
-  _cover(coverArt) {
-    return this._client ? this._client.coverUrl(coverArt) : null;
-  }
-
   // 媒体库列表封面:标题先出,封面视口懒加载。
-  // 两种传输模式都返回可直接用于 <img src> 的 URL(直连带 token、代理带 ?token=);
-  // 后端对该响应加了 Cache-Control/ETag,浏览器按 URL 复用,外网翻页/刷新不再重复下载。
-  // 这里先渲染带 data-cover-id 的占位 <img>,由 IntersectionObserver 进入视口后写 src。
+  // 直连模式返回可缓存直链;代理模式经 fetchWithAuth 拉 blob(objectURL)。
+  // 这里先渲染带 data-cover-id 的占位 <img>,由 IntersectionObserver 进入视口后写 src
+  // (代理模式则经 requestCover 拉取),见 _loadCoverInto。
   _coverImgTag(coverArt) {
     if (!coverArt) return html`<span class="bnocover">♪</span>`;
     return html`<img class="bcover-lazy" data-cover-id="${coverArt}" alt="" loading="lazy" />`;
@@ -729,10 +725,24 @@ class MusicFlowRemoteCard extends LitElement {
 
   _loadCoverInto(img) {
     const id = img.getAttribute("data-cover-id");
-    if (!id || img.dataset.loaded) return;
-    img.dataset.loaded = "1";
-    const url = this._client?.coverUrl(id);
-    if (url && img.isConnected) img.src = url;
+    if (!id) return;
+    // loadedId 守卫:翻页时 Lit 会复用同位置 <img> 节点(仅改 data-cover-id),
+    // 若只用"是否加载过"做判据,复用节点的旧 src/dataset 残留会导致新页永远
+    // 显示首页封面。改为比对"已为哪个 cover 加载过",不一致就重新加载。
+    if (img.dataset.loadedId === id && img.getAttribute("src")) return;
+    img.dataset.loadedId = id;
+    const client = this._client;
+    if (!client) return;
+    if (client.mode === "proxy") {
+      // 代理模式:经 fetchWithAuth 拉取(带 HA 凭据)转 objectURL,浏览器裸
+      // <img src> 不带 HA 鉴权会被 401。直连模式用可缓存直链。
+      client.requestCover(id).then((url) => {
+        if (url && img.isConnected && img.dataset.loadedId === id) img.src = url;
+      }).catch(() => {});
+    } else {
+      const url = client.coverUrl(id);
+      if (url && img.isConnected) img.src = url;
+    }
   }
 
   _ensureCoverObserver(root) {
@@ -758,8 +768,14 @@ class MusicFlowRemoteCard extends LitElement {
     const root = this.shadowRoot?.querySelector(".br-list");
     if (!root) return;
     this._ensureCoverObserver(root);
-    root.querySelectorAll('img.bcover-lazy:not([data-loaded])').forEach((img) => {
-      this._coverObserver.observe(img);
+    root.querySelectorAll("img.bcover-lazy").forEach((img) => {
+      const id = img.getAttribute("data-cover-id");
+      // 只登记尚未为当前 cover 加载的节点;翻页复用节点(data-cover-id 已变)
+      // 会重新登记并加载,避免残留首页封面。
+      if (img.dataset.loadedId !== id) {
+        img.removeAttribute("src"); // 清掉旧封面,避免显示错误的首页图直到新图加载
+        this._coverObserver.observe(img);
+      }
     });
   }
 
@@ -775,6 +791,9 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.showBrowser) {
       this.updateComplete.then(() => this._observeBrowserCovers()).catch(() => {});
     }
+    // 播放器封面也要走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
+    const pc = this.shadowRoot?.querySelector(".nowcover");
+    if (pc) this._loadCoverInto(pc);
   }
 
   render() {
@@ -795,7 +814,7 @@ class MusicFlowRemoteCard extends LitElement {
 
           <div class="now">
             <div class="cover">${song?.coverArt
-              ? html`<img src="${this._cover(song.coverArt)}" alt="" />`
+              ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
               : html`<div class="nocover">♪</div>`}</div>
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}</div>

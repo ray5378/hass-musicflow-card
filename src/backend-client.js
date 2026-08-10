@@ -50,6 +50,7 @@ export class BackendClient {
     this._connecting = false;
     this._subPending = false;
     this._proxyFallbackTried = false;
+    this._coverBlobCache = null; // 代理模式封面 blob URL 缓存: key=coverId@size -> url|promise
   }
 
   on(event, cb) {
@@ -526,6 +527,51 @@ export class BackendClient {
       return `/api/musicflow/rest${path}${sep}token=${encodeURIComponent(this.apiKey)}`;
     }
     return this._withToken(path);
+  }
+
+  // 模式感知的封面 URL 解析:返回可直接赋值给 <img src> 的值。
+  // - 直连:返回可缓存直链(浏览器原生缓存 + 懒加载),与 coverUrl 一致。
+  // - 代理:浏览器裸 <img src> 加载 /api/musicflow/rest/* 时不会携带 HA 鉴权,
+  //   外网会被 401 → 封面全空白(这正是 v1.6.9 把 blob 改成直链后外网回归的根因)。
+  //   故代理模式改为经 fetchWithAuth(带 HA 凭据)拉取,转 objectURL 复用;
+  //   与 pre-v1.6.9 行为一致,外网恢复正常。结果按 coverId@size 缓存避免重复拉取。
+  async requestCover(coverId) {
+    if (!coverId) return null;
+    const key = `${coverId}@${COVER_SIZE}`;
+    this._coverBlobCache = this._coverBlobCache || new Map();
+    const hit = this._coverBlobCache.get(key);
+    if (hit) return hit; // 已解析的 url,或正在进行的 promise(可 await)
+
+    const path = `/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`;
+    let url;
+    if (this.mode === "proxy") {
+      url = `/api/musicflow/rest${path}`;
+      if (this.apiKey) {
+        const sep = url.includes("?") ? "&" : "?";
+        url += `${sep}token=${encodeURIComponent(this.apiKey)}`;
+      }
+    } else {
+      url = this._withToken(path);
+    }
+
+    const promise = (async () => {
+      try {
+        const res = await (this.mode === "proxy"
+          ? this.hass.fetchWithAuth(url)
+          : fetch(url));
+        if (!res.ok) { this._coverBlobCache.delete(key); return null; }
+        const blob = await res.blob();
+        const objUrl = URL.createObjectURL(blob);
+        this._coverBlobCache.set(key, objUrl);
+        return objUrl;
+      } catch (e) {
+        this._coverBlobCache.delete(key);
+        return null;
+      }
+    })();
+    // 存 promise 防并发重入;resolve 后上面会改写为真实 objectURL。
+    this._coverBlobCache.set(key, promise);
+    return promise;
   }
 }
 
