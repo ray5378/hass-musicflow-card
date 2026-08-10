@@ -1299,9 +1299,6 @@ class MusicFlowRemoteCard extends LitElement {
     const showSearch = ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
     return html`
       <div class="panel browser">
-        <div class="br-head">
-          <span class="br-title">媒体库</span>
-        </div>
         <div class="br-crumbs">
           ${stack.map((lv, i) => html`
             <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
@@ -1540,9 +1537,7 @@ class MusicFlowRemoteCard extends LitElement {
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
       .browser { background: var(--panel-bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; width: 100%; display: flex; flex-direction: column; }
-      .br-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-      .br-title { font-weight: 600; font-size: 15px; }
-      .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px;
+      .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 15px; font-weight: 600;
         color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
       .crumb { cursor: pointer; transition: color 0.15s; }
       .crumb:hover { color: rgba(255, 255, 255, 0.85); }
