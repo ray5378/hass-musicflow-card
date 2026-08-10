@@ -78,6 +78,7 @@ class MusicFlowRemoteCard extends LitElement {
       showBrowser: false,
       browserStack: [],
       showVolume: false,
+      coverLightText: true, // 封面背景融合:true=浅色文字(暗背景),false=深色文字(亮背景)
       volAnchor: null,
     };
     this._tickTimer = null;
@@ -302,6 +303,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (changed && song.songId) {
       this._ui.lyrics = [];
       this._ui.currentLyric = "";
+      this._ui.coverLightText = true; // 新封面分析完成前先浅色文字,避免闪深色
       this._client.scrobble?.(song.songId).catch((e) => err("scrobble failed", e));
       this._loadLyrics(song.songId);
       this._loadLiked(song.songId);
@@ -746,6 +748,40 @@ class MusicFlowRemoteCard extends LitElement {
     }
   }
 
+  // 背景融合封面加载完成:采样其亮度,自动决定整卡文字用浅色(暗背景)还是深色(亮背景)。
+  // proxy 模式 blob 同源可读;direct 跨域 tainted → catch 降级浅色文字。
+  _onBgCoverLoad(e) {
+    const img = e.currentTarget;
+    if (!img || !img.getAttribute("src")) return;
+    this._analyzeBrightness(img);
+  }
+
+  _analyzeBrightness(img) {
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = 24; cv.height = 24;
+      const ctx = cv.getContext("2d");
+      ctx.drawImage(img, 0, 0, 24, 24);
+      const d = ctx.getImageData(0, 0, 24, 24).data;
+      let sum = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        n++;
+      }
+      const avg = n ? sum / n : 0;
+      // 平均亮度 >165(很亮的封面,如白/浅绿)→ 背景偏亮用深色文字;否则浅色文字。
+      const lightText = !(avg > 165);
+      if (this._ui.coverLightText !== lightText) {
+        this._ui.coverLightText = lightText;
+        this.requestUpdate();
+      }
+    } catch (err2) {
+      // tainted canvas(直连跨域无 CORS):无法分析,保持默认浅色文字。
+      if (this._ui.coverLightText !== true) { this._ui.coverLightText = true; this.requestUpdate(); }
+    }
+  }
+
   _ensureCoverObserver(root) {
     // 媒体库每次重开,滚动容器 .br-list 都是全新节点。若复用上次绑定在旧节点上的
     // observer,新封面 img 不在旧 root 子树内,IntersectionObserver 永不触发
@@ -792,9 +828,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.showBrowser) {
       this.updateComplete.then(() => this._observeBrowserCovers()).catch(() => {});
     }
-    // 播放器封面也要走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
+    // 播放器清晰封面 + 背景融合封面都走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
     const pc = this.shadowRoot?.querySelector(".nowcover");
     if (pc) this._loadCoverInto(pc);
+    const bg = this.shadowRoot?.querySelector(".coverbg-img");
+    if (bg && this._ui.song?.coverArt) this._loadCoverInto(bg);
   }
 
   render() {
@@ -809,18 +847,23 @@ class MusicFlowRemoteCard extends LitElement {
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
 
     return html`
-      <ha-card>
+      <ha-card class="${u.coverLightText ? "light" : "dark"}">
+        ${song?.coverArt ? html`
+          <div class="coverbg">
+            <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
+            <div class="coverbg-veil"></div>
+          </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"}">
           ${this._renderOutputs()}
 
           <div class="now">
-            <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
-              ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
-              : html`<div class="nocover">♪</div>`}</div>
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
               <div class="artist">${u.currentLyric || ""}</div>
             </div>
+            <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
+              ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
+              : html`<div class="nocover">♪</div>`}</div>
           </div>
 
           <div class="controls">
@@ -838,7 +881,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="progress-row">
             <span class="t">${this._fmtTime(u.currentTime)}</span>
             <input class="seek" type="range" min="0" max="100" step="0.1" value="${prog}"
-              style="background: linear-gradient(90deg, #f62c55 ${prog}%, rgba(255,255,255,0.18) ${prog}%)"
+              style="background: linear-gradient(90deg, #f62c55 ${prog}%, var(--seek-bg) ${prog}%)"
               @input=${this._seek} />
             <span class="t">${this._fmtTime(u.duration)}</span>
           </div>
@@ -1260,40 +1303,60 @@ class MusicFlowRemoteCard extends LitElement {
     return css`
       :host { display: block; }
       ha-card {
-        /* MusicFlow FnOS 暗色玻璃拟态:深紫灰渐变底 + 细微极光 */
+        /* 颜色变量:默认浅色文字(暗背景);.dark 时整体切深色文字(亮背景封面) */
+        --fg: #ffffff;
+        --fg-dim: rgba(255, 255, 255, 0.6);
+        --fg-faint: rgba(255, 255, 255, 0.5);
+        --ctl: rgba(255, 255, 255, 0.85);
+        --ctl-hover: rgba(255, 255, 255, 0.10);
+        --seek-bg: rgba(255, 255, 255, 0.18);
+        --panel-bg: rgba(255, 255, 255, 0.04);
+        --line: rgba(255, 255, 255, 0.12);
+        --line-soft: rgba(255, 255, 255, 0.08);
+        /* MusicFlow FnOS 暗色玻璃拟态:深紫灰渐变底(无封面时回退显示) */
         background: linear-gradient(180deg, #2d293a 0%, #1a1728 52%, #15121f 100%);
-        color: #ffffff;
+        color: var(--fg);
         border-radius: 16px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         overflow: hidden;
         position: relative;
         font-family: 'Montserrat', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
       }
-      ha-card::before {
-        content: '';
-        position: absolute; inset: 0; z-index: 0; pointer-events: none;
-        background:
-          radial-gradient(ellipse 62% 44% at 16% 0%, rgba(126, 110, 178, 0.16), transparent 62%),
-          radial-gradient(ellipse 54% 42% at 88% 100%, rgba(246, 44, 85, 0.10), transparent 62%);
+      ha-card.dark {
+        --fg: #1b1b1f;
+        --fg-dim: rgba(0, 0, 0, 0.6);
+        --fg-faint: rgba(0, 0, 0, 0.5);
+        --ctl: rgba(0, 0, 0, 0.78);
+        --ctl-hover: rgba(0, 0, 0, 0.08);
+        --seek-bg: rgba(0, 0, 0, 0.18);
+        --panel-bg: rgba(0, 0, 0, 0.06);
+        --line: rgba(0, 0, 0, 0.16);
+        --line-soft: rgba(0, 0, 0, 0.10);
       }
       .wrap { position: relative; z-index: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px;
         transition: opacity 0.3s ease, filter 0.3s ease; }
+      /* 封面融合背景层:当前封面放大+模糊+拉伸铺满整卡;veil 统一压暗保证文字可读 */
+      .coverbg { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
+      .coverbg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+        transform: scale(1.45); filter: blur(42px) saturate(1.35); }
+      .coverbg-veil { position: absolute; inset: 0;
+        background: linear-gradient(180deg, rgba(0,0,0,0.30) 0%, rgba(0,0,0,0.40) 55%, rgba(0,0,0,0.50) 100%); }
       /* 未连接:整卡调暗降饱和做区分(不再显示"已连接/未连接"文字) */
       .wrap.off { opacity: 0.45; filter: saturate(0.5) brightness(0.75); }
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
       .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
       .outputs { display: flex; flex-wrap: wrap; gap: 6px; }
-      .out { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
+      .out { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
         transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .out:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .out:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .out:active { transform: scale(0.96); }
       .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
       .out.off { opacity: 0.45; }
-      .hint { color: rgba(255, 255, 255, 0.5); font-size: 12px; }
+      .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
-      .cover { width: 84px; height: 84px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
+      .cover { width: 92px; height: 92px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
         background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); }
       .cover { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; position: relative; }
@@ -1302,40 +1365,40 @@ class MusicFlowRemoteCard extends LitElement {
       .cover:hover img { transform: scale(1.04); }
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
-      .track { font-weight: 600; font-size: 16px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .artist { font-size: 13px; color: #ffd400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-      .t-art { font-size: 13px; font-weight: 400; color: rgba(255, 255, 255, 0.6); }
+      .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }
       .progress-row { display: flex; align-items: center; gap: 8px; }
-      .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+      .progress-row .t { font-size: 11px; color: var(--fg-faint); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
-      .seek { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; background: rgba(255, 255, 255, 0.18); }
+      .seek { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; background: var(--seek-bg); }
       .seek::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
         width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid #f62c55;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease; }
       .seek:hover::-webkit-slider-thumb { transform: scale(1.2); }
-      .seek::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
+      .seek::-moz-range-track { height: 6px; border-radius: 3px; background: var(--seek-bg); }
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
       .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
       .controls { display: flex; justify-content: center; align-items: center; gap: 23px; position: relative; }
-      .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
+      .ctl { border: none; background: transparent; color: var(--ctl); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         width: 42px; height: 42px; padding: 0; border-radius: 50%;
         transition: background 0.2s, box-shadow 0.2s, transform 0.12s, color 0.2s; }
       .ctl svg { display: block; }
-      .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .ctl:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
-      .ctl.play { width: 42px; height: 42px; background: transparent; color: rgba(255, 255, 255, 0.85); }
-      .ctl.play:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .ctl.play { width: 42px; height: 42px; background: transparent; color: var(--ctl); }
+      .ctl.play:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl.play:active { transform: scale(0.92); }
       .ctl.like.on { color: #f62c55; }
       .ctl.active { color: #f62c55; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
-      .ctl.vol-open { background: transparent; color: rgba(255, 255, 255, 0.85); }
+      .ctl.vol-open { background: transparent; color: var(--ctl); }
       /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
          触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
       .vol-inline { display: flex; align-items: center; gap: 10px; width: 100%; }
       .vol-slider { position: relative; flex: 1; height: 30px; cursor: pointer; touch-action: none; display: flex; align-items: center; }
-      .vol-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
+      .vol-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: var(--seek-bg); }
       .vol-fill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: #f62c55; }
       .vol-knob { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #f62c55; transform: translate(-50%, -50%); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
       .vol-slider:active .vol-knob { transform: translate(-50%, -50%) scale(1.15); }
@@ -1347,9 +1410,9 @@ class MusicFlowRemoteCard extends LitElement {
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
-      .panel { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 10px; }
+      .panel { background: var(--panel-bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
-      .empty { color: rgba(255, 255, 255, 0.45); font-size: 13px; padding: 10px 0; text-align: center; }
+      .empty { color: var(--fg-faint); font-size: 13px; padding: 10px 0; text-align: center; }
       /* 歌词展开面板已移除,当前行常驻显示在 .artist(this._ui.currentLyric) */
       .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
       .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar,
@@ -1362,12 +1425,12 @@ class MusicFlowRemoteCard extends LitElement {
       .qitem:hover, .sitem:hover { background: rgba(255, 255, 255, 0.06); }
       .qitem.cur { background: rgba(246, 44, 85, 0.16); }
       .qitem .idx { width: 18px; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
-      .qitem .qt, .sitem .st { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: rgba(255, 255, 255, 0.9); }
-      .qitem .qa, .sitem .sa { width: 90px; color: rgba(255, 255, 255, 0.45); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .mini { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
+      .qitem .qt, .sitem .st { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--fg); }
+      .qitem .qa, .sitem .sa { width: 90px; color: var(--fg-faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .mini { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer;
         transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .mini:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .mini:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .bplay { border: none; background: #f62c55; color: #fff; cursor: pointer;
         width: 38px; height: 38px; padding: 0; border-radius: 50%; flex: 0 0 auto;
         display: flex; align-items: center; justify-content: center;
@@ -1382,7 +1445,11 @@ class MusicFlowRemoteCard extends LitElement {
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
       .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 999; }
-      .browser { background: #1f1c2a; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.12);
+      .browser { --fg: #ffffff; --fg-dim: rgba(255, 255, 255, 0.6); --fg-faint: rgba(255, 255, 255, 0.5);
+        --ctl: rgba(255, 255, 255, 0.85); --ctl-hover: rgba(255, 255, 255, 0.10);
+        --seek-bg: rgba(255, 255, 255, 0.18); --panel-bg: rgba(255, 255, 255, 0.04);
+        --line: rgba(255, 255, 255, 0.12); --line-soft: rgba(255, 255, 255, 0.08);
+        background: #1f1c2a; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); border-radius: 16px; padding: 14px;
         width: 400px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column; }
       .br-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -1417,17 +1484,17 @@ class MusicFlowRemoteCard extends LitElement {
       .cat:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .cat:active { transform: scale(0.97); }
       .bitem { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; transition: background 0.15s; }
-      .bitem:hover { background: rgba(255, 255, 255, 0.06); }
+      .bitem:hover { background: var(--ctl-hover); }
       .bthumb { width: 38px; height: 38px; border-radius: 8px; overflow: hidden; flex: 0 0 auto;
-        background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
+        background: var(--panel-bg); display: flex; align-items: center; justify-content: center;
         transition: box-shadow 0.2s, transform 0.12s; }
       .bthumb:hover { box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); transform: scale(1.05); }
       .bthumb img { width: 100%; height: 100%; object-fit: cover; }
       .bcover-lazy:not([src]) { visibility: hidden; }
-      .bnocover { font-size: 18px; color: rgba(255, 255, 255, 0.3); }
+      .bnocover { font-size: 18px; color: var(--fg-faint); }
       .bmeta { min-width: 0; }
-      .bt { font-size: 13px; color: rgba(255, 255, 255, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .ba { font-size: 11px; color: rgba(255, 255, 255, 0.45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .bt { font-size: 13px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ba { font-size: 11px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     `;
   }
 }
