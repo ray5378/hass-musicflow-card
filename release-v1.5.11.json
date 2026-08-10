@@ -1,7 +1,0 @@
-{
-  "tag_name": "v1.5.11",
-  "name": "v1.5.11 - dim only when server truly unreachable",
-  "body": "## 修复：连接状态语义\n\n**问题**：之前卡片只要 WebSocket 断开就整卡调暗。没有 DLNA 设备播放时，WS 没有流量，被代理/防火墙空闲超时静默断开，卡片误判为「服务器连不上」而变暗，用户无法区分到底是后端掉了还是只是没设备。\n\n**修复**：\n- 调暗条件从 `connected` 改为 `connected || serverOk`。`serverOk` 在以下时机为真：WS 成功建立、任意一次 REST 成功（`rest_ok` 事件）、以及 WS 断开后每 15s 用 REST `getPeers()` 探测成功。\n- 因此**只有 WS 与 REST 同时证明连不上服务器时卡片才变暗**。没有 DLNA 设备但服务器可达时，卡片保持正常显示。\n- 卡片每 25s 发一次 WS `ping`，后端 v1.1.14 回 `pong`，防止空闲 WS 被代理/防火墙杀掉，保持 `connected` 稳定。\n\n## 升级步骤\n1. 服务端升级到 **v1.1.14** 并重新部署（CI 会自动重建 Docker 镜像）。\n2. HACS 中将 MusicFlow Remote Card 更新到 **v1.5.11**。\n3. Home Assistant 前端 **Ctrl+F5** 硬刷新。\n\n无需手动改任何配置，卡片零配置自动连后端。",
-  "draft": false,
-  "prerelease": false
-}
