@@ -14,8 +14,7 @@
     "hacs",
     "lovelace",
     "media-player",
-    "musicflow",
-    "yamp"
+    "musicflow"
   ],
   "license": "MIT",
   "dependencies": {

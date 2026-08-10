@@ -1,9 +1,7 @@
 # MusicFlow Remote Card
 
-![MusicFlow Card](images/card-preview.svg)
-
 一个 Lovelace 卡片，作为 [MusicFlow](https://github.com/ray5378/MusicFlow)
-服务端的**完整外部控制器**（非 YAMP 派生，为 MusicFlow 专属实现）。
+服务端的**完整外部控制器**。
 
 卡片**直连** MusicFlow 后端的实时 WebSocket（`/ws`）与 REST API，与 Web 界面、
 移动 App 平级：卡片上的任何操作都会通过同一条通道推送给所有其他客户端，

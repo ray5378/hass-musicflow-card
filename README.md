@@ -1,7 +1,5 @@
 # MusicFlow Card
 
-![MusicFlow Card](images/card-preview.svg)
-
 A Lovelace card that acts as a **full external controller** for a
 [MusicFlow](https://github.com/ray5378/MusicFlow) server.
 

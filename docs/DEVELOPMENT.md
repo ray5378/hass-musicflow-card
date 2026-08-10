@@ -4,11 +4,11 @@
 
 ## 当前技术路线
 
-本仓库构建的是 **YAMP(Yet Another Media Player)的中文本地化版**:
+本仓库是 MusicFlow 的 Home Assistant 前端卡片(基于媒体播放器卡片基座改造):
 
 - 卡片基座 = 上游 [jianyu-li/yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player)
   (多实体媒体播放器卡片:封面、播放控制、队列、搜索、歌词、分组、自定义操作芯片);
-- 卡片类型 = `custom:yet-another-media-player`(保留 YAMP 原生类型,便于同步上游);
+- 卡片类型 = `custom:hass-musicflow-card`;
 - 中文化 = 在 `src/localize/languages/zh.js` 提供完整简体中文包,由
   `src/localize/localize.js` 根据 HA 语言自动选用(跟随 HA 系统语言,GUI 无需额外设置)。
 
@@ -16,12 +16,11 @@
 
 ```
 src/
-  yet-another-media-player.js   # 卡片入口(自定义元素 + 主逻辑)
-  yamp-editor.js                # 可视化编辑器
+  musicflow-remote-card.js      # 卡片入口(自定义元素 + 主逻辑)
+  backend-client.js             # 后端通信客户端(直连/代理、REST/WS、封面)
   localize/
     localize.js                 # 语言选择:localStorage / hass.language / en
     languages/{en,zh,...}.js    # 每种语言一个文件
-  yamp-card-styles.js ...       # 其余模块
 rollup.config.js                # 构建 -> dist/hass-musicflow-card.js
 ```
 
@@ -29,7 +28,7 @@ rollup.config.js                # 构建 -> dist/hass-musicflow-card.js
 
 ```bash
 npm install
-npm run build   # rollup: src/yet-another-media-player.js -> dist/hass-musicflow-card.js
+npm run build   # rollup: src/musicflow-remote-card.js -> dist/hass-musicflow-card.js
 ```
 
 CI(`.github/workflows/validate.yml`)会:
