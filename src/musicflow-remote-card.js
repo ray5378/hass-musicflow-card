@@ -19,6 +19,10 @@ const SERVER_PAGED = new Set(["songs", "albums", "artists", "genres"]);
 // 我喜欢的 / 专辑内歌曲 / 歌单内歌曲:走 Subsonic 端点 offset/size 真分页(几千首也只拉当前页)
 const PAGED_SUBSONIC = new Set(["starred", "album", "playlist"]);
 
+// 歌词三行滚动:单行高度(px)。必须与 CSS .lyric3-line 的 height/line-height 一致,
+// 因为轨道位移是按「行数 x 行高」算的。视口高 = 3 x 该值。
+const LYRIC_LINE_H = 20;
+
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
@@ -73,6 +77,7 @@ class MusicFlowRemoteCard extends LitElement {
       song: null,
       lyrics: [],
       currentLyric: "",
+      lyricIndex: -1,
       liked: false,
       showQueue: false,
       showBrowser: false,
@@ -303,6 +308,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (changed && song.songId) {
       this._ui.lyrics = [];
       this._ui.currentLyric = "";
+      this._ui.lyricIndex = -1;
       this._ui.coverLightText = true; // 新封面分析完成前先浅色文字,避免闪深色
       this._client.scrobble?.(song.songId).catch((e) => err("scrobble failed", e));
       this._loadLyrics(song.songId);
@@ -365,6 +371,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.song = null;
     this._ui.lyrics = [];
     this._ui.currentLyric = "";
+    this._ui.lyricIndex = -1;
     this._ui.currentTime = 0;
     this._ui.duration = 0;
     this._refreshCurrentPeerView();
@@ -575,13 +582,14 @@ class MusicFlowRemoteCard extends LitElement {
 
   _updateLyric() {
     const lines = this._ui.lyrics;
-    if (!lines.length) { this._ui.currentLyric = ""; return; }
+    if (!lines.length) { this._ui.currentLyric = ""; this._ui.lyricIndex = -1; return; }
     const t = this._ui.currentTime;
     let idx = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].time <= t) idx = i; else break;
     }
     this._ui.currentLyric = idx >= 0 ? lines[idx].text : "";
+    this._ui.lyricIndex = idx;
   }
 
   // ============ Like / star ============
@@ -859,7 +867,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="now">
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
-              <div class="artist">${u.currentLyric || ""}</div>
+              ${this._renderLyric3()}
             </div>
             <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
@@ -909,7 +917,21 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  // 歌词当前行已常驻显示在卡片歌手行(this._ui.currentLyric),不再展开独立面板。
+  // 歌词三行滚动:视口固定 3 行高,整条歌词轨道按当前行整体上移,
+  // 让当前行始终停在中间那一行(上一行在上、下一行在下),不再展开独立面板。
+  _renderLyric3() {
+    const lines = this._ui.lyrics || [];
+    if (!lines.length) return html`<div class="lyric3"></div>`;
+    const idx = this._ui.lyricIndex;
+    // 当前行居中 => 轨道上移 (idx-1) 行高;idx<1 时为负,轨道下沉、上方留空行。
+    const shift = (idx - 1) * LYRIC_LINE_H;
+    return html`
+      <div class="lyric3">
+        <div class="lyric3-track" style="transform: translateY(${-shift}px)">
+          ${lines.map((l, i) => html`<div class="lyric3-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
+        </div>
+      </div>`;
+  }
 
   _renderQueue() {
     const q = this._ui.queue || [];
@@ -1349,8 +1371,9 @@ class MusicFlowRemoteCard extends LitElement {
       .outputs { display: flex; flex-wrap: wrap; gap: 6px; }
       .out { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .out:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+        transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
+      /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影 */
+      .out:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
       .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
       .out.off { opacity: 0.45; }
@@ -1366,7 +1389,18 @@ class MusicFlowRemoteCard extends LitElement {
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .artist { font-size: 13px; color: #ffd400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+      /* 歌词三行滚动:视口固定 3 行,当前行恒在中间;上下边缘渐隐做出滚动纵深。
+         .lyric3-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致。 */
+      .lyric3 { height: 60px; overflow: hidden; margin-top: 2px; position: relative;
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 28%, #000 72%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 28%, #000 72%, transparent 100%); }
+      .lyric3-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
+      .lyric3-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.6;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        transition: color 0.3s ease, opacity 0.3s ease; }
+      .lyric3-line.cur { color: #ffd400; opacity: 1; }
+      /* 浅色封面(整卡切深色文字)时金色对比不足,换成深琥珀 */
+      ha-card.dark .lyric3-line.cur { color: #a3690a; }
       .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }
       .progress-row { display: flex; align-items: center; gap: 8px; }
       .progress-row .t { font-size: 11px; color: var(--fg-faint); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -1393,7 +1427,8 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.play:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .ctl.play:active { transform: scale(0.92); }
       .ctl.like.on { color: #f62c55; }
-      .ctl.active { color: #f62c55; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      /* 展开态只用图标变色标识,不再加红圈描边 */
+      .ctl.active { color: #f62c55; }
       .ctl.vol-open { background: transparent; color: var(--ctl); }
       /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
          触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
@@ -1430,8 +1465,8 @@ class MusicFlowRemoteCard extends LitElement {
       .qitem .qa, .sitem .sa { width: 90px; color: var(--fg-faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .mini { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer;
-        transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .mini:hover { background: var(--ctl-hover); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+        transition: box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
+      .mini:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .bplay { border: none; background: #f62c55; color: #fff; cursor: pointer;
         width: 38px; height: 38px; padding: 0; border-radius: 50%; flex: 0 0 auto;
         display: flex; align-items: center; justify-content: center;
