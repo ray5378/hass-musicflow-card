@@ -81,6 +81,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._pollTimer = null;
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
+    this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
   }
 
   disconnectedCallback() {
@@ -94,6 +95,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._client) this._client.disconnect();
+    if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
   }
 
   set hass(hass) {
@@ -713,11 +715,66 @@ class MusicFlowRemoteCard extends LitElement {
     return this._client ? this._client.coverUrl(coverArt) : null;
   }
 
+  // 媒体库列表封面:标题先出,封面视口懒加载。
+  // - 无 coverArt:占位 ♪
+  // - 直连模式:直接给带 token 的 URL(浏览器原生 loading=lazy)
+  // - 代理模式:已缓存则直接显示;否则渲染带 data-cover-id 的占位 <img>,
+  //   由 IntersectionObserver 进入视口后请求并直接写 src(不触发整卡重渲染)。
+  _coverImgTag(coverArt) {
+    if (!coverArt) return html`<span class="bnocover">♪</span>`;
+    if (this._client?.mode !== "proxy") {
+      const url = this._client ? this._client.coverUrl(coverArt) : null;
+      return url ? html`<img src="${url}" alt="" loading="lazy" />` : html`<span class="bnocover">♪</span>`;
+    }
+    const cached = this._client.peekCover(coverArt);
+    if (cached) return html`<img src="${cached}" alt="" />`;
+    return html`<img class="bcover-lazy" data-cover-id="${coverArt}" alt="" loading="lazy" />`;
+  }
+
+  _loadCoverInto(img) {
+    const id = img.getAttribute("data-cover-id");
+    if (!id || img.dataset.loaded) return;
+    img.dataset.loaded = "1";
+    this._client?.requestCover(id, (url) => {
+      if (url && img.isConnected) img.src = url;
+    });
+  }
+
+  _ensureCoverObserver(root) {
+    if (this._coverObserver) return;
+    this._coverObserver = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          this._loadCoverInto(e.target);
+          this._coverObserver.unobserve(e.target);
+        }
+      }
+    }, { root, rootMargin: "250px 0px", threshold: 0.01 });
+  }
+
+  // 媒体库打开后,把当前可见(或即将可见)的封面占位登记进观察器。
+  _observeBrowserCovers() {
+    if (!this._ui.showBrowser || !this._client) return;
+    const root = this.shadowRoot?.querySelector(".br-list");
+    if (!root) return;
+    this._ensureCoverObserver(root);
+    root.querySelectorAll('img.bcover-lazy:not([data-loaded])').forEach((img) => {
+      this._coverObserver.observe(img);
+    });
+  }
+
   _fmtTime(s) {
     if (!s || s < 0) return "0:00";
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
     return `${m}:${sec < 10 ? "0" : ""}${sec}`;
+  }
+
+  // 每次渲染后,若媒体库打开,等 DOM 落定再把可见封面登记进懒加载观察器。
+  updated() {
+    if (this._ui.showBrowser) {
+      this.updateComplete.then(() => this._observeBrowserCovers()).catch(() => {});
+    }
   }
 
   render() {
@@ -1076,12 +1133,11 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _renderBrowserItem(it) {
-    const cover = it.coverArt ? this._cover(it.coverArt) : null;
     if (it.kind === "song") {
       return html`
         <div class="bitem">
           <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>
-            ${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}
+            ${this._coverImgTag(it.coverArt)}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
             <div class="bt">${it.title}</div>
@@ -1097,7 +1153,7 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="bitem">
         <div class="bthumb" style="cursor:pointer" title="播放整个${this._collLabel(it)}" @click=${() => this._browserPlayCollection(it)}>
-          ${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}
+          ${this._coverImgTag(it.coverArt)}
         </div>
         <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserItemClick(it)}>
           <div class="bt">${it.name}</div>
@@ -1254,7 +1310,7 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); transform: scale(1.05); }
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
-      .ctl.vol-open { background: rgba(246, 44, 85, 0.16); color: #f62c55; }
+      .ctl.vol-open { background: transparent; color: rgba(255, 255, 255, 0.85); }
       /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
          触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
       .vol-inline { display: flex; align-items: center; gap: 10px; width: 100%; }
@@ -1357,6 +1413,7 @@ class MusicFlowRemoteCard extends LitElement {
         transition: box-shadow 0.2s, transform 0.12s; }
       .bthumb:hover { box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); transform: scale(1.05); }
       .bthumb img { width: 100%; height: 100%; object-fit: cover; }
+      .bcover-lazy:not([src]) { visibility: hidden; }
       .bnocover { font-size: 18px; color: rgba(255, 255, 255, 0.3); }
       .bmeta { min-width: 0; }
       .bt { font-size: 13px; color: rgba(255, 255, 255, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
