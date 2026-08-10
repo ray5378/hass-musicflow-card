@@ -51,7 +51,6 @@ class MusicFlowRemoteCard extends LitElement {
       error: "",
       connected: false,
       serverOk: false,
-      transport: "", // "direct" | "proxy"(调通后由 client.mode 填充,仅作显示)
       peers: [],
       currentPeerId: "",
       queue: [],
@@ -143,7 +142,6 @@ class MusicFlowRemoteCard extends LitElement {
     c.on("open", () => {
       this._ui.connected = true;
       this._ui.serverOk = true;
-      this._ui.transport = c.mode || "";
       this._startHeartbeat();
       this.requestUpdate();
     });
@@ -276,7 +274,8 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.isPlaying = status.state === "PLAYING";
     if (typeof status.position === "number") this._ui.currentTime = status.position;
     if (typeof status.duration === "number" && status.duration > 0) this._ui.duration = status.duration;
-    if (typeof status.volume === "number") this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
+    // 拖拽中忽略服务器回传的音量,避免外网代理延迟把滑块拽回旧值(跟手问题)。
+    if (typeof status.volume === "number" && !this._ui.volDragging) this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
     if (typeof status.muted === "boolean") this._ui.muted = status.muted;
     if (status.media) this._setMedia(status.media);
     this._updateLyric();
@@ -483,6 +482,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="vol-track"></div>
           <div class="vol-fill" style="width:${vpct}%"></div>
           <div class="vol-knob" style="left:${vpct}%"></div>
+          <span class="vol-value" style="left:${vpct}%">${vpct}%</span>
         </div>
         <button class="ctl" title="完成" @click=${() => { u.showVolume = false; this.requestUpdate(); }}>${this._icon("check", 20)}</button>
       </div>`;
@@ -492,8 +492,10 @@ class MusicFlowRemoteCard extends LitElement {
     const el = e.currentTarget;
     if (el.setPointerCapture && e.pointerId != null) { try { el.setPointerCapture(e.pointerId); } catch {} }
     const rect = el.getBoundingClientRect();
+    this._volSliderEl = el;
     this._volDrag = { startX: e.clientX, startVal: this._ui.volume, width: Math.max(1, rect.width) };
     this._ui.volDragging = true;
+    el.classList.add("dragging");
   }
 
   _volPointerMove(e) {
@@ -503,12 +505,24 @@ class MusicFlowRemoteCard extends LitElement {
     pct = Math.max(0, Math.min(100, pct));
     const v = pct / 100;
     this._ui.volume = v;
+    // 直接改 DOM,避免每次 pointermove 触发整卡重渲染——外网代理下更跟手。
+    const el = this._volSliderEl;
+    if (el) {
+      const fill = el.querySelector(".vol-fill");
+      const knob = el.querySelector(".vol-knob");
+      const val = el.querySelector(".vol-value");
+      if (fill) fill.style.width = pct + "%";
+      if (knob) knob.style.left = pct + "%";
+      if (val) { val.style.left = pct + "%"; val.textContent = Math.round(pct) + "%"; }
+    }
     this._commitVolume(v);
-    this.requestUpdate();
   }
 
   _volPointerUp() {
     if (!this._volDrag) return;
+    const el = this._volSliderEl;
+    if (el) el.classList.remove("dragging");
+    this._volSliderEl = null;
     this._volDrag = null;
     this._ui.volDragging = false;
     this._commitVolume(this._ui.volume, true);
@@ -797,10 +811,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _renderOutputs() {
     const peers = this._ui.peers || [];
-    const badge = this._ui.transport
-      ? html`<span class="tbadge">${this._ui.transport === "proxy" ? "代理" : "直连"}</span>`
-      : "";
-    if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span>${badge}</div>`;
+    if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span></div>`;
     return html`
       <div class="outputs">
         ${peers.map((p) => html`
@@ -810,7 +821,6 @@ class MusicFlowRemoteCard extends LitElement {
             ${p.kind === "group" ? "👥" : p.kind === "dlna" ? "🔊" : "💻"} ${p.name || p.peerId}
           </button>
         `)}
-        ${badge}
       </div>
     `;
   }
@@ -1232,9 +1242,6 @@ class MusicFlowRemoteCard extends LitElement {
       .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
       .out.off { opacity: 0.45; }
       .hint { color: rgba(255, 255, 255, 0.5); font-size: 12px; }
-      .tbadge { margin-left: auto; align-self: center; font-size: 10px; color: rgba(255, 255, 255, 0.55);
-        border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px; padding: 1px 7px;
-        background: rgba(255, 255, 255, 0.05); }
       .now { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
       .cover { width: 84px; height: 84px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
         background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
@@ -1278,6 +1285,13 @@ class MusicFlowRemoteCard extends LitElement {
       .vol-fill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: #f62c55; }
       .vol-knob { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #f62c55; transform: translate(-50%, -50%); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
       .vol-slider:active .vol-knob { transform: translate(-50%, -50%) scale(1.15); }
+      /* 实时数值气泡:默认隐藏,拖动/悬停时显示;位置跟随滑块把手(translateX 居中)。 */
+      .vol-value { position: absolute; bottom: calc(100% + 2px); transform: translateX(-50%);
+        font-size: 12px; font-weight: 600; color: #fff; background: rgba(20, 20, 24, 0.92);
+        border: 1px solid rgba(246, 44, 85, 0.55); border-radius: 8px; padding: 1px 7px;
+        pointer-events: none; opacity: 0; transition: opacity 0.12s ease;
+        font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
+      .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       .actions { display: flex; gap: 8px; }
       .act { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
         border-radius: 10px; padding: 8px 4px; font-size: 12px; cursor: pointer;

@@ -3,7 +3,7 @@
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
 //
-// Hybrid transport (v1.6.0):
+// Hybrid transport (v1.6.1):
 //   mode "direct"  - WebSocket + REST straight to the backend (lowest latency,
 //                    used on the LAN).
 //   mode "proxy"   - everything goes through the HA integration:
