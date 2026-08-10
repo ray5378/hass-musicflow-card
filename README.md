@@ -22,12 +22,17 @@ channel, and any change made elsewhere is reflected on the card immediately.
 - **Search** - search the library and play or enqueue results.
 - **Add to playlist** - add the current or any searched song to a playlist.
 - **Like / favorite** - star or unstar the current song.
+- **Media library** - browse playlists / albums / artists / genres / favorites,
+  with server-side pagination for large libraries.
 
 ## Requirements
 
 - Home Assistant **2024.12.0** or newer.
 - The [MusicFlow integration](https://github.com/ray5378/hass-musicflow)
   configured (it supplies the backend URL and API key to the card).
+- **Tested with**: MusicFlow server **v1.1.19** + integration **v1.3.6** +
+  card **v1.6.11**. Keep these three in sync; upgrading the server should be
+  followed by updating the integration and the card in HACS.
 
 ## Hybrid transport (LAN direct + WAN proxy)
 
@@ -40,14 +45,27 @@ automatically falls back to routing everything through Home Assistant:
 - REST calls go through the integration's proxy view.
 - Real-time events are forwarded by the integration over a WebSocket
   subscription.
-- Cover art is fetched through Home Assistant and rendered as a blob.
+- Cover art is fetched through Home Assistant (the card uses the integration's
+  authenticated fetch and renders the image as a blob, so artwork shows even
+  from outside your LAN).
 
-This requires the MusicFlow integration **1.3.0 or newer**. The backend API key
-stays inside Home Assistant and is never sent to the browser in proxy mode.
+This requires the MusicFlow integration **1.3.0 or newer** (current stable:
+**1.3.6**). The backend API key stays inside Home Assistant and is never sent
+to the browser in proxy mode.
 
 In direct mode the backend must still allow your Home Assistant frontend origin
 in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
 directly from the browser.
+
+## Cover art performance (with server v1.1.19+)
+
+- **Direct mode**: the card requests covers at the thumbnail size (~160px) with
+  a cacheable URL; the server resizes on the fly (sharp) and returns `webp`
+  when the client supports it, plus `Cache-Control`/`ETag` so the browser reuses
+  covers across pages and refreshes (304).
+- **Proxy mode**: covers are pulled through Home Assistant with the
+  integration's credentials and cached per `(coverId, size)` in the card, so no
+  raw unauthenticated `<img>` request hits the protected HA endpoint.
 
 ## Installation
 
@@ -69,7 +87,7 @@ integration. If you prefer to hard-code them, provide them explicitly:
 
 ```yaml
 type: custom:hass-musicflow-card
-url: http://musicflow.local:3000
+url: http://musicflow.local:46400
 api_key: YOUR_LONG_LIVED_API_KEY
 ```
 
@@ -112,4 +130,5 @@ the card and every other MusicFlow client stay perfectly in sync.
 In **proxy** mode (used automatically when direct access fails) the card talks
 only to Home Assistant: REST through `/api/musicflow/rest/*`, real-time events
 through the `musicflow/subscribe` WebSocket command, and covers through the same
-proxy. The integration forwards everything to the backend with its own API key.
+proxy (authenticated fetch -> blob). The integration forwards everything to the
+backend with its own API key.
