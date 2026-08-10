@@ -12,7 +12,10 @@ const PLAY_MODE_TIP = { order: "顺序播放", one: "单曲循环", all: "列表
 // 与主项目一致(lucide):order→list-ordered / one→repeat-1 / all→repeat / shuffle→shuffle
 const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", shuffle: "shuffle" };
 // 媒体库浏览器每页/每批渲染条数(懒加载步长)
-const BROWSE_PAGE = 60;
+// 媒体库每页行数(需求:每页 8 行)。服务端分页类型走后端 /api/v1/* 真分页只拉当前页;
+// 其余类型一次取回后本地切片。分页控件参考主项目 PagePagination(el-pagination)。
+const PAGE_SIZE = 8;
+const SERVER_PAGED = new Set(["songs", "albums", "artists", "genres"]);
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -912,119 +915,102 @@ class MusicFlowRemoteCard extends LitElement {
     };
   }
 
-  async _browserLoad(level, { append = false } = {}) {
-    if (level.loading || (append && (level.loadingMore || !level.hasMore))) return;
-    if (!append) {
-      // 首次加载:重置分页状态。serverPaged 类型走后端 offset/size 真分页;
-      // 其余类型一次取回后由渲染层分片(懒渲染)避免 DOM 卡顿。
-      level.offset = 0;
-      level.renderCount = BROWSE_PAGE;
-      level.hasMore = true;
-      level.serverPaged = ["albums", "songs", "genre"].includes(level.type);
-      level.items = [];
-      level.loading = true;
-    } else {
-      level.loadingMore = true;
-    }
-    this.requestUpdate();
-    const PAGE = BROWSE_PAGE;
-    try {
-      if (level.type === "playlists") {
-        const res = await this._client.getPlaylists();
-        level.items = (res?.playlists?.playlist || res?.playlists || []).map((p) => ({
-          kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
-          coverArt: p.coverArt, songCount: p.songCount,
-        }));
-        level.hasMore = false;
-      } else if (level.type === "playlist") {
-        const res = await this._client.getPlaylistSongs(level.id);
-        level.items = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
-        level.hasMore = false;
-      } else if (level.type === "albums") {
-        const res = await this._client.getAlbumList2({ type: "alphabeticalByName", size: PAGE, offset: level.offset });
-        const page = (res?.albumList2?.album || []).map((a) => ({
-          kind: "album", id: String(a.id), name: a.name || "未知专辑",
-          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
-        }));
-        level.items = append ? level.items.concat(page) : page;
-        level.offset += page.length;
-        level.hasMore = page.length >= PAGE;
-      } else if (level.type === "songs") {
-        // 全部歌曲:复用 search3 空查询(后端按标题排序并支持 songOffset/songCount 分页)
-        const res = await this._client.getSongs({ offset: level.offset, count: PAGE });
-        const page = (res?.searchResult3?.song || []).map((s) => this._toSongItem(s));
-        level.items = append ? level.items.concat(page) : page;
-        level.offset += page.length;
-        level.hasMore = page.length >= PAGE;
-      } else if (level.type === "album") {
-        const res = await this._client.getAlbum(level.id);
-        level.items = (res?.album?.song || []).map((s) => this._toSongItem(s));
-        level.hasMore = false;
-      } else if (level.type === "artists") {
-        const res = await this._client.getArtists();
-        const indexes = res?.artists?.index || [];
-        const flat = [];
-        for (const idx of indexes) for (const a of (idx.artist || [])) {
-          flat.push({ kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt });
-        }
-        level.items = flat;
-        level.hasMore = false;
-      } else if (level.type === "artist") {
-        const res = await this._client.getArtist(level.id);
-        level.items = (res?.artist?.album || []).map((a) => ({
-          kind: "album", id: String(a.id), name: a.name || "未知专辑",
-          artist: a.artist || "", coverArt: a.coverArt,
-        }));
-        level.hasMore = false;
-      } else if (level.type === "genres") {
-        const res = await this._client.getGenres();
-        level.items = (res?.genres?.genre || []).map((g) => ({
-          kind: "genre", id: g.value, name: g.value,
-          songCount: g.songCount, albumCount: g.albumCount,
-        }));
-        level.hasMore = false;
-      } else if (level.type === "genre") {
-        const res = await this._client.getAlbumList2({ type: "byGenre", genre: level.id, size: PAGE, offset: level.offset });
-        const page = (res?.albumList2?.album || []).map((a) => ({
-          kind: "album", id: String(a.id), name: a.name || "未知专辑",
-          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
-        }));
-        level.items = append ? level.items.concat(page) : page;
-        level.offset += page.length;
-        level.hasMore = page.length >= PAGE;
-      } else if (level.type === "starred") {
-        const res = await this._client.getStarred();
-        level.items = (res?.starred2?.song || res?.starred?.song || []).map((s) => this._toSongItem(s));
-        level.hasMore = false;
+  // 分页加载:每页 PAGE_SIZE 行。
+  // - SERVER_PAGED 类型(songs/albums/artists/genres):走后端 /api/v1/* 真分页,只拉当前页 + total。
+  // - 其余类型(playlists/playlist/album/artist/starred):一次取回全部缓存到 allItems,本地切片分页。
+  // reset=false 时不重新拉全部(客户端类型翻页用);page 指定目标页(1-based)。
+  async _browserLoad(level, { page = 1, reset = true } = {}) {
+    if (level.loading) return;
+    if (SERVER_PAGED.has(level.type)) {
+      level.loading = true; level.page = page; this.requestUpdate();
+      try {
+        const q = (level.query || "").trim();
+        let res;
+        if (level.type === "songs") res = await this._client.getSongsV2({ page, pageSize: PAGE_SIZE, query: q });
+        else if (level.type === "albums") res = await this._client.getAlbumsV2({ page, pageSize: PAGE_SIZE, query: q });
+        else if (level.type === "artists") res = await this._client.getArtistsV2({ page, pageSize: PAGE_SIZE, query: q });
+        else if (level.type === "genres") res = await this._client.getGenresV2({ page, pageSize: PAGE_SIZE, query: q });
+        const items = res?.items || [];
+        level.items = this._mapBrowseItems(level.type, items);
+        level.total = res?.total || items.length;
+      } catch (e) {
+        err("browser server-page load failed", e);
+        if (page === 1) level.items = [];
+        level.total = 0;
       }
-    } catch (e) {
-      err("browser load failed", e);
-      if (!append) level.items = [];
+      level.totalPages = Math.max(1, Math.ceil(level.total / PAGE_SIZE));
+      level.loading = false; this.requestUpdate();
+      return;
     }
-    level.loading = false;
-    level.loadingMore = false;
+    // 客户端分页:首次(reset)或尚无缓存时拉全部
+    if (reset || !level.allItems) {
+      level.loading = true; level.page = 1; this.requestUpdate();
+      try { level.allItems = await this._fetchAllItems(level); }
+      catch (e) { err("browser client load failed", e); level.allItems = []; }
+      level.loading = false;
+    }
+    level.page = page;
+    const q = (level.query || "").trim().toLowerCase();
+    let view = level.allItems || [];
+    if (q && (level.type === "playlists" || level.type === "starred")) {
+      view = view.filter((it) => ((it.title || it.name || "") || "").toLowerCase().includes(q));
+    }
+    level.viewItems = view;
+    level.total = view.length;
+    const start = (page - 1) * PAGE_SIZE;
+    level.items = view.slice(start, start + PAGE_SIZE);
+    level.totalPages = Math.max(1, Math.ceil(level.total / PAGE_SIZE));
     this.requestUpdate();
   }
 
-  // 懒加载:serverPaged 类型向后端要下一页;其余类型只是增长渲染分片。
-  _browserLoadMore(level) {
-    if (!level) return;
-    if (level.serverPaged) {
-      if (level.loadingMore || !level.hasMore || level.loading) return;
-      this._browserLoad(level, { append: true });
-    } else {
-      if ((level.renderCount || 0) >= level.items.length) return;
-      level.renderCount = Math.min(level.items.length, (level.renderCount || 0) + BROWSE_PAGE);
-      this.requestUpdate();
-    }
+  // 翻页:服务端类型同样走 _browserLoad(始终按页拉取);客户端类型复用 allItems 切片。
+  _browserGotoPage(level, page) {
+    page = Math.max(1, Math.min(level.totalPages || 1, page | 0));
+    if (page === level.page) return;
+    this._browserLoad(level, { page, reset: false });
   }
 
-  _brScroll(e) {
-    const el = e.currentTarget;
-    if (el.scrollHeight - (el.scrollTop + el.clientHeight) < 60) {
-      const level = this._ui.browserStack[this._ui.browserStack.length - 1];
-      this._browserLoadMore(level);
+  // 一次性取回客户端分页类型的全部条目
+  async _fetchAllItems(level) {
+    if (level.type === "playlists") {
+      const res = await this._client.getPlaylists();
+      return (res?.playlists?.playlist || res?.playlists || []).map((p) => ({
+        kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+        coverArt: p.coverArt, songCount: p.songCount,
+      }));
+    } else if (level.type === "playlist") {
+      const res = await this._client.getPlaylistSongs(level.id);
+      return (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
+    } else if (level.type === "album") {
+      const res = await this._client.getAlbum(level.id);
+      return (res?.album?.song || []).map((s) => this._toSongItem(s));
+    } else if (level.type === "artist") {
+      const res = await this._client.getArtist(level.id);
+      return (res?.artist?.album || []).map((a) => ({
+        kind: "album", id: String(a.id), name: a.name || "未知专辑",
+        artist: a.artist || "", coverArt: a.coverArt,
+      }));
+    } else if (level.type === "starred") {
+      const res = await this._client.getStarred();
+      return (res?.starred2?.song || res?.starred?.song || []).map((s) => this._toSongItem(s));
     }
+    return [];
+  }
+
+  // 服务端分页类型把后端 items 映射成本地浏览项
+  _mapBrowseItems(type, items) {
+    if (type === "songs") return (items || []).map((s) => this._toSongItem(s));
+    if (type === "albums") return (items || []).map((a) => ({
+      kind: "album", id: String(a.id), name: a.name || "未知专辑",
+      artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
+    }));
+    if (type === "artists") return (items || []).map((a) => ({
+      kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt,
+    }));
+    if (type === "genres") return (items || []).map((g) => ({
+      kind: "genre", id: g.id, name: g.name, songCount: g.songCount, albumCount: g.albumCount,
+    }));
+    return items || [];
   }
 
   _browserPush(level) {
@@ -1040,30 +1026,9 @@ class MusicFlowRemoteCard extends LitElement {
   _browserSearch() {
     const level = this._ui.browserStack[this._ui.browserStack.length - 1];
     if (!level) return;
-    const q = (level.query || "").trim();
-    if (level.type === "albums") {
-      if (!q) { this._browserLoad(level); return; }
-      this._client.search(q, { albumCount: 100 }).then((res) => {
-        level.items = (res?.searchResult3?.album || []).map((a) => ({
-          kind: "album", id: String(a.id), name: a.name || "未知专辑",
-          artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
-        }));
-        // 搜索结果非服务端分页,重置为客户端分片渲染
-        level.serverPaged = false; level.hasMore = false; level.offset = 0; level.renderCount = BROWSE_PAGE;
-        this.requestUpdate();
-      }).catch((e) => err("browser album search failed", e));
-    } else if (level.type === "artists") {
-      if (!q) { this._browserLoad(level); return; }
-      this._client.search(q, { artistCount: 100 }).then((res) => {
-        level.items = (res?.searchResult3?.artist || []).map((a) => ({
-          kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt,
-        }));
-        level.serverPaged = false; level.hasMore = false; level.offset = 0; level.renderCount = BROWSE_PAGE;
-        this.requestUpdate();
-      }).catch((e) => err("browser artist search failed", e));
-    } else {
-      this.requestUpdate();
-    }
+    // songs/albums/artists/genres 走服务端 V2 搜索(带 total 分页);
+    // playlists/starred 走本地过滤。统一重置到第 1 页。
+    this._browserLoad(level, { page: 1, reset: false });
   }
 
   _browserItemClick(item) {
@@ -1141,14 +1106,14 @@ class MusicFlowRemoteCard extends LitElement {
     if (it.kind === "song") {
       return html`
         <div class="bitem">
-          <div class="bthumb">${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}</div>
+          <div class="bthumb" style="cursor:pointer" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>
+            ${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}
+          </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
             <div class="bt">${it.title}</div>
             <div class="ba">${it.artist || ""}</div>
           </div>
           <button class="mini" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>▶</button>
-          <button class="mini" title="加入队列" @click=${() => this._browserEnqueueSong(it)}>＋</button>
-          <button class="mini" title="加入歌单" @click=${() => this._openPlaylistPicker(it.songId)}>♥+</button>
         </div>`;
     }
     const sub = it.kind === "album" ? (it.artist || "")
@@ -1172,19 +1137,9 @@ class MusicFlowRemoteCard extends LitElement {
     const stack = this._ui.browserStack;
     const level = stack[stack.length - 1];
     if (!level) return html``;
-    const q = (level.query || "").trim().toLowerCase();
-    let items = level.items || [];
-    if (q && (level.type === "playlists" || level.type === "genres" || level.type === "starred")) {
-      items = level.type === "starred"
-        ? items.filter((s) => (s.title || "").toLowerCase().includes(q))
-        : items.filter((s) => (s.name || "").toLowerCase().includes(q));
-    }
-    // 懒加载渲染:serverPaged 且未过滤时,items 已是服务端分页结果,全部渲染;
-    // 其余(含客户端过滤结果)按 renderCount 分片,滚动到底再增长。
-    const visible = (level.serverPaged && !q) ? items : items.slice(0, level.renderCount || items.length);
-    const showMore = (level.serverPaged && !q && level.hasMore) ||
-      (!level.serverPaged && (level.renderCount || 0) < items.length);
-    const showSearch = ["playlists", "albums", "artists", "genres", "starred"].includes(level.type);
+    const visible = level.items || [];
+    // 搜索框:专辑/艺术家/流派走服务端 V2 搜索;歌单/我喜欢的走本地过滤;音乐(全库歌曲)走服务端搜索。
+    const showSearch = ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
     return html`
       <div class="overlay" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>
         <div class="browser" @click=${(e) => e.stopPropagation()}>
@@ -1206,7 +1161,7 @@ class MusicFlowRemoteCard extends LitElement {
               <button class="mini" @click=${this._browserSearch}>搜索</button>
             </div>
           ` : ""}
-          <div class="br-list" @scroll=${this._brScroll}>
+          <div class="br-list">
             ${level.loading ? html`<div class="empty">加载中…</div>` : ""}
             ${!level.loading && level.type === "root" ? html`
               <div class="cat-grid">
@@ -1216,12 +1171,43 @@ class MusicFlowRemoteCard extends LitElement {
             ${!level.loading && level.type !== "root" ? html`
               ${visible.length === 0 ? html`<div class="empty">无内容</div>` : ""}
               ${visible.map((it) => this._renderBrowserItem(it))}
-              ${showMore ? html`<div class="br-more" @click=${() => this._browserLoadMore(level)}>${level.loadingMore ? "加载中…" : "加载更多"}</div>` : ""}
+              ${this._renderPager(level)}
             ` : ""}
           </div>
         </div>
       </div>
     `;
+  }
+
+  _pagerPages(cur, tp) {
+    const out = [];
+    if (tp <= 7) { for (let i = 1; i <= tp; i++) out.push(i); return out; }
+    out.push(1);
+    if (cur > 4) out.push("...");
+    const s = Math.max(2, cur - 2), e = Math.min(tp - 1, cur + 2);
+    for (let i = s; i <= e; i++) out.push(i);
+    if (cur < tp - 3) out.push("...");
+    out.push(tp);
+    return out;
+  }
+
+  // 分页控件:参考主项目 PagePagination(el-pagination)。
+  // 显示 总数 + 上一页 + 页码(带省略号) + 下一页 + 跳页。每页 PAGE_SIZE(8)行。
+  _renderPager(level) {
+    const tp = level.totalPages || 1;
+    const cur = level.page || 1;
+    if (tp <= 1) return html``;
+    const pages = this._pagerPages(cur, tp);
+    return html`
+      <div class="br-pager">
+        <span class="pg-total">共 ${level.total || 0} 条</span>
+        <button class="pg-btn" ?disabled=${cur <= 1} @click=${() => this._browserGotoPage(level, cur - 1)}>‹</button>
+        ${pages.map((p) => p === "..." ? html`<span class="pg-ell">…</span>` :
+          html`<button class="pg-btn ${p === cur ? "cur" : ""}" @click=${() => this._browserGotoPage(level, p)}>${p}</button>`)}
+        <button class="pg-btn" ?disabled=${cur >= tp} @click=${() => this._browserGotoPage(level, cur + 1)}>›</button>
+        <span class="pg-jump">前往 <input class="pg-input" type="number" min="1" max="${tp}" .value=${String(cur)}
+          @change=${(e) => { const v = parseInt(e.target.value, 10) || 1; this._browserGotoPage(level, v); }}> 页</span>
+      </div>`;
   }
 
   static get styles() {
@@ -1373,9 +1359,21 @@ class MusicFlowRemoteCard extends LitElement {
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
       .br-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; min-height: 140px; }
-      .br-more { text-align: center; padding: 10px 0; color: rgba(255, 255, 255, 0.6); font-size: 13px;
-        cursor: pointer; border-radius: 8px; transition: background 0.15s, color 0.15s; }
-      .br-more:hover { background: rgba(255, 255, 255, 0.06); color: #f62c55; }
+      .br-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px;
+        padding: 12px 4px 6px; }
+      .br-pager .pg-total { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-right: 6px; }
+      .br-pager .pg-btn { min-width: 30px; height: 30px; padding: 0 6px; border-radius: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: rgba(255, 255, 255, 0.88);
+        cursor: pointer; font-size: 13px; line-height: 1; transition: background 0.15s, border-color 0.15s; }
+      .br-pager .pg-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.10); }
+      .br-pager .pg-btn.cur { background: #f62c55; color: #fff; border-color: transparent; font-weight: 600; }
+      .br-pager .pg-btn:disabled { opacity: 0.32; cursor: default; }
+      .br-pager .pg-ell { color: rgba(255, 255, 255, 0.5); padding: 0 2px; }
+      .br-pager .pg-jump { font-size: 12px; color: rgba(255, 255, 255, 0.5); display: flex; align-items: center;
+        gap: 4px; margin-left: 6px; }
+      .br-pager .pg-input { width: 46px; height: 26px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.14);
+        background: transparent; color: rgba(255, 255, 255, 0.9); text-align: center; font-size: 13px; }
+      .br-pager .pg-input:focus { outline: none; border-color: #f62c55; }
       .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0; }
       .cat { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.9);
         border-radius: 12px; padding: 20px 8px; font-size: 14px; cursor: pointer;

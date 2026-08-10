@@ -3,7 +3,7 @@
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
 //
-// Hybrid transport (v1.6.2):
+// Hybrid transport (v1.6.3):
 //   mode "direct"  - WebSocket + REST straight to the backend (lowest latency,
 //                    used on the LAN).
 //   mode "proxy"   - everything goes through the HA integration:
@@ -451,6 +451,30 @@ export class BackendClient {
   async getAlbum(id) { return this.rest(`/getAlbum?id=${encodeURIComponent(id)}`); }
   async getGenres() { return this.rest("/getGenres"); }
   async getPlaylistSongs(id) { return this.rest(`/getPlaylist?id=${encodeURIComponent(id)}`); }
+
+  // ============ MusicFlow v1 paginated browse endpoints ============
+  // 与 Web 前端 Music/Albums/Artists/Genres 页面共用 /rest/api/v1/* 端点,
+  // 返回 { total, page, pageSize, items },支持 page/pageSize/query。
+  // 卡片据此实现「每页 8 行 + 分页控件」(参考主项目 PagePagination):服务端真分页,
+  // 只拉当前页,并拿 total 渲染页码/跳页。
+  async getSongsV2({ page = 1, pageSize = 8, query = "", genre = "" } = {}) {
+    const qs = `page=${page}&pageSize=${pageSize}` +
+      (query ? `&query=${encodeURIComponent(query)}` : "") +
+      (genre ? `&genre=${encodeURIComponent(genre)}` : "");
+    return this.rest(`/api/v1/songs?${qs}`);
+  }
+  async getAlbumsV2({ page = 1, pageSize = 8, query = "" } = {}) {
+    const qs = `page=${page}&pageSize=${pageSize}` + (query ? `&query=${encodeURIComponent(query)}` : "");
+    return this.rest(`/api/v1/albums?${qs}`);
+  }
+  async getArtistsV2({ page = 1, pageSize = 8, query = "" } = {}) {
+    const qs = `page=${page}&pageSize=${pageSize}` + (query ? `&query=${encodeURIComponent(query)}` : "");
+    return this.rest(`/api/v1/artists?${qs}`);
+  }
+  async getGenresV2({ page = 1, pageSize = 8, query = "" } = {}) {
+    const qs = `page=${page}&pageSize=${pageSize}` + (query ? `&query=${encodeURIComponent(query)}` : "");
+    return this.rest(`/api/v1/genres?${qs}`);
+  }
 
   // ============ Media URLs ============
   coverUrl(coverId) {
