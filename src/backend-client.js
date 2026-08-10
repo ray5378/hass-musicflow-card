@@ -403,6 +403,10 @@ export class BackendClient {
   playQueue(peerId, items, startIndex = 0) {
     return this.rest(this.peerPath(peerId, "/queue/play"), { method: "POST", body: { items, startIndex } });
   }
+  // 跳播到指定索引并立即播放(即使随机模式也尊重 index)。见后端 queue/jump。
+  jumpToIndex(peerId, index) {
+    return this.rest(this.peerPath(peerId, "/queue/jump"), { method: "POST", body: { index } });
+  }
   enqueue(peerId, items) {
     return this.rest(this.peerPath(peerId, "/queue/enqueue"), { method: "POST", body: { items } });
   }

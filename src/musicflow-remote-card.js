@@ -626,23 +626,52 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.clearQueue(pid).catch((e) => err("clearQueue failed", e));
   }
 
-  // 跳播:用完整队列 + 目标索引重放,保留队列其它曲目(不重建/不清空)
+  // 跳播到队列中指定曲目并立即播放(后端已持有该队列,直接跳;shuffle 下也尊重指定索引)
   _jumpTo(index) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
     if (!this._ui.queue[index]) return;
-    const items = this._ui.queue.map((it) => childToQueueItem(it));
-    this._client.playQueue(pid, items, index)
-      .catch((e) => err("jumpTo failed", e));
+    this._client.jumpToIndex(pid, index)
+      .catch((e) => {
+        // 后端未升级:退化成完整队列 + 目标索引重放
+        err("jumpToIndex unavailable, fallback to playQueue", e);
+        const items = this._ui.queue.map((it) => childToQueueItem(it));
+        this._client.playQueue(pid, items, index).catch((e2) => err("jumpTo failed", e2));
+      });
   }
 
-  // 加入播放队列并播放:现有队列 + 该曲,从新曲索引开始
-  _appendAndPlay(song) {
+  // 加入播放队列并播放这首歌(不是继续播队列里别的歌):
+  // 1) enqueue 把该曲追加到后端队列末尾(队列为空时后端会自动起播)
+  // 2) 取权威队列,定位刚追加的这首歌(末尾),用 jump 跳播到它
+  //    —— 关键:后端 playFrom 在 shuffle 下会随机起播、忽视 startIndex,
+  //       所以必须用专门的 jump 端点严格跳到这首歌(随机只作用于后续续播)。
+  async _appendAndPlay(song) {
     const pid = this._ui.currentPeerId;
     if (!pid || !song) return;
-    const items = [...this._ui.queue.map((it) => childToQueueItem(it)), childToQueueItem(song)];
-    this._client.playQueue(pid, items, this._ui.queue.length)
-      .catch((e) => err("appendAndPlay failed", e));
+    const item = childToQueueItem(song);
+    try {
+      await this._client.enqueue(pid, [item]);
+      const q = await this._client.getQueue(pid);
+      const items = (q && q.items) || [];
+      // 取最后(最新追加)的该曲下标,兼容队列里本就有同曲的情况
+      let idx = -1;
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (items[i] && items[i].songId === item.songId) { idx = i; break; }
+      }
+      if (idx < 0) idx = Math.max(0, items.length - 1);
+      // 仅一首(队列原本为空,enqueue 已起播)无需再跳
+      if (items.length > 1) {
+        try {
+          await this._client.jumpToIndex(pid, idx);
+        } catch (e2) {
+          // 后端未升级(无 /queue/jump):退化成"只播这首歌"(重建队列为该曲)
+          err("jumpToIndex unavailable, fallback to playQueue", e2);
+          await this._client.playQueue(pid, [item], 0);
+        }
+      }
+    } catch (e) {
+      err("appendAndPlay failed", e);
+    }
   }
 
   _reorder(from, to) {
@@ -657,8 +686,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (newIndex < 0) newIndex = Math.max(0, Math.min(to, items.length - 1));
     this._ui.queue = items;
     this._ui.currentIndex = newIndex;
-    this._client.playQueue(pid, items.map(childToQueueItem), newIndex)
+    // 先按新顺序重建队列(startIndex 任意,shuffle 下会被随机化,故随即 jump 修正)
+    this._client.playQueue(pid, items.map(childToQueueItem), 0)
       .catch((e) => err("reorder failed", e));
+    this._client.jumpToIndex(pid, newIndex)
+      .catch((e) => err("reorder jump failed", e));
     this.requestUpdate();
   }
 
@@ -1045,14 +1077,14 @@ class MusicFlowRemoteCard extends LitElement {
     if (it.kind === "song") {
       return html`
         <div class="bitem">
-          <div class="bthumb" style="cursor:pointer" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>
+          <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>
             ${cover ? html`<img src="${cover}" alt="" />` : html`<span class="bnocover">♪</span>`}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
             <div class="bt">${it.title}</div>
             <div class="ba">${it.artist || ""}</div>
           </div>
-          <button class="mini" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>▶</button>
+          <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>▶</button>
         </div>`;
     }
     const sub = it.kind === "album" ? (it.artist || "")
