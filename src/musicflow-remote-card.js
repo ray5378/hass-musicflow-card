@@ -490,13 +490,24 @@ class MusicFlowRemoteCard extends LitElement {
 
   // 点击音量控件本体以外的任意位置 = 关闭并保存(音量拖动时已实时下发,无需确认按钮)
   _onWrapClick(e) {
-    if (!this._ui.showVolume) return;
     const path = e.composedPath ? e.composedPath() : [];
-    for (const n of path) {
-      if (n?.classList?.contains?.("vol-row")) return; // 点在静音键/音量条上不关闭
+    if (this._ui.showVolume) {
+      for (const n of path) {
+        if (n?.classList?.contains?.("vol-row")) return; // 点在静音键/音量条上不关闭
+      }
+      this._ui.showVolume = false;
+      this.requestUpdate();
+      return;
     }
-    this._ui.showVolume = false;
-    this.requestUpdate();
+    // 媒体库下拉打开时,点面板以外(上半部分/控件/进度条等)即收起,与音量面板一致。
+    if (this._ui.showBrowser) {
+      for (const n of path) {
+        if (n?.classList?.contains?.("browser")) return; // 点在媒体库面板内不收起
+      }
+      this._ui.showBrowser = false;
+      this.requestUpdate();
+      return;
+    }
   }
 
   // 音量面板:本层完全透明(无底色/无模糊),「遮挡」靠 .lower.volmode 把控件行、
@@ -890,7 +901,7 @@ class MusicFlowRemoteCard extends LitElement {
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
               ${this._renderLyricBox()}
             </div>
-            <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
+            <div class="cover" role="button" @click=${(e) => { e.stopPropagation(); this._openBrowser(); }}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
               : html`<div class="nocover">♪</div>`}</div>
           </div>
@@ -917,10 +928,9 @@ class MusicFlowRemoteCard extends LitElement {
             </div>
 
             ${u.showQueue ? this._renderQueue() : ""}
+            ${u.showBrowser ? this._renderMediaBrowser() : ""}
             ${u.showVolume ? this._renderVolumeOverlay() : ""}
           </div>
-
-          ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
       </ha-card>
     `;
@@ -992,6 +1002,8 @@ class MusicFlowRemoteCard extends LitElement {
     const u = this._ui;
     // 音量面板打开时,点封面只表示「点外部退出」,不顺带进媒体库(需再点一次)。
     if (u.showVolume) { u.showVolume = false; this.requestUpdate(); return; }
+    // 再次点封面 = 收起(与队列按钮一致的可切换行为)。
+    if (u.showBrowser) { u.showBrowser = false; this.requestUpdate(); return; }
     u.showBrowser = true;
     u.showQueue = false;
     u.browserStack = [{
@@ -1279,40 +1291,37 @@ class MusicFlowRemoteCard extends LitElement {
     // 搜索框:专辑/艺术家/流派走服务端 V2 搜索;歌单/我喜欢的走本地过滤;音乐(全库歌曲)走服务端搜索。
     const showSearch = ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
     return html`
-      <div class="overlay" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>
-        <div class="browser" @click=${(e) => e.stopPropagation()}>
-          <div class="br-head">
-            <span class="br-title">媒体库</span>
-            <button class="mini" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>关闭</button>
+      <div class="panel browser">
+        <div class="br-head">
+          <span class="br-title">媒体库</span>
+        </div>
+        <div class="br-crumbs">
+          ${stack.map((lv, i) => html`
+            <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
+            ${i < stack.length - 1 ? html`<span class="crumb-sep">›</span>` : ""}
+          `)}
+        </div>
+        ${showSearch ? html`
+          <div class="br-search">
+            <input class="search-input" placeholder="搜索…" .value=${level.query}
+              @input=${(e) => { level.query = e.target.value; }}
+              @keydown=${(e) => { if (e.key === "Enter") this._browserSearch(); }} />
+            <button class="mini" @click=${this._browserSearch}>搜索</button>
           </div>
-          <div class="br-crumbs">
-            ${stack.map((lv, i) => html`
-              <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
-              ${i < stack.length - 1 ? html`<span class="crumb-sep">›</span>` : ""}
-            `)}
-          </div>
-          ${showSearch ? html`
-            <div class="br-search">
-              <input class="search-input" placeholder="搜索…" .value=${level.query}
-                @input=${(e) => { level.query = e.target.value; }}
-                @keydown=${(e) => { if (e.key === "Enter") this._browserSearch(); }} />
-              <button class="mini" @click=${this._browserSearch}>搜索</button>
+        ` : ""}
+        <div class="br-list">
+          ${level.loading ? html`<div class="empty">加载中…</div>` : ""}
+          ${!level.loading && level.type === "root" ? html`
+            <div class="cat-grid">
+              ${visible.map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
             </div>
           ` : ""}
-          <div class="br-list">
-            ${level.loading ? html`<div class="empty">加载中…</div>` : ""}
-            ${!level.loading && level.type === "root" ? html`
-              <div class="cat-grid">
-                ${visible.map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
-              </div>
-            ` : ""}
-            ${!level.loading && level.type !== "root" ? html`
-              ${visible.length === 0 ? html`<div class="empty">无内容</div>` : ""}
-              ${visible.map((it) => this._renderBrowserItem(it))}
-              ${this._renderPager(level)}
-            ` : ""}
-          </div>
+          ${!level.loading && level.type !== "root" ? html`
+            ${visible.length === 0 ? html`<div class="empty">无内容</div>` : ""}
+            ${visible.map((it) => this._renderBrowserItem(it))}
+          ` : ""}
         </div>
+        ${this._renderPager(level)}
       </div>
     `;
   }
@@ -1523,14 +1532,7 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.2s, box-shadow 0.2s; }
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
-      .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 999; }
-      .browser { --fg: #ffffff; --fg-dim: rgba(255, 255, 255, 0.6); --fg-faint: rgba(255, 255, 255, 0.5);
-        --ctl: rgba(255, 255, 255, 0.85); --ctl-hover: rgba(255, 255, 255, 0.10);
-        --seek-bg: rgba(255, 255, 255, 0.18); --panel-bg: rgba(255, 255, 255, 0.04);
-        --line: rgba(255, 255, 255, 0.12); --line-soft: rgba(255, 255, 255, 0.08);
-        background: #1f1c2a; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); border-radius: 16px; padding: 14px;
-        width: 400px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column; }
+      .browser { background: var(--panel-bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; width: 100%; display: flex; flex-direction: column; }
       .br-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
       .br-title { font-weight: 600; font-size: 15px; }
       .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px;
@@ -1540,9 +1542,9 @@ class MusicFlowRemoteCard extends LitElement {
       .crumb.cur { color: #f62c55; font-weight: 600; }
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
-      .br-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; min-height: 140px; }
+      .br-list { overflow-y: auto; max-height: 240px; display: flex; flex-direction: column; gap: 2px; }
       .br-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px;
-        padding: 12px 4px 6px; }
+        margin-top: 8px; border-top: 1px solid var(--line-soft); padding: 10px 4px 4px; }
       .br-pager .pg-total { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-right: 6px; }
       .br-pager .pg-btn { min-width: 30px; height: 30px; padding: 0 6px; border-radius: 7px;
         border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: rgba(255, 255, 255, 0.88);
