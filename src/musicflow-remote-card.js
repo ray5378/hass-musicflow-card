@@ -72,9 +72,6 @@ class MusicFlowRemoteCard extends LitElement {
       liked: false,
       showLyrics: false,
       showQueue: false,
-      showPlaylistPicker: false,
-      playlists: [],
-      pickerSongId: null,
       showBrowser: false,
       browserStack: [],
       showVolume: false,
@@ -648,14 +645,6 @@ class MusicFlowRemoteCard extends LitElement {
       .catch((e) => err("appendAndPlay failed", e));
   }
 
-  // 仅加入队列(不改变当前播放)
-  _enqueueOnly(song) {
-    const pid = this._ui.currentPeerId;
-    if (!pid || !song) return;
-    this._client.enqueue(pid, [childToQueueItem(song)])
-      .catch((e) => err("enqueue failed", e));
-  }
-
   _reorder(from, to) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
@@ -671,37 +660,6 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.playQueue(pid, items.map(childToQueueItem), newIndex)
       .catch((e) => err("reorder failed", e));
     this.requestUpdate();
-  }
-
-  // ============ Add to playlist ============
-  async _loadPlaylists() {
-    try {
-      const res = await this._client.getPlaylists();
-      const list = res?.playlists?.playlist || res?.playlists || [];
-      this._ui.playlists = list
-        .filter((p) => p && p.id != null)
-        .map((p) => ({ id: String(p.id), name: p.name || "未命名歌单" }));
-    } catch (e) {
-      err("loadPlaylists failed", e);
-      this._ui.playlists = [];
-    }
-    this.requestUpdate();
-  }
-
-  _openPlaylistPicker(songId) {
-    this._ui.pickerSongId = songId;
-    this._ui.showPlaylistPicker = true;
-    this._loadPlaylists();
-  }
-
-  _addToPlaylist(playlistId) {
-    const songId = this._ui.pickerSongId;
-    if (!songId) return;
-    this._client.updatePlaylist(playlistId, { songIdsToAdd: [songId] })
-      .then(() => log("added to playlist", playlistId))
-      .catch((e) => err("addToPlaylist failed", e));
-    this._ui.showPlaylistPicker = false;
-    this._ui.pickerSongId = null;
   }
 
   // ============ Rendering ============
@@ -781,8 +739,6 @@ class MusicFlowRemoteCard extends LitElement {
           ${u.showQueue ? this._renderQueue() : ""}
           ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
-
-        ${u.showPlaylistPicker ? this._renderPlaylistPicker() : ""}
       </ha-card>
     `;
   }
@@ -850,22 +806,6 @@ class MusicFlowRemoteCard extends LitElement {
             `)}
           </div>
         `}
-      </div>
-    `;
-  }
-
-  _renderPlaylistPicker() {
-    return html`
-      <div class="overlay" @click=${() => { this._ui.showPlaylistPicker = false; this.requestUpdate(); }}>
-        <div class="picker" @click=${(e) => e.stopPropagation()}>
-          <div class="panel-head"><span>添加到歌单</span><button class="mini" @click=${() => { this._ui.showPlaylistPicker = false; this.requestUpdate(); }}>关闭</button></div>
-          <div class="plist">
-            ${(this._ui.playlists || []).map((p) => html`
-              <div class="pitem" @click=${() => this._addToPlaylist(p.id)}>${p.name}</div>
-            `)}
-            ${(this._ui.playlists || []).length === 0 ? html`<div class="empty">无歌单</div>` : ""}
-          </div>
-        </div>
       </div>
     `;
   }
@@ -1050,7 +990,6 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _browserPlaySong(song) { this._appendAndPlay(song); }
-  _browserEnqueueSong(song) { this._enqueueOnly(song); }
 
   _collLabel(it) {
     switch (it.kind) {
@@ -1311,12 +1250,12 @@ class MusicFlowRemoteCard extends LitElement {
       .lyr-track { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.3, 1); will-change: transform; }
       .lyr { color: rgba(255, 255, 255, 0.45); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.25s; }
       .lyr.active { color: #ffd400; font-weight: 600; }
-      .qlist, .slist, .plist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-      .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar, .plist::-webkit-scrollbar,
+      .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+      .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar,
       .br-list::-webkit-scrollbar { width: 6px; }
-      .qlist::-webkit-scrollbar-thumb, .slist::-webkit-scrollbar-thumb, .plist::-webkit-scrollbar-thumb,
+      .qlist::-webkit-scrollbar-thumb, .slist::-webkit-scrollbar-thumb,
       .br-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
-      .qlist::-webkit-scrollbar-thumb:hover, .slist::-webkit-scrollbar-thumb:hover, .plist::-webkit-scrollbar-thumb:hover,
+      .qlist::-webkit-scrollbar-thumb:hover, .slist::-webkit-scrollbar-thumb:hover,
       .br-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
       .qitem, .sitem { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; transition: background 0.15s; }
       .qitem:hover, .sitem:hover { background: rgba(255, 255, 255, 0.06); }
@@ -1341,11 +1280,7 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.2s, box-shadow 0.2s; }
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
-      .pitem { padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; transition: background 0.15s; }
-      .pitem:hover { background: rgba(255, 255, 255, 0.08); }
       .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 999; }
-      .picker { background: #1f1c2a; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); border-radius: 16px; padding: 14px; width: 300px; max-height: 70vh; overflow-y: auto; }
       .browser { background: #1f1c2a; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); border-radius: 16px; padding: 14px;
         width: 400px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column; }
