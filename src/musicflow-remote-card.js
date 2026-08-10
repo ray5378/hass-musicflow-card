@@ -814,9 +814,9 @@ class MusicFlowRemoteCard extends LitElement {
           ${this._renderOutputs()}
 
           <div class="now">
-            <div class="cover" role="button" title="点击进入媒体库" @click=${this._openBrowser}>${song?.coverArt
+            <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
-              : html`<div class="nocover">♪</div>`}<span class="cover-tip">进入媒体库</span></div>
+              : html`<div class="nocover">♪</div>`}</div>
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
               <div class="artist">${u.currentLyric || ""}</div>
@@ -1297,14 +1297,9 @@ class MusicFlowRemoteCard extends LitElement {
         background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); }
       .cover { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; position: relative; }
-      .cover:hover { transform: scale(1.06); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 3px #f62c55; z-index: 2; }
+      .cover:hover { transform: scale(1.06); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); z-index: 2; }
       .cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.18s ease; }
       .cover:hover img { transform: scale(1.04); }
-      .cover-tip { position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
-        font-size: 11px; font-weight: 600; color: #fff; padding: 4px 0;
-        background: linear-gradient(to top, rgba(246, 44, 85, 0.92), rgba(246, 44, 85, 0));
-        opacity: 0; transition: opacity 0.18s ease; pointer-events: none; }
-      .cover:hover .cover-tip { opacity: 1; }
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
