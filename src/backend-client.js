@@ -2,8 +2,22 @@
 // Mirrors the Web frontend's player store (frontend/src/stores/player.ts) so
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
+//
+// Hybrid transport (v1.6.0):
+//   mode "direct"  - WebSocket + REST straight to the backend (lowest latency,
+//                    used on the LAN).
+//   mode "proxy"   - everything goes through the HA integration:
+//                    REST via  GET/POST/... /api/musicflow/rest/{path}
+//                    events via hass.connection.subscribeMessage({type:"musicflow/subscribe"})
+//                    covers  via /api/musicflow/rest/getCoverArt (blob -> objectURL)
+//                    Used when the browser cannot reach the backend directly
+//                    (PNA / mixed content / private IP not routable from the WAN).
+//   transport "auto" (default) - probe a direct REST call first; on failure and
+//                    when the integration reports proxySupported, fall back to
+//                    proxy mode. "direct" / "proxy" force a specific mode.
 
 const RECONNECT_DELAY = 3000;
+const PROBE_TIMEOUT = 4000;
 
 function log(...args) {
   console.log("[MusicFlow card]", ...args);
@@ -20,11 +34,19 @@ export class BackendClient {
     this.hass = opts.hass || null;
     this.url = opts.url || null;
     this.apiKey = opts.apiKey || null;
+    this.transport = opts.transport || "auto"; // auto | direct | proxy
+    this.mode = null; // resolved: "direct" | "proxy"
+    this.proxySupported = false;
     this.ws = null;
+    this._unsub = null; // HA WS subscription unsub (proxy mode)
+    this._coverCache = new Map();
     this._listeners = new Map();
     this._connected = false;
     this._pendingInit = null;
     this._reconnectTimer = null;
+    this._connecting = false;
+    this._subPending = false;
+    this._proxyFallbackTried = false;
   }
 
   on(event, cb) {
@@ -52,7 +74,8 @@ export class BackendClient {
       const b = backends[0];
       this.url = b.url;
       this.apiKey = b.api_key;
-      log("backend_config ok", this.url);
+      this.proxySupported = !!b.proxySupported;
+      log("backend_config ok", this.url, "proxySupported:", this.proxySupported);
     })();
     await this._pendingInit;
   }
@@ -73,7 +96,69 @@ export class BackendClient {
     return `${base}${path}${extra}`;
   }
 
+  // ============ transport mode ============
+  // 直连可达性探测:局域网内直连延迟最低,探测成功就保持直连;
+  // 外网/跨网段(混合内容、PNA、私有 IP 不可路由)会抛网络错误 -> 走 HA 代理。
+  async _probeDirect() {
+    if (!this.url || !this.apiKey) return false;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT);
+      let ok = false;
+      try {
+        const res = await fetch(this._withToken("/api/v1/users/me"), {
+          signal: ctrl.signal,
+        });
+        ok = res.ok;
+      } finally {
+        clearTimeout(timer);
+      }
+      return ok;
+    } catch (e) {
+      log("direct probe failed -> will use proxy", e && e.message);
+      return false;
+    }
+  }
+
+  async _resolveMode() {
+    if (this.transport === "direct") return "direct";
+    if (this.transport === "proxy") return this.proxySupported ? "proxy" : "direct";
+    // auto: 直连可达就用直连;不可达且集成支持代理才切代理
+    if (this.proxySupported && !(await this._probeDirect())) return "proxy";
+    return "direct";
+  }
+
   async rest(path, { method = "GET", body } = {}) {
+    if (this.mode === "proxy") {
+      const url = "/api/musicflow/rest" + path;
+      const init = { method, headers: {} };
+      if (body !== undefined) {
+        init.headers["Content-Type"] = "application/json";
+        init.body = JSON.stringify(body);
+      }
+      log("proxy REST", method, path);
+      let res;
+      try {
+        res = await this.hass.fetchWithAuth(url, init);
+      } catch (e) {
+        error("proxy REST network error", method, path, e);
+        throw e;
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        error("proxy REST failed", method, path, res.status, text.slice(0, 200));
+        throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
+      }
+      this._emit("rest_ok"); // 任何一次 REST 成功都证明"能和服务器通信"
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const data = await res.json();
+        if (data && data["subsonic-response"]) return data["subsonic-response"];
+        return data;
+      }
+      return res;
+    }
+
     const url = this._withToken(path);
     const init = { method, headers: {} };
     if (body !== undefined) {
@@ -112,22 +197,45 @@ export class BackendClient {
   }
 
   connect() {
+    if (this._connecting) return;
+    if (this.mode === "proxy") return this._connectProxy();
+    if (this.mode === "direct") return this._connectWS();
+    // 首次连接:先探测决定直连还是代理,再走对应通道
+    this._connecting = true;
+    this._resolveMode()
+      .then((mode) => {
+        this.mode = mode;
+        log("transport mode:", mode);
+        this._connecting = false;
+        this.connect();
+      })
+      .catch((e) => {
+        this._connecting = false;
+        error("mode resolve failed", e);
+        this._scheduleReconnect();
+      });
+  }
+
+  // ============ direct transport (WebSocket) ============
+  _connectWS() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     let ws;
     try {
       ws = new WebSocket(this._wsUrl());
     } catch (e) {
       error("WS open failed", e);
-      this._scheduleReconnect();
+      this._maybeProxyFallback();
       return;
     }
     this.ws = ws;
+    ws._mfOpened = false;
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       this._handle(msg);
     };
     ws.onopen = () => {
+      ws._mfOpened = true;
       this._connected = true;
       log("WS open");
       this._emit("open");
@@ -138,9 +246,24 @@ export class BackendClient {
       this._stopWsKeepalive();
       warn("WS close");
       this._emit("close");
+      if (this._maybeProxyFallback()) return;
       this._scheduleReconnect();
     };
     ws.onerror = (e) => { error("WS error", e); try { ws.close(); } catch {} };
+  }
+
+  // 直连 WS 从未打开过(说明后端对浏览器不可达)且集成支持代理 -> 切一次代理。
+  // transport 显式为 direct 时不自动切换(用户明确要求只走直连)。
+  _maybeProxyFallback() {
+    if (this.transport === "direct") return false;
+    if (this.mode === "direct" && this.proxySupported && !this._proxyFallbackTried) {
+      this._proxyFallbackTried = true;
+      log("direct WS failed -> switching to proxy");
+      this.mode = "proxy";
+      this.connect();
+      return true;
+    }
+    return false;
   }
 
   // 应用层 WS 心跳:没有 DLNA 设备/未播放时 WS 完全无流量,代理或防火墙的
@@ -167,9 +290,42 @@ export class BackendClient {
   disconnect() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     this._stopWsKeepalive();
+    this._closeProxy();
     if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} this.ws = null; }
+    this._connected = false;
   }
 
+  // ============ proxy transport (via HA integration) ============
+  _connectProxy() {
+    if (this._unsub || this._subPending) return; // 已订阅或订阅中
+    if (!this.hass || !this.hass.connection) {
+      error("proxy: no hass.connection");
+      this._scheduleReconnect();
+      return;
+    }
+    this._subPending = true;
+    log("subscribing backend events via HA");
+    this.hass.connection
+      .subscribeMessage((msg) => this._handle(msg), { type: "musicflow/subscribe" })
+      .then((unsub) => {
+        this._subPending = false;
+        this._unsub = unsub;
+        this._connected = true;
+        log("proxy subscribed");
+        this._emit("open");
+      })
+      .catch((e) => {
+        this._subPending = false;
+        error("proxy subscribe failed", e);
+        this._emit("close");
+        this._scheduleReconnect();
+      });
+  }
+  _closeProxy() {
+    if (this._unsub) { try { this._unsub(); } catch {} this._unsub = null; }
+  }
+
+  // ============ message dispatch ============
   _handle(msg) {
     log("WS", msg.type, msg);
     switch (msg.type) {
@@ -211,6 +367,14 @@ export class BackendClient {
       case "device_list_changed":
         // 后端发现 DLNA 设备上线/下线(实时 SSDP) -> 兜底刷新一次 peers
         this._emit("device_list_changed", { deviceCount: msg.deviceCount });
+        break;
+      case "connection_closed":
+        // 集成侧的后端 WS 断了(后端重启等):重新订阅
+        warn("backend connection closed, resubscribing");
+        this._closeProxy();
+        this._connected = false;
+        this._emit("close");
+        this._scheduleReconnect();
         break;
       default:
         break;
@@ -283,7 +447,29 @@ export class BackendClient {
   // ============ Media URLs ============
   coverUrl(coverId) {
     if (!coverId) return null;
+    if (this.mode === "proxy") {
+      // 经 HA 拉取并转成 blob URL(浏览器 <img> 无法带 HA 认证头)。
+      // 首次返回 null 占位,取到后通过 cover_ready 事件触发重渲染。
+      if (this._coverCache.has(coverId)) return this._coverCache.get(coverId);
+      this._fetchCover(coverId);
+      return null;
+    }
     return this._withToken(`/getCoverArt?id=${encodeURIComponent(coverId)}&size=300`);
+  }
+
+  async _fetchCover(coverId) {
+    try {
+      const res = await this.hass.fetchWithAuth(
+        `/api/musicflow/rest/getCoverArt?id=${encodeURIComponent(coverId)}&size=300`
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      this._coverCache.set(coverId, url);
+      this._emit("cover_ready");
+    } catch (e) {
+      error("proxy cover fetch failed", coverId, e);
+    }
   }
 }
 

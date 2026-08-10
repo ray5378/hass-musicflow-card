@@ -28,9 +28,26 @@ channel, and any change made elsewhere is reflected on the card immediately.
 - Home Assistant **2024.12.0** or newer.
 - The [MusicFlow integration](https://github.com/ray5378/hass-musicflow)
   configured (it supplies the backend URL and API key to the card).
-- The MusicFlow backend must allow your Home Assistant frontend origin in
-  `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
-  directly from the browser.
+
+## Hybrid transport (LAN direct + WAN proxy)
+
+The card normally connects **directly** to the MusicFlow backend (WebSocket +
+REST), which gives the lowest latency on your LAN. When the browser cannot
+reach the backend directly - outside your LAN, or when a Public Network Access
+/ mixed-content / private-IP restriction blocks the connection - the card
+automatically falls back to routing everything through Home Assistant:
+
+- REST calls go through the integration's proxy view.
+- Real-time events are forwarded by the integration over a WebSocket
+  subscription.
+- Cover art is fetched through Home Assistant and rendered as a blob.
+
+This requires the MusicFlow integration **1.3.0 or newer**. The backend API key
+stays inside Home Assistant and is never sent to the browser in proxy mode.
+
+In direct mode the backend must still allow your Home Assistant frontend origin
+in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
+directly from the browser.
 
 ## Installation
 
@@ -72,10 +89,27 @@ Only MusicFlow-created `media_player` entities carry the `peer_id` attribute. Fo
 a generic media_player (not managed by MusicFlow) the `entity` option has no
 effect and the card falls back to the first available output.
 
+### Transport mode
+
+By default the card auto-detects the best transport (`auto`): it probes a direct
+connection first and switches to the Home Assistant proxy when direct access
+fails. You can force a mode with the `transport` option:
+
+```yaml
+type: custom:hass-musicflow-card
+transport: direct   # always connect straight to the backend
+# transport: proxy  # always route through Home Assistant (needs integration 1.3.0+)
+```
+
 ## How it works
 
 The card obtains the backend connection details from the integration via the
-`musicflow/backend_config` WebSocket command, then opens a live `/ws`
-connection using the user's API key. All playback, queue, lyrics, search,
+`musicflow/backend_config` WebSocket command. In **direct** mode it opens a live
+`/ws` connection using the user's API key; all playback, queue, lyrics, search,
 playlist, and favorite actions are sent straight to the backend REST API, so
 the card and every other MusicFlow client stay perfectly in sync.
+
+In **proxy** mode (used automatically when direct access fails) the card talks
+only to Home Assistant: REST through `/api/musicflow/rest/*`, real-time events
+through the `musicflow/subscribe` WebSocket command, and covers through the same
+proxy. The integration forwards everything to the backend with its own API key.

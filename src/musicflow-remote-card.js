@@ -51,6 +51,7 @@ class MusicFlowRemoteCard extends LitElement {
       error: "",
       connected: false,
       serverOk: false,
+      transport: "", // "direct" | "proxy"(调通后由 client.mode 填充,仅作显示)
       peers: [],
       currentPeerId: "",
       queue: [],
@@ -111,6 +112,7 @@ class MusicFlowRemoteCard extends LitElement {
       hass,
       url: cfg.url || null,
       apiKey: cfg.api_key || null,
+      transport: cfg.transport || "auto", // auto | direct | proxy
     });
     try {
       await this._client.init();
@@ -141,6 +143,7 @@ class MusicFlowRemoteCard extends LitElement {
     c.on("open", () => {
       this._ui.connected = true;
       this._ui.serverOk = true;
+      this._ui.transport = c.mode || "";
       this._startHeartbeat();
       this.requestUpdate();
     });
@@ -162,6 +165,8 @@ class MusicFlowRemoteCard extends LitElement {
     // 后端实时发现 DLNA 设备上线/下线 -> 刷新设备列表(peer_registered/available
     // 事件通常也会到,这里兜底确保卡片立刻显示刚上线的设备)。
     c.on("device_list_changed", () => this._refreshPeers());
+    // 代理模式下封面是异步取的 blob URL:取到后重渲染一次
+    c.on("cover_ready", () => this.requestUpdate());
   }
 
   // ============ Peer / output management ============
@@ -792,7 +797,10 @@ class MusicFlowRemoteCard extends LitElement {
 
   _renderOutputs() {
     const peers = this._ui.peers || [];
-    if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span></div>`;
+    const badge = this._ui.transport
+      ? html`<span class="tbadge">${this._ui.transport === "proxy" ? "代理" : "直连"}</span>`
+      : "";
+    if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span>${badge}</div>`;
     return html`
       <div class="outputs">
         ${peers.map((p) => html`
@@ -802,6 +810,7 @@ class MusicFlowRemoteCard extends LitElement {
             ${p.kind === "group" ? "👥" : p.kind === "dlna" ? "🔊" : "💻"} ${p.name || p.peerId}
           </button>
         `)}
+        ${badge}
       </div>
     `;
   }
@@ -1223,6 +1232,9 @@ class MusicFlowRemoteCard extends LitElement {
       .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
       .out.off { opacity: 0.45; }
       .hint { color: rgba(255, 255, 255, 0.5); font-size: 12px; }
+      .tbadge { margin-left: auto; align-self: center; font-size: 10px; color: rgba(255, 255, 255, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px; padding: 1px 7px;
+        background: rgba(255, 255, 255, 0.05); }
       .now { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
       .cover { width: 84px; height: 84px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
         background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
