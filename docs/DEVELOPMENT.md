@@ -4,10 +4,8 @@
 
 ## 当前技术路线
 
-本仓库是 MusicFlow 的 Home Assistant 前端卡片(基于媒体播放器卡片基座改造):
+本仓库是 MusicFlow 的 Home Assistant 前端卡片,作为 MusicFlow 后端的专用外部控制器:
 
-- 卡片基座 = 上游 [jianyu-li/yet-another-media-player](https://github.com/jianyu-li/yet-another-media-player)
-  (多实体媒体播放器卡片:封面、播放控制、队列、搜索、歌词、分组、自定义操作芯片);
 - 卡片类型 = `custom:hass-musicflow-card`;
 - 中文化 = 在 `src/localize/languages/zh.js` 提供完整简体中文包,由
   `src/localize/localize.js` 根据 HA 语言自动选用(跟随 HA 系统语言,GUI 无需额外设置)。
