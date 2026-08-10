@@ -645,6 +645,8 @@ class MusicFlowRemoteCard extends LitElement {
   // 2) 取权威队列,定位刚追加的这首歌(末尾),用 jump 跳播到它
   //    —— 关键:后端 playFrom 在 shuffle 下会随机起播、忽视 startIndex,
   //       所以必须用专门的 jump 端点严格跳到这首歌(随机只作用于后续续播)。
+  //    后端未升级(无 /queue/jump)时退化为"重建队列=原队列+该曲、从该曲起播",
+  //    绝不再用 playQueue([song],0) 清空原队列。
   async _appendAndPlay(song) {
     const pid = this._ui.currentPeerId;
     if (!pid || !song) return;
@@ -664,9 +666,10 @@ class MusicFlowRemoteCard extends LitElement {
         try {
           await this._client.jumpToIndex(pid, idx);
         } catch (e2) {
-          // 后端未升级(无 /queue/jump):退化成"只播这首歌"(重建队列为该曲)
-          err("jumpToIndex unavailable, fallback to playQueue", e2);
-          await this._client.playQueue(pid, [item], 0);
+          // 后端未升级(无 /queue/jump):退化成"重建队列=原队列+该曲,并跳到该曲"——保留原队列,绝不清空
+          err("jumpToIndex unavailable, fallback preserves queue", e2);
+          const rebuilt = [...this._ui.queue.map((it) => childToQueueItem(it)), item];
+          await this._client.playQueue(pid, rebuilt, this._ui.queue.length);
         }
       }
     } catch (e) {
