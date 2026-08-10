@@ -499,8 +499,9 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  // 音量遮罩面板:从控件行顶部一直盖到卡片底部(控件行 + 进度条 + 队列面板全部遮住),
-  // 上半部分(播放器名/歌名/歌词/封面)保持可见可点(点一下即关闭)。
+  // 音量面板:本层完全透明(无底色/无模糊),「遮挡」靠 .lower.volmode 把控件行、
+  // 进度条、队列设为 visibility:hidden 原地隐身实现——露出的是卡片自身的模糊封面背景,
+  // 与上半部分同源,无色差无边界,卡片高度零跳变。上半部分保持可见可点(点一下即关闭)。
   // 布局对齐:静音键 42px 顶替进度条左侧时间标签的位置,右侧留 42px 空位,
   // 使音量条与下方 seek 严格等长、上下重合。
   // 触屏优化:采用「相对拖动」——按下只记录起点、不跳值;移动时按位移增量调音量。
@@ -894,8 +895,9 @@ class MusicFlowRemoteCard extends LitElement {
               : html`<div class="nocover">♪</div>`}</div>
           </div>
 
-          <!-- 下半区(控件行 + 进度条 + 队列)整体作为音量遮罩的定位容器 -->
-          <div class="lower">
+          <!-- 下半区(控件行 + 进度条 + 队列)整体作为音量面板的定位容器。
+               volmode 时下面几块用 visibility:hidden 原地隐身(保留占位,卡片高度零跳变)。 -->
+          <div class="lower ${u.showVolume ? "volmode" : ""}">
             <div class="controls">
               <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
               <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
@@ -1458,15 +1460,18 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.vol-open { background: transparent; color: var(--ctl); }
       /* 下半区容器:音量遮罩以它为定位参照,盖住控件行 + 进度条 + 队列面板 */
       .lower { position: relative; display: flex; flex-direction: column; gap: 12px; }
-      /* 音量遮罩:从控件行顶部一直盖到卡片底部,上半部分(播放器名/歌名/歌词/封面)保持可见。
-         点遮罩(或上半部分)任意处即关闭并保存——音量拖动时已实时下发,无需确认按钮。 */
-      /* 负 inset + 等量 padding:遮罩向外多盖一圈(直抵卡片底缘),但内容框仍与 .lower 对齐,
-         保证音量条左右端与下方 seek 严格重合。 */
-      .vol-overlay { position: absolute; top: -6px; left: -4px; right: -4px; bottom: -14px;
-        z-index: 6; border-radius: 12px;
-        background: rgba(14, 12, 22, 0.62); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
-        display: flex; align-items: flex-start; padding: 6px 4px 14px; }
-      ha-card.dark .vol-overlay { background: rgba(250, 250, 252, 0.66); }
+      /* 音量态「无感」隐身:不盖蒙层,而是把下半区各块设为 visibility:hidden。
+         用 visibility 而非 display:none —— 元素仍占原高度,卡片高度全程零跳变,
+         露出的就是卡片自身那层模糊封面背景,与上半部分同源,不可能有色差/边界。
+         队列展开时那块列表会留一片空白(刻意为之:保高度不抖)。 */
+      .lower.volmode > .controls,
+      .lower.volmode > .progress-row,
+      .lower.volmode > .panel { visibility: hidden; }
+      /* 音量面板层本身完全透明,只负责承载音量行 + 接管「点外部关闭」。
+         inset:0 与 .lower 严格对齐,不再需要负 inset/padding 那套魔数补偿,
+         音量条左右端与下方 seek 天然重合。 */
+      .vol-overlay { position: absolute; inset: 0; z-index: 6;
+        display: flex; align-items: flex-start; }
       /* 静音键占最左 42px(顶替进度条左侧时间标签的位置),右侧留 42px 空位,
          使音量条与下方 seek 严格等长、左右端上下重合。gap 必须为 0。 */
       .vol-row { display: flex; align-items: center; gap: 0; width: 100%; height: 42px; }
