@@ -3,7 +3,7 @@
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
 //
-// Hybrid transport (v1.6.1):
+// Hybrid transport (v1.6.2):
 //   mode "direct"  - WebSocket + REST straight to the backend (lowest latency,
 //                    used on the LAN).
 //   mode "proxy"   - everything goes through the HA integration:
@@ -417,8 +417,16 @@ export class BackendClient {
   getPeers() { return this.rest("/api/v1/peers"); }
 
   // ============ Subsonic endpoints ============
-  async search(query, { count = 20, offset = 0 } = {}) {
-    return this.rest(`/search3?query=${encodeURIComponent(query)}&count=${count}&offset=${offset}`);
+  async search(query, { songCount = 20, songOffset = 0, albumCount = 20, albumOffset = 0, artistCount = 20, artistOffset = 0 } = {}) {
+    const qs = `query=${encodeURIComponent(query)}&songCount=${songCount}&songOffset=${songOffset}` +
+      `&albumCount=${albumCount}&albumOffset=${albumOffset}&artistCount=${artistCount}&artistOffset=${artistOffset}`;
+    return this.rest(`/search3?${qs}`);
+  }
+
+  // 全部歌曲:复用 search3 空查询(后端注释明确支持空查询翻全库),按标题排序,
+  // 走 songOffset/songCount 真分页,无需改后端即可实现「音乐」分类懒加载。
+  async getSongs({ offset = 0, count = 60 } = {}) {
+    return this.rest(`/search3?query=&songCount=${count}&songOffset=${offset}`);
   }
   async getLyrics(songId) {
     return this.rest(`/getLyricsBySongId?id=${encodeURIComponent(songId)}&f=json`);

@@ -11,6 +11,8 @@ const PLAY_MODE_LABEL = { order: "顺序", one: "单曲", all: "循环", shuffle
 const PLAY_MODE_TIP = { order: "顺序播放", one: "单曲循环", all: "列表循环", shuffle: "随机播放" };
 // 与主项目一致(lucide):order→list-ordered / one→repeat-1 / all→repeat / shuffle→shuffle
 const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", shuffle: "shuffle" };
+// 媒体库浏览器每页/每批渲染条数(懒加载步长)
+const BROWSE_PAGE = 60;
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -67,10 +69,7 @@ class MusicFlowRemoteCard extends LitElement {
       liked: false,
       showLyrics: false,
       showQueue: false,
-      showSearch: false,
       showPlaylistPicker: false,
-      searchQuery: "",
-      searchResults: [],
       playlists: [],
       pickerSongId: null,
       showBrowser: false,
@@ -590,16 +589,28 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  _toggleLike() {
+  async _toggleLike() {
     const song = this._ui.song;
     if (!song?.songId) return;
-    if (this._ui.liked) {
-      this._client.unstar(song.songId).catch((e) => err("unstar failed", e));
-    } else {
-      this._client.star(song.songId).catch((e) => err("star failed", e));
-    }
-    this._ui.liked = !this._ui.liked;
+    const wasLiked = this._ui.liked;
+    this._ui.liked = !wasLiked; // 乐观翻转,先给即时反馈
     this.requestUpdate();
+    try {
+      if (wasLiked) {
+        const r = await this._client.unstar(song.songId);
+        if (r?.error) throw new Error(r.error.message || "unstar failed");
+      } else {
+        const r = await this._client.star(song.songId);
+        if (r?.error) throw new Error(r.error.message || "star failed");
+      }
+      // 成功后从后端重新同步收藏态,保证 UI 与服务器一致(也能暴露代理通道失败)
+      await this._loadLiked(song.songId);
+    } catch (e) {
+      err("like toggle failed", e);
+      this._ui.liked = wasLiked; // 失败回退到真实状态
+      this._ui.error = "喜欢操作失败(可能代理通道异常或未连通),请重试";
+      this.requestUpdate();
+    }
   }
 
   // ============ Queue ============
@@ -657,40 +668,6 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.playQueue(pid, items.map(childToQueueItem), newIndex)
       .catch((e) => err("reorder failed", e));
     this.requestUpdate();
-  }
-
-  // ============ Search ============
-  async _doSearch() {
-    const q = (this._ui.searchQuery || "").trim();
-    if (!q) { this._ui.searchResults = []; this.requestUpdate(); return; }
-    try {
-      const res = await this._client.search(q, { count: 30 });
-      const songs = res?.searchResult3?.song || res?.searchResult2?.song || [];
-      this._ui.searchResults = songs.map((s) => ({
-        songId: s.id,
-        title: s.title || "未知",
-        artist: s.artist || "",
-        album: s.album || "",
-        coverArt: s.coverArt,
-        duration: s.duration || 0,
-        suffix: s.suffix,
-      }));
-    } catch (e) {
-      err("search failed", e);
-      this._ui.searchResults = [];
-    }
-    this.requestUpdate();
-  }
-
-  _searchPlay(song) {
-    this._appendAndPlay(song);
-  }
-
-  _searchEnqueue(song) {
-    const pid = this._ui.currentPeerId;
-    if (!pid) return;
-    this._client.enqueue(pid, [childToQueueItem(song)])
-      .catch((e) => err("searchEnqueue failed", e));
   }
 
   // ============ Add to playlist ============
@@ -792,15 +769,13 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <div class="actions">
-            <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
-            <button class="act ${u.showQueue ? "active" : ""}" @click=${() => { u.showQueue = !u.showQueue; u.showLyrics = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>队列</button>
-            <button class="act ${u.showSearch ? "active" : ""}" @click=${() => { u.showSearch = !u.showSearch; u.showLyrics = false; u.showQueue = false; u.showBrowser = false; this.requestUpdate(); }}>搜索</button>
+            <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
+            <button class="act ${u.showQueue ? "active" : ""}" @click=${() => { u.showQueue = !u.showQueue; u.showLyrics = false; u.showBrowser = false; this.requestUpdate(); }}>队列</button>
             <button class="act ${u.showBrowser ? "active" : ""}" @click=${this._openBrowser}>媒体库</button>
           </div>
 
           ${u.showLyrics ? this._renderLyrics() : ""}
           ${u.showQueue ? this._renderQueue() : ""}
-          ${u.showSearch ? this._renderSearch() : ""}
           ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
 
@@ -876,31 +851,6 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  _renderSearch() {
-    return html`
-      <div class="panel search">
-        <div class="panel-head">
-          <input class="search-input" placeholder="搜索歌曲…"
-            .value=${this._ui.searchQuery}
-            @input=${(e) => { this._ui.searchQuery = e.target.value; }}
-            @keydown=${(e) => { if (e.key === "Enter") this._doSearch(); }} />
-          <button class="mini" @click=${this._doSearch}>搜索</button>
-        </div>
-        <div class="slist">
-          ${this._ui.searchResults.map((s) => html`
-            <div class="sitem">
-              <span class="st">${s.title}</span>
-              <span class="sa">${s.artist || ""}</span>
-              <button class="mini" title="播放" @click=${() => this._searchPlay(s)}>▶</button>
-              <button class="mini" title="加入队列" @click=${() => this._searchEnqueue(s)}>＋</button>
-              <button class="mini" title="加入歌单" @click=${() => this._openPlaylistPicker(s.songId)}>♥+</button>
-            </div>
-          `)}
-        </div>
-      </div>
-    `;
-  }
-
   _renderPlaylistPicker() {
     return html`
       <div class="overlay" @click=${() => { this._ui.showPlaylistPicker = false; this.requestUpdate(); }}>
@@ -921,12 +871,13 @@ class MusicFlowRemoteCard extends LitElement {
   _openBrowser() {
     const u = this._ui;
     u.showBrowser = true;
-    u.showLyrics = u.showQueue = u.showSearch = false;
+    u.showLyrics = u.showQueue = false;
     u.browserStack = [{
       type: "root",
       items: [
         { kind: "cat", cat: "playlists", name: "歌单" },
         { kind: "cat", cat: "albums", name: "专辑" },
+        { kind: "cat", cat: "songs", name: "音乐" },
         { kind: "cat", cat: "artists", name: "艺术家" },
         { kind: "cat", cat: "genres", name: "流派" },
         { kind: "cat", cat: "starred", name: "我喜欢的音乐" },
@@ -943,6 +894,7 @@ class MusicFlowRemoteCard extends LitElement {
       case "playlist": return lv.name || "歌单";
       case "albums": return "专辑";
       case "album": return lv.name || "专辑";
+      case "songs": return "音乐";
       case "artists": return "艺术家";
       case "artist": return lv.name || "艺术家";
       case "genres": return "流派";
@@ -960,8 +912,22 @@ class MusicFlowRemoteCard extends LitElement {
     };
   }
 
-  async _browserLoad(level) {
-    level.loading = true; this.requestUpdate();
+  async _browserLoad(level, { append = false } = {}) {
+    if (level.loading || (append && (level.loadingMore || !level.hasMore))) return;
+    if (!append) {
+      // 首次加载:重置分页状态。serverPaged 类型走后端 offset/size 真分页;
+      // 其余类型一次取回后由渲染层分片(懒渲染)避免 DOM 卡顿。
+      level.offset = 0;
+      level.renderCount = BROWSE_PAGE;
+      level.hasMore = true;
+      level.serverPaged = ["albums", "songs", "genre"].includes(level.type);
+      level.items = [];
+      level.loading = true;
+    } else {
+      level.loadingMore = true;
+    }
+    this.requestUpdate();
+    const PAGE = BROWSE_PAGE;
     try {
       if (level.type === "playlists") {
         const res = await this._client.getPlaylists();
@@ -969,18 +935,31 @@ class MusicFlowRemoteCard extends LitElement {
           kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
           coverArt: p.coverArt, songCount: p.songCount,
         }));
+        level.hasMore = false;
       } else if (level.type === "playlist") {
         const res = await this._client.getPlaylistSongs(level.id);
         level.items = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
+        level.hasMore = false;
       } else if (level.type === "albums") {
-        const res = await this._client.getAlbumList2({ type: "alphabeticalByName", size: 300 });
-        level.items = (res?.albumList2?.album || []).map((a) => ({
+        const res = await this._client.getAlbumList2({ type: "alphabeticalByName", size: PAGE, offset: level.offset });
+        const page = (res?.albumList2?.album || []).map((a) => ({
           kind: "album", id: String(a.id), name: a.name || "未知专辑",
           artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
         }));
+        level.items = append ? level.items.concat(page) : page;
+        level.offset += page.length;
+        level.hasMore = page.length >= PAGE;
+      } else if (level.type === "songs") {
+        // 全部歌曲:复用 search3 空查询(后端按标题排序并支持 songOffset/songCount 分页)
+        const res = await this._client.getSongs({ offset: level.offset, count: PAGE });
+        const page = (res?.searchResult3?.song || []).map((s) => this._toSongItem(s));
+        level.items = append ? level.items.concat(page) : page;
+        level.offset += page.length;
+        level.hasMore = page.length >= PAGE;
       } else if (level.type === "album") {
         const res = await this._client.getAlbum(level.id);
         level.items = (res?.album?.song || []).map((s) => this._toSongItem(s));
+        level.hasMore = false;
       } else if (level.type === "artists") {
         const res = await this._client.getArtists();
         const indexes = res?.artists?.index || [];
@@ -989,34 +968,63 @@ class MusicFlowRemoteCard extends LitElement {
           flat.push({ kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt });
         }
         level.items = flat;
+        level.hasMore = false;
       } else if (level.type === "artist") {
         const res = await this._client.getArtist(level.id);
         level.items = (res?.artist?.album || []).map((a) => ({
           kind: "album", id: String(a.id), name: a.name || "未知专辑",
           artist: a.artist || "", coverArt: a.coverArt,
         }));
+        level.hasMore = false;
       } else if (level.type === "genres") {
         const res = await this._client.getGenres();
         level.items = (res?.genres?.genre || []).map((g) => ({
           kind: "genre", id: g.value, name: g.value,
           songCount: g.songCount, albumCount: g.albumCount,
         }));
+        level.hasMore = false;
       } else if (level.type === "genre") {
-        const res = await this._client.getAlbumList2({ type: "byGenre", genre: level.id, size: 300 });
-        level.items = (res?.albumList2?.album || []).map((a) => ({
+        const res = await this._client.getAlbumList2({ type: "byGenre", genre: level.id, size: PAGE, offset: level.offset });
+        const page = (res?.albumList2?.album || []).map((a) => ({
           kind: "album", id: String(a.id), name: a.name || "未知专辑",
           artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
         }));
+        level.items = append ? level.items.concat(page) : page;
+        level.offset += page.length;
+        level.hasMore = page.length >= PAGE;
       } else if (level.type === "starred") {
         const res = await this._client.getStarred();
-        level.items = (res?.starred2?.song || []).map((s) => this._toSongItem(s));
+        level.items = (res?.starred2?.song || res?.starred?.song || []).map((s) => this._toSongItem(s));
+        level.hasMore = false;
       }
     } catch (e) {
       err("browser load failed", e);
-      level.items = [];
+      if (!append) level.items = [];
     }
     level.loading = false;
+    level.loadingMore = false;
     this.requestUpdate();
+  }
+
+  // 懒加载:serverPaged 类型向后端要下一页;其余类型只是增长渲染分片。
+  _browserLoadMore(level) {
+    if (!level) return;
+    if (level.serverPaged) {
+      if (level.loadingMore || !level.hasMore || level.loading) return;
+      this._browserLoad(level, { append: true });
+    } else {
+      if ((level.renderCount || 0) >= level.items.length) return;
+      level.renderCount = Math.min(level.items.length, (level.renderCount || 0) + BROWSE_PAGE);
+      this.requestUpdate();
+    }
+  }
+
+  _brScroll(e) {
+    const el = e.currentTarget;
+    if (el.scrollHeight - (el.scrollTop + el.clientHeight) < 60) {
+      const level = this._ui.browserStack[this._ui.browserStack.length - 1];
+      this._browserLoadMore(level);
+    }
   }
 
   _browserPush(level) {
@@ -1035,19 +1043,22 @@ class MusicFlowRemoteCard extends LitElement {
     const q = (level.query || "").trim();
     if (level.type === "albums") {
       if (!q) { this._browserLoad(level); return; }
-      this._client.search(q, { count: 100 }).then((res) => {
+      this._client.search(q, { albumCount: 100 }).then((res) => {
         level.items = (res?.searchResult3?.album || []).map((a) => ({
           kind: "album", id: String(a.id), name: a.name || "未知专辑",
           artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
         }));
+        // 搜索结果非服务端分页,重置为客户端分片渲染
+        level.serverPaged = false; level.hasMore = false; level.offset = 0; level.renderCount = BROWSE_PAGE;
         this.requestUpdate();
       }).catch((e) => err("browser album search failed", e));
     } else if (level.type === "artists") {
       if (!q) { this._browserLoad(level); return; }
-      this._client.search(q, { count: 100 }).then((res) => {
+      this._client.search(q, { artistCount: 100 }).then((res) => {
         level.items = (res?.searchResult3?.artist || []).map((a) => ({
           kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt,
         }));
+        level.serverPaged = false; level.hasMore = false; level.offset = 0; level.renderCount = BROWSE_PAGE;
         this.requestUpdate();
       }).catch((e) => err("browser artist search failed", e));
     } else {
@@ -1058,7 +1069,7 @@ class MusicFlowRemoteCard extends LitElement {
   _browserItemClick(item) {
     if (!item) return;
     if (item.kind === "cat") {
-      const map = { playlists: "playlists", albums: "albums", artists: "artists", genres: "genres", starred: "starred" };
+      const map = { playlists: "playlists", albums: "albums", songs: "songs", artists: "artists", genres: "genres", starred: "starred" };
       this._browserPush({ type: map[item.cat], items: [], query: "", loading: false });
     } else if (item.kind === "playlist") {
       this._browserPush({ type: "playlist", id: item.id, name: item.name, items: [], query: "", loading: false });
@@ -1137,6 +1148,7 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
           <button class="mini" title="播放(加入队列并播放)" @click=${() => this._browserPlaySong(it)}>▶</button>
           <button class="mini" title="加入队列" @click=${() => this._browserEnqueueSong(it)}>＋</button>
+          <button class="mini" title="加入歌单" @click=${() => this._openPlaylistPicker(it.songId)}>♥+</button>
         </div>`;
     }
     const sub = it.kind === "album" ? (it.artist || "")
@@ -1167,6 +1179,11 @@ class MusicFlowRemoteCard extends LitElement {
         ? items.filter((s) => (s.title || "").toLowerCase().includes(q))
         : items.filter((s) => (s.name || "").toLowerCase().includes(q));
     }
+    // 懒加载渲染:serverPaged 且未过滤时,items 已是服务端分页结果,全部渲染;
+    // 其余(含客户端过滤结果)按 renderCount 分片,滚动到底再增长。
+    const visible = (level.serverPaged && !q) ? items : items.slice(0, level.renderCount || items.length);
+    const showMore = (level.serverPaged && !q && level.hasMore) ||
+      (!level.serverPaged && (level.renderCount || 0) < items.length);
     const showSearch = ["playlists", "albums", "artists", "genres", "starred"].includes(level.type);
     return html`
       <div class="overlay" @click=${() => { this._ui.showBrowser = false; this.requestUpdate(); }}>
@@ -1189,16 +1206,17 @@ class MusicFlowRemoteCard extends LitElement {
               <button class="mini" @click=${this._browserSearch}>搜索</button>
             </div>
           ` : ""}
-          <div class="br-list">
+          <div class="br-list" @scroll=${this._brScroll}>
             ${level.loading ? html`<div class="empty">加载中…</div>` : ""}
             ${!level.loading && level.type === "root" ? html`
               <div class="cat-grid">
-                ${items.map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
+                ${visible.map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
               </div>
             ` : ""}
             ${!level.loading && level.type !== "root" ? html`
-              ${items.length === 0 ? html`<div class="empty">无内容</div>` : ""}
-              ${items.map((it) => this._renderBrowserItem(it))}
+              ${visible.length === 0 ? html`<div class="empty">无内容</div>` : ""}
+              ${visible.map((it) => this._renderBrowserItem(it))}
+              ${showMore ? html`<div class="br-more" @click=${() => this._browserLoadMore(level)}>${level.loadingMore ? "加载中…" : "加载更多"}</div>` : ""}
             ` : ""}
           </div>
         </div>
@@ -1355,6 +1373,9 @@ class MusicFlowRemoteCard extends LitElement {
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
       .br-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; min-height: 140px; }
+      .br-more { text-align: center; padding: 10px 0; color: rgba(255, 255, 255, 0.6); font-size: 13px;
+        cursor: pointer; border-radius: 8px; transition: background 0.15s, color 0.15s; }
+      .br-more:hover { background: rgba(255, 255, 255, 0.06); color: #f62c55; }
       .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0; }
       .cat { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.9);
         border-radius: 12px; padding: 20px 8px; font-size: 14px; cursor: pointer;
