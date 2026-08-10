@@ -33,6 +33,8 @@ const MF_ICONS = {
   volume2: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
   volumeX: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
+  queue: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  mediaLibrary: '<path d="M20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H8V4H20M12.5,15A2.5,2.5 0 0,0 15,12.5V7H18V5H14V10.5C13.58,10.19 13.07,10 12.5,10A2.5,2.5 0 0,0 10,12.5A2.5,2.5 0 0,0 12.5,15M4,6H2V20A2,2 0 0,0 4,22H18V20H4"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -72,7 +74,6 @@ class MusicFlowRemoteCard extends LitElement {
       lyrics: [],
       currentLyric: "",
       liked: false,
-      showLyrics: false,
       showQueue: false,
       showBrowser: false,
       browserStack: [],
@@ -817,8 +818,8 @@ class MusicFlowRemoteCard extends LitElement {
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
               : html`<div class="nocover">♪</div>`}</div>
             <div class="meta">
-              <div class="track">${song ? song.title : "未在播放"}</div>
-              <div class="artist">${song ? song.artist : "—"}</div>
+              <div class="track">${song ? (song.title + (song.artist ? " - " + song.artist : "")) : "未在播放"}</div>
+              <div class="artist">${u.currentLyric || ""}</div>
               <div class="progress-row">
                 <span class="t">${this._fmtTime(u.currentTime)}</span>
                 <input class="seek" type="range" min="0" max="100" step="0.1" value="${prog}"
@@ -830,23 +831,18 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <div class="controls">
+            <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
             ${u.showVolume ? this._renderVolumeInline() : html`
               <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
               <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
-              <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 24, true)}</button>
+              <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 22, true)}</button>
               <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
               <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
               <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
             `}
+            <button class="ctl ${u.showBrowser ? "active" : ""}" title="媒体库" @click=${this._openBrowser}>${this._icon("mediaLibrary", 20)}</button>
           </div>
 
-          <div class="actions">
-            <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
-            <button class="act ${u.showQueue ? "active" : ""}" @click=${() => { u.showQueue = !u.showQueue; u.showLyrics = false; u.showBrowser = false; this.requestUpdate(); }}>队列</button>
-            <button class="act ${u.showBrowser ? "active" : ""}" @click=${this._openBrowser}>媒体库</button>
-          </div>
-
-          ${u.showLyrics ? this._renderLyrics() : ""}
           ${u.showQueue ? this._renderQueue() : ""}
           ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
@@ -870,27 +866,7 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  _renderLyrics() {
-    const lines = this._ui.lyrics;
-    if (!lines.length) return html`<div class="panel"><div class="empty">无歌词</div></div>`;
-    const t = this._ui.currentTime;
-    let active = -1;
-    for (let i = 0; i < lines.length; i++) { if (lines[i].time <= t) active = i; else break; }
-    // 固定 3 行窗口:用 transform 把当前行滚到中间行(索引 1),实时跟随播放进度
-    const LH = 32, WIN = 3;
-    const maxOff = Math.max(0, lines.length - WIN);
-    const offset = Math.min(Math.max(active - 1, 0), maxOff);
-    const trackStyle = `transform: translateY(${-offset * LH}px);`;
-    return html`
-      <div class="panel lyrics">
-        <div class="lyr-win" style="height:${WIN * LH}px">
-          <div class="lyr-track" style="${trackStyle}">
-            ${lines.map((l, i) => html`<div class="lyr ${i === active ? "active" : ""}" style="height:${LH}px;line-height:${LH}px">${l.text || "…"}</div>`)}
-          </div>
-        </div>
-      </div>
-    `;
-  }
+  // 歌词当前行已常驻显示在卡片歌手行(this._ui.currentLyric),不再展开独立面板。
 
   _renderQueue() {
     const q = this._ui.queue || [];
@@ -925,7 +901,7 @@ class MusicFlowRemoteCard extends LitElement {
   _openBrowser() {
     const u = this._ui;
     u.showBrowser = true;
-    u.showLyrics = u.showQueue = false;
+    u.showQueue = false;
     u.browserStack = [{
       type: "root",
       items: [
@@ -1324,7 +1300,7 @@ class MusicFlowRemoteCard extends LitElement {
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .artist { font-size: 13px; color: rgba(255, 255, 255, 0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+      .artist { font-size: 13px; color: #ffd400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
       .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
@@ -1337,7 +1313,7 @@ class MusicFlowRemoteCard extends LitElement {
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
       .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
-      .controls { display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; }
+      .controls { display: flex; justify-content: center; align-items: center; gap: 14px; position: relative; }
       .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         width: 42px; height: 42px; padding: 0; border-radius: 50%;
@@ -1345,11 +1321,12 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl svg { display: block; }
       .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
-      .ctl.play { width: 52px; height: 52px; background: #f62c55; color: #fff;
+      .ctl.play { width: 44px; height: 44px; background: #f62c55; color: #fff;
         box-shadow: 0 0 8px rgba(246, 44, 85, 0.26); }
       .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); transform: scale(1.05); }
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
+      .ctl.active { color: #f62c55; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl.vol-open { background: transparent; color: rgba(255, 255, 255, 0.85); }
       /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
          触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
@@ -1366,21 +1343,11 @@ class MusicFlowRemoteCard extends LitElement {
         pointer-events: none; opacity: 0; transition: opacity 0.12s ease;
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
-      .actions { display: flex; gap: 8px; }
-      .act { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
-        border-radius: 10px; padding: 8px 4px; font-size: 12px; cursor: pointer;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .act:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
-      .act:active { transform: scale(0.96); }
-      .act.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
+      /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
       .panel { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 10px; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
       .empty { color: rgba(255, 255, 255, 0.45); font-size: 13px; padding: 10px 0; text-align: center; }
-      .lyrics { text-align: center; overflow: hidden; }
-      .lyr-win { position: relative; overflow: hidden; }
-      .lyr-track { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.3, 1); will-change: transform; }
-      .lyr { color: rgba(255, 255, 255, 0.45); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.25s; }
-      .lyr.active { color: #ffd400; font-weight: 600; }
+      /* 歌词展开面板已移除,当前行常驻显示在 .artist(this._ui.currentLyric) */
       .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
       .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar,
       .br-list::-webkit-scrollbar { width: 6px; }
