@@ -814,9 +814,9 @@ class MusicFlowRemoteCard extends LitElement {
           ${this._renderOutputs()}
 
           <div class="now">
-            <div class="cover">${song?.coverArt
+            <div class="cover" role="button" title="点击进入媒体库" @click=${this._openBrowser}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
-              : html`<div class="nocover">♪</div>`}</div>
+              : html`<div class="nocover">♪</div>`}<span class="cover-tip">进入媒体库</span></div>
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
               <div class="artist">${u.currentLyric || ""}</div>
@@ -833,7 +833,6 @@ class MusicFlowRemoteCard extends LitElement {
               <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
               <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
             `}
-            <button class="ctl ${u.showBrowser ? "active" : ""}" title="媒体库" @click=${this._openBrowser}>${this._icon("mediaLibrary", 20)}</button>
           </div>
 
           <div class="progress-row">
@@ -1293,11 +1292,19 @@ class MusicFlowRemoteCard extends LitElement {
       .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
       .out.off { opacity: 0.45; }
       .hint { color: rgba(255, 255, 255, 0.5); font-size: 12px; }
-      .now { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+      .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
       .cover { width: 84px; height: 84px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
         background: rgba(255, 255, 255, 0.06); display: flex; align-items: center; justify-content: center;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); }
-      .cover img { width: 100%; height: 100%; object-fit: cover; }
+      .cover { cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease; position: relative; }
+      .cover:hover { transform: scale(1.06); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 3px #f62c55; z-index: 2; }
+      .cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.18s ease; }
+      .cover:hover img { transform: scale(1.04); }
+      .cover-tip { position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
+        font-size: 11px; font-weight: 600; color: #fff; padding: 4px 0;
+        background: linear-gradient(to top, rgba(246, 44, 85, 0.92), rgba(246, 44, 85, 0));
+        opacity: 0; transition: opacity 0.18s ease; pointer-events: none; }
+      .cover:hover .cover-tip { opacity: 1; }
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1315,7 +1322,7 @@ class MusicFlowRemoteCard extends LitElement {
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
       .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
-      .controls { display: flex; justify-content: center; align-items: center; gap: 14px; position: relative; }
+      .controls { display: flex; justify-content: center; align-items: center; gap: 23px; position: relative; }
       .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         width: 42px; height: 42px; padding: 0; border-radius: 50%;
@@ -1323,10 +1330,9 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl svg { display: block; }
       .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
-      .ctl.play { width: 44px; height: 44px; background: #f62c55; color: #fff;
-        box-shadow: 0 0 8px rgba(246, 44, 85, 0.26); }
-      .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); transform: scale(1.05); }
-      .ctl.play:active { transform: scale(0.94); }
+      .ctl.play { width: 42px; height: 42px; background: transparent; color: rgba(255, 255, 255, 0.85); }
+      .ctl.play:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .ctl.play:active { transform: scale(0.92); }
       .ctl.like.on { color: #f62c55; }
       .ctl.active { color: #f62c55; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl.vol-open { background: transparent; color: rgba(255, 255, 255, 0.85); }
