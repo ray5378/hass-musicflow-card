@@ -16,6 +16,8 @@ const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", sh
 // 其余类型一次取回后本地切片。分页控件参考主项目 PagePagination(el-pagination)。
 const PAGE_SIZE = 8;
 const SERVER_PAGED = new Set(["songs", "albums", "artists", "genres"]);
+// 我喜欢的 / 专辑内歌曲 / 歌单内歌曲:走 Subsonic 端点 offset/size 真分页(几千首也只拉当前页)
+const PAGED_SUBSONIC = new Set(["starred", "album", "playlist"]);
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -164,8 +166,7 @@ class MusicFlowRemoteCard extends LitElement {
     // 后端实时发现 DLNA 设备上线/下线 -> 刷新设备列表(peer_registered/available
     // 事件通常也会到,这里兜底确保卡片立刻显示刚上线的设备)。
     c.on("device_list_changed", () => this._refreshPeers());
-    // 代理模式下封面是异步取的 blob URL:取到后重渲染一次
-    c.on("cover_ready", () => this.requestUpdate());
+    // 封面统一走 <img src> URL + 视口懒加载,浏览器按 URL 复用缓存,无需重渲染钩子
   }
 
   // ============ Peer / output management ============
@@ -716,18 +717,11 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 媒体库列表封面:标题先出,封面视口懒加载。
-  // - 无 coverArt:占位 ♪
-  // - 直连模式:直接给带 token 的 URL(浏览器原生 loading=lazy)
-  // - 代理模式:已缓存则直接显示;否则渲染带 data-cover-id 的占位 <img>,
-  //   由 IntersectionObserver 进入视口后请求并直接写 src(不触发整卡重渲染)。
+  // 两种传输模式都返回可直接用于 <img src> 的 URL(直连带 token、代理带 ?token=);
+  // 后端对该响应加了 Cache-Control/ETag,浏览器按 URL 复用,外网翻页/刷新不再重复下载。
+  // 这里先渲染带 data-cover-id 的占位 <img>,由 IntersectionObserver 进入视口后写 src。
   _coverImgTag(coverArt) {
     if (!coverArt) return html`<span class="bnocover">♪</span>`;
-    if (this._client?.mode !== "proxy") {
-      const url = this._client ? this._client.coverUrl(coverArt) : null;
-      return url ? html`<img src="${url}" alt="" loading="lazy" />` : html`<span class="bnocover">♪</span>`;
-    }
-    const cached = this._client.peekCover(coverArt);
-    if (cached) return html`<img src="${cached}" alt="" />`;
     return html`<img class="bcover-lazy" data-cover-id="${coverArt}" alt="" loading="lazy" />`;
   }
 
@@ -735,9 +729,8 @@ class MusicFlowRemoteCard extends LitElement {
     const id = img.getAttribute("data-cover-id");
     if (!id || img.dataset.loaded) return;
     img.dataset.loaded = "1";
-    this._client?.requestCover(id, (url) => {
-      if (url && img.isConnected) img.src = url;
-    });
+    const url = this._client?.coverUrl(id);
+    if (url && img.isConnected) img.src = url;
   }
 
   _ensureCoverObserver(root) {
@@ -974,6 +967,36 @@ class MusicFlowRemoteCard extends LitElement {
       level.loading = false; this.requestUpdate();
       return;
     }
+    // 服务端分页(Subsonic 端点):我喜欢的 / 专辑内歌曲 / 歌单内歌曲
+    else if (PAGED_SUBSONIC.has(level.type)) {
+      level.loading = true; level.page = page; this.requestUpdate();
+      try {
+        const offset = (page - 1) * PAGE_SIZE;
+        let res, items = [], total = 0;
+        if (level.type === "starred") {
+          res = await this._client.getStarred({ offset, size: PAGE_SIZE });
+          items = res?.starred2?.song || [];
+          total = res?.starred2?.songTotal || items.length;
+        } else if (level.type === "album") {
+          res = await this._client.getAlbum(level.id, { offset, size: PAGE_SIZE });
+          items = res?.album?.song || [];
+          total = res?.album?.songTotal || items.length;
+        } else if (level.type === "playlist") {
+          res = await this._client.getPlaylistSongs(level.id, { offset, size: PAGE_SIZE });
+          items = res?.playlist?.entry || [];
+          total = res?.playlist?.songTotal || items.length;
+        }
+        level.items = items.map((s) => this._toSongItem(s));
+        level.total = total;
+      } catch (e) {
+        err("browser subsonic-page load failed", e);
+        if (page === 1) level.items = [];
+        level.total = 0;
+      }
+      level.totalPages = Math.max(1, Math.ceil(level.total / PAGE_SIZE));
+      level.loading = false; this.requestUpdate();
+      return;
+    }
     // 客户端分页:首次(reset)或尚无缓存时拉全部
     if (reset || !level.allItems) {
       level.loading = true; level.page = 1; this.requestUpdate();
@@ -984,7 +1007,7 @@ class MusicFlowRemoteCard extends LitElement {
     level.page = page;
     const q = (level.query || "").trim().toLowerCase();
     let view = level.allItems || [];
-    if (q && (level.type === "playlists" || level.type === "starred")) {
+    if (q && level.type === "playlists") {
       view = view.filter((it) => ((it.title || it.name || "") || "").toLowerCase().includes(q));
     }
     level.viewItems = view;
@@ -1010,21 +1033,12 @@ class MusicFlowRemoteCard extends LitElement {
         kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
         coverArt: p.coverArt, songCount: p.songCount,
       }));
-    } else if (level.type === "playlist") {
-      const res = await this._client.getPlaylistSongs(level.id);
-      return (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
-    } else if (level.type === "album") {
-      const res = await this._client.getAlbum(level.id);
-      return (res?.album?.song || []).map((s) => this._toSongItem(s));
     } else if (level.type === "artist") {
       const res = await this._client.getArtist(level.id);
       return (res?.artist?.album || []).map((a) => ({
         kind: "album", id: String(a.id), name: a.name || "未知专辑",
         artist: a.artist || "", coverArt: a.coverArt,
       }));
-    } else if (level.type === "starred") {
-      const res = await this._client.getStarred();
-      return (res?.starred2?.song || res?.starred?.song || []).map((s) => this._toSongItem(s));
     }
     return [];
   }

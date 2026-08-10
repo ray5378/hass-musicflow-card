@@ -43,9 +43,6 @@ export class BackendClient {
     this.proxySupported = false;
     this.ws = null;
     this._unsub = null; // HA WS subscription unsub (proxy mode)
-    this._coverCache = new Map();
-    this._coverInFlight = new Set(); // 正在飞行中的封面 id,防止重复请求
-    this._coverWaiters = new Map(); // id -> [onReady 回调],飞行中并入请求
     this._listeners = new Map();
     this._connected = false;
     this._pendingInit = null;
@@ -459,7 +456,12 @@ export class BackendClient {
     const qs = songIdsToAdd.map((id) => `songIdToAdd=${encodeURIComponent(id)}`).join("&");
     return this.rest(`/updatePlaylist?playlistId=${encodeURIComponent(playlistId)}${qs ? "&" + qs : ""}`);
   }
-  async getStarred() { return this.rest("/getStarred2"); }
+  async getStarred({ offset = 0, size = 0 } = {}) {
+    const qs = [];
+    if (offset) qs.push(`offset=${offset}`);
+    if (size) qs.push(`size=${size}`);
+    return this.rest(`/getStarred2${qs.length ? "?" + qs.join("&") : ""}`);
+  }
 
   // ============ Media library browse (Subsonic) ============
   async getAlbumList2({ type = "alphabeticalByName", genre = "", size = 300, offset = 0 } = {}) {
@@ -469,9 +471,19 @@ export class BackendClient {
   }
   async getArtists() { return this.rest("/getArtists"); }
   async getArtist(id) { return this.rest(`/getArtist?id=${encodeURIComponent(id)}`); }
-  async getAlbum(id) { return this.rest(`/getAlbum?id=${encodeURIComponent(id)}`); }
+  async getAlbum(id, { offset = 0, size = 0 } = {}) {
+    const qs = [`id=${encodeURIComponent(id)}`];
+    if (offset) qs.push(`offset=${offset}`);
+    if (size) qs.push(`size=${size}`);
+    return this.rest(`/getAlbum?${qs.join("&")}`);
+  }
   async getGenres() { return this.rest("/getGenres"); }
-  async getPlaylistSongs(id) { return this.rest(`/getPlaylist?id=${encodeURIComponent(id)}`); }
+  async getPlaylistSongs(id, { offset = 0, size = 0 } = {}) {
+    const qs = [`id=${encodeURIComponent(id)}`];
+    if (offset) qs.push(`offset=${offset}`);
+    if (size) qs.push(`size=${size}`);
+    return this.rest(`/getPlaylist?${qs.join("&")}`);
+  }
 
   // ============ MusicFlow v1 paginated browse endpoints ============
   // 与 Web 前端 Music/Albums/Artists/Genres 页面共用 /rest/api/v1/* 端点,
@@ -498,66 +510,18 @@ export class BackendClient {
   }
 
   // ============ Media URLs ============
+  // 封面统一返回可直接用于 <img src> 的 URL:
+  // - 直连:带 token 的后端 /getCoverArt 直链(浏览器原生缓存 + 懒加载)。
+  // - 代理:HA 同源代理直链 + ?token=,后端对该响应加了 Cache-Control/ETag,
+  //   浏览器按 URL 复用,外网翻页/刷新不再重复下载同一封面。
+  // 两种方式都返回字符串(不会返回 null),懒加载交给卡片的 IntersectionObserver。
   coverUrl(coverId) {
     if (!coverId) return null;
+    const path = `/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`;
     if (this.mode === "proxy") {
-      // 经 HA 拉取并转成 blob URL(浏览器 <img> 无法带 HA 认证头)。
-      // 首次返回 null 占位,取到后通过 cover_ready 事件触发重渲染(仅玩家封面用此路径)。
-      if (this._coverCache.has(coverId)) return this._coverCache.get(coverId);
-      this._fetchCover(coverId);
-      return null;
+      return `/api/musicflow/rest${path}?token=${encodeURIComponent(this.apiKey)}`;
     }
-    return this._withToken(`/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`);
-  }
-
-  // 视口懒加载专用:返回已缓存的 blob URL(可能为 null)。
-  // 未缓存则异步拉取,完成后经 onReady(url) 直接写入 <img>.src,避免整卡重渲染;
-  // 若已有相同 id 在飞行中,则把 onReady 并入,不重复发请求。
-  requestCover(coverId, onReady) {
-    if (!coverId) return null;
-    const cached = this._coverCache.get(coverId);
-    if (cached) { if (onReady) onReady(cached); return cached; }
-    if (this.mode === "proxy") { this._fetchCover(coverId, onReady); return null; }
-    // 直连模式:直接返回带 token 的 URL,浏览器原生懒加载即可。
-    const url = this._withToken(`/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`);
-    if (onReady) onReady(url);
-    return url;
-  }
-
-  // 仅读取已缓存的封面 URL(不触发请求),供渲染时判断占位。
-  peekCover(coverId) {
-    return this._coverCache.get(coverId) || null;
-  }
-
-  async _fetchCover(coverId, onReady) {
-    // 已在飞行中:并入 onReady,复用同一次请求结果。
-    if (this._coverInFlight.has(coverId)) {
-      const cbs = this._coverWaiters.get(coverId) || [];
-      if (onReady) cbs.push(onReady);
-      this._coverWaiters.set(coverId, cbs);
-      return;
-    }
-    this._coverInFlight.add(coverId);
-    const hasCallback = !!onReady;
-    try {
-      const res = await this.hass.fetchWithAuth(
-        `/api/musicflow/rest/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`
-      );
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      this._coverCache.set(coverId, url);
-      if (onReady) onReady(url);
-      (this._coverWaiters.get(coverId) || []).forEach((cb) => cb(url));
-    } catch (e) {
-      error("proxy cover fetch failed", coverId, e);
-    } finally {
-      this._coverInFlight.delete(coverId);
-      this._coverWaiters.delete(coverId);
-    }
-    // 仅当本次没有任何 onReady(纯 coverUrl/玩家封面路径)才触发整卡重渲染;
-    // 视口懒加载走 onReady 直接写 img.src,无需重渲染。
-    if (!hasCallback) this._emit("cover_ready");
+    return this._withToken(path);
   }
 }
 
