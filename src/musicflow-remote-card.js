@@ -25,6 +25,7 @@ const MF_ICONS = {
   heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
   volume2: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
   volumeX: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -458,15 +459,68 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  // 音量弹窗:fixed 定位锚定在喇叭按钮正上方(ha-card overflow:hidden 会裁 absolute 弹窗)
-  _toggleVolumePop(e) {
-    const u = this._ui;
-    if (!u.showVolume && e?.currentTarget?.getBoundingClientRect) {
-      const r = e.currentTarget.getBoundingClientRect();
-      u.volAnchor = { x: r.left + r.width / 2, top: r.top };
-    }
-    u.showVolume = !u.showVolume;
+  // 音量:点击把整个控制区切换为内联滑动条(反之亦然)
+  _toggleVolumePop() {
+    this._ui.showVolume = !this._ui.showVolume;
     this.requestUpdate();
+  }
+
+  // 音量内联面板:用水平滑动条替换整个播放控件区(去掉弹窗)。
+  // 触屏优化:采用「相对拖动」——按下只记录起点、不跳值;移动时按位移增量调音量,
+  // 松开才提交。避免触屏一点就直接跳到 100。
+  _renderVolumeInline() {
+    const u = this._ui;
+    const vpct = Math.round(u.volume * 100);
+    return html`
+      <div class="vol-inline">
+        <button class="ctl" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
+        <div class="vol-slider" @pointerdown=${this._volPointerDown} @pointermove=${this._volPointerMove} @pointerup=${this._volPointerUp} @pointercancel=${this._volPointerUp}>
+          <div class="vol-track"></div>
+          <div class="vol-fill" style="width:${vpct}%"></div>
+          <div class="vol-knob" style="left:${vpct}%"></div>
+        </div>
+        <button class="ctl" title="完成" @click=${() => { u.showVolume = false; this.requestUpdate(); }}>${this._icon("check", 20)}</button>
+      </div>`;
+  }
+
+  _volPointerDown(e) {
+    const el = e.currentTarget;
+    if (el.setPointerCapture && e.pointerId != null) { try { el.setPointerCapture(e.pointerId); } catch {} }
+    const rect = el.getBoundingClientRect();
+    this._volDrag = { startX: e.clientX, startVal: this._ui.volume, width: Math.max(1, rect.width) };
+    this._ui.volDragging = true;
+  }
+
+  _volPointerMove(e) {
+    if (!this._volDrag) return;
+    const d = this._volDrag;
+    let pct = d.startVal * 100 + ((e.clientX - d.startX) / d.width) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    const v = pct / 100;
+    this._ui.volume = v;
+    this._commitVolume(v);
+    this.requestUpdate();
+  }
+
+  _volPointerUp() {
+    if (!this._volDrag) return;
+    this._volDrag = null;
+    this._ui.volDragging = false;
+    this._commitVolume(this._ui.volume, true);
+    this.requestUpdate();
+  }
+
+  _commitVolume(v, immediate = false) {
+    const pid = this._ui.currentPeerId;
+    if (!pid) return;
+    if (this._volumeDebounce) clearTimeout(this._volumeDebounce);
+    if (immediate) {
+      this._client.setVolume(pid, v).catch((e) => err("setVolume failed", e));
+      return;
+    }
+    this._volumeDebounce = setTimeout(() => {
+      this._client.setVolume(pid, v).catch((e) => err("setVolume failed", e));
+    }, 120);
   }
 
   _seek(e) {
@@ -684,9 +738,6 @@ class MusicFlowRemoteCard extends LitElement {
     const u = this._ui;
     const song = u.song;
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
-    const vpct = Math.round(u.volume * 100);
-    const va = u.volAnchor || { x: 0, top: 0 };
-    const volpopStyle = `left:${va.x}px; bottom:${window.innerHeight - va.top + 10}px;`;
 
     return html`
       <ha-card>
@@ -711,24 +762,15 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <div class="controls">
-            <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
-            <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
-            <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 24, true)}</button>
-            <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
-            <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
-            <button class="ctl ${u.showVolume ? "vol-open" : ""}" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
-
-            ${u.showVolume ? html`
-              <div class="volpop" style="${volpopStyle}" @click=${(e) => e.stopPropagation()}>
-                <span class="vpct">${vpct}%</span>
-                <input class="vol-v" type="range" orient="vertical" min="0" max="100" value="${vpct}"
-                  style="background: linear-gradient(to top, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%) center / 6px 100% no-repeat"
-                  @input=${this._setVolume} />
-                <button class="vbtn ${u.muted ? "muted" : ""}" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 18)}</button>
-              </div>
-            ` : ""}
+            ${u.showVolume ? this._renderVolumeInline() : html`
+              <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
+              <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
+              <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 24, true)}</button>
+              <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
+              <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
+              <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
+            `}
           </div>
-          ${u.showVolume ? html`<div class="volpop-backdrop" @click=${() => { u.showVolume = false; this.requestUpdate(); }}></div>` : ""}
 
           <div class="actions">
             <button class="act ${u.showLyrics ? "active" : ""}" @click=${() => { u.showLyrics = !u.showLyrics; u.showQueue = false; u.showSearch = false; u.showBrowser = false; this.requestUpdate(); }}>歌词</button>
@@ -770,9 +812,18 @@ class MusicFlowRemoteCard extends LitElement {
     const t = this._ui.currentTime;
     let active = -1;
     for (let i = 0; i < lines.length; i++) { if (lines[i].time <= t) active = i; else break; }
+    // 固定 3 行窗口:用 transform 把当前行滚到中间行(索引 1),实时跟随播放进度
+    const LH = 32, WIN = 3;
+    const maxOff = Math.max(0, lines.length - WIN);
+    const offset = Math.min(Math.max(active - 1, 0), maxOff);
+    const trackStyle = `transform: translateY(${-offset * LH}px);`;
     return html`
       <div class="panel lyrics">
-        ${lines.map((l, i) => html`<div class="lyr ${i === active ? "active" : ""}">${l.text || "…"}</div>`)}
+        <div class="lyr-win" style="height:${WIN * LH}px">
+          <div class="lyr-track" style="${trackStyle}">
+            ${lines.map((l, i) => html`<div class="lyr ${i === active ? "active" : ""}" style="height:${LH}px;line-height:${LH}px">${l.text || "…"}</div>`)}
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1082,7 +1133,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="bt">${it.name}</div>
           <div class="ba">${sub}</div>
         </div>
-        <button class="mini" title="进入查看" @click=${() => this._browserItemClick(it)}>›</button>
+        <button class="bplay" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>${this._icon("play", 18, true)}</button>
       </div>`;
   }
 
@@ -1184,32 +1235,15 @@ class MusicFlowRemoteCard extends LitElement {
       .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
-      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 18px; height: 110px; border-radius: 3px;
-        background: transparent; }
-      .seek, .vol-v { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; }
-      .seek { background: rgba(255, 255, 255, 0.18); }
+      .seek { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; background: rgba(255, 255, 255, 0.18); }
       .seek::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
         width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid #f62c55;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease; }
       .seek:hover::-webkit-slider-thumb { transform: scale(1.2); }
       .seek::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
-      .vol-v::-moz-range-track { width: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
-      .vol-v::-moz-range-progress { width: 6px; border-radius: 3px; background: #f62c55; }
       .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
-      /* 音量滑块:主项目 Windows10 风格 —— 一道横线被轨道正中穿过。
-         输入框 18px 宽、轨道居中画 6px(内联背景),thumb 16px 宽即被轨道穿中;
-         thumb 做成 16x14 大抓取热区(可按住拖动),视觉横线 14x4 居中绘制。 */
-      .vol-v::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
-        width: 16px; height: 14px; border: none; border-radius: 2px; box-shadow: none; cursor: pointer;
-        background: rgba(255, 255, 255, 0.85) center / 14px 4px no-repeat; }
-      .vol-v:hover::-webkit-slider-thumb, .vol-v:active::-webkit-slider-thumb {
-        background: #fff center / 14px 4px no-repeat; transform: none;
-        filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.9)); }
-      .vol-v::-moz-range-thumb { width: 16px; height: 14px; border: none; border-radius: 2px;
-        background: rgba(255, 255, 255, 0.85) center / 14px 4px no-repeat; }
-      .vol-v:hover::-moz-range-thumb { background: #fff center / 14px 4px no-repeat; }
       .controls { display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; }
       .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
@@ -1218,25 +1252,20 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl svg { display: block; }
       .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
-      .ctl.play { width: 54px; height: 54px; background: #f62c55; color: #fff;
-        box-shadow: 0 0 14px rgba(246, 44, 85, 0.32); }
-      .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); transform: scale(1.06); }
+      .ctl.play { width: 52px; height: 52px; background: #f62c55; color: #fff;
+        box-shadow: 0 0 8px rgba(246, 44, 85, 0.26); }
+      .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); transform: scale(1.05); }
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
       .ctl.vol-open { background: rgba(246, 44, 85, 0.16); color: #f62c55; }
-      .volpop-backdrop { position: fixed; inset: 0; z-index: 999; background: transparent; }
-      .volpop { position: fixed; z-index: 1000; transform: translateX(-50%);
-        display: flex; flex-direction: column; align-items: center; gap: 10px;
-        background: #1f1c2a; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px;
-        padding: 10px 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
-      .vbtn { border: none; background: transparent; color: rgba(255, 255, 255, 0.75); cursor: pointer;
-        width: 34px; height: 34px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-        transition: background 0.2s, box-shadow 0.2s, transform 0.12s, color 0.2s; }
-      .vbtn:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
-      .vbtn:active { transform: scale(0.92); }
-      .vbtn.muted { color: #f62c55; }
-      .vbtn svg { display: block; }
-      .vpct { font-size: 11px; color: rgba(255, 255, 255, 0.5); font-variant-numeric: tabular-nums; }
+      /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
+         触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
+      .vol-inline { display: flex; align-items: center; gap: 10px; width: 100%; }
+      .vol-slider { position: relative; flex: 1; height: 30px; cursor: pointer; touch-action: none; display: flex; align-items: center; }
+      .vol-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
+      .vol-fill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: #f62c55; }
+      .vol-knob { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #f62c55; transform: translate(-50%, -50%); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
+      .vol-slider:active .vol-knob { transform: translate(-50%, -50%) scale(1.15); }
       .actions { display: flex; gap: 8px; }
       .act { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85);
         border-radius: 10px; padding: 8px 4px; font-size: 12px; cursor: pointer;
@@ -1247,16 +1276,18 @@ class MusicFlowRemoteCard extends LitElement {
       .panel { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 10px; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
       .empty { color: rgba(255, 255, 255, 0.45); font-size: 13px; padding: 10px 0; text-align: center; }
-      .lyrics { max-height: 220px; overflow-y: auto; text-align: center; }
-      .lyr { padding: 4px 0; color: rgba(255, 255, 255, 0.5); font-size: 13px; transition: color 0.2s; }
-      .lyr.active { color: #f62c55; font-weight: 600; }
+      .lyrics { text-align: center; overflow: hidden; }
+      .lyr-win { position: relative; overflow: hidden; }
+      .lyr-track { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.3, 1); will-change: transform; }
+      .lyr { color: rgba(255, 255, 255, 0.45); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.25s; }
+      .lyr.active { color: #ffd400; font-weight: 600; }
       .qlist, .slist, .plist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
       .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar, .plist::-webkit-scrollbar,
-      .br-list::-webkit-scrollbar, .lyrics::-webkit-scrollbar { width: 6px; }
+      .br-list::-webkit-scrollbar { width: 6px; }
       .qlist::-webkit-scrollbar-thumb, .slist::-webkit-scrollbar-thumb, .plist::-webkit-scrollbar-thumb,
-      .br-list::-webkit-scrollbar-thumb, .lyrics::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+      .br-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
       .qlist::-webkit-scrollbar-thumb:hover, .slist::-webkit-scrollbar-thumb:hover, .plist::-webkit-scrollbar-thumb:hover,
-      .br-list::-webkit-scrollbar-thumb:hover, .lyrics::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+      .br-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
       .qitem, .sitem { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; transition: background 0.15s; }
       .qitem:hover, .sitem:hover { background: rgba(255, 255, 255, 0.06); }
       .qitem.cur { background: rgba(246, 44, 85, 0.16); }
@@ -1267,6 +1298,13 @@ class MusicFlowRemoteCard extends LitElement {
         border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer;
         transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
       .mini:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      .bplay { border: none; background: #f62c55; color: #fff; cursor: pointer;
+        width: 38px; height: 38px; padding: 0; border-radius: 50%; flex: 0 0 auto;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
+      .bplay:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); }
+      .bplay:active { transform: scale(0.92); }
+      .bplay svg { display: block; }
       .mini:active { transform: scale(0.94); }
       .search-input { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px;
         padding: 7px 10px; background: rgba(0, 0, 0, 0.3); color: #fff; outline: none;
