@@ -19,9 +19,12 @@ const SERVER_PAGED = new Set(["songs", "albums", "artists", "genres"]);
 // 我喜欢的 / 专辑内歌曲 / 歌单内歌曲:走 Subsonic 端点 offset/size 真分页(几千首也只拉当前页)
 const PAGED_SUBSONIC = new Set(["starred", "album", "playlist"]);
 
-// 歌词三行滚动:单行高度(px)。必须与 CSS .lyric3-line 的 height/line-height 一致,
-// 因为轨道位移是按「行数 x 行高」算的。视口高 = 3 x 该值。
+// 歌词滚动:单行高度(px)。必须与 CSS .lyricbox-line 的 height/line-height 一致,
+// 因为轨道位移是按「行数 x 行高」算的。视口高 = LYRIC_VIEW_LINES x 该值(见 CSS .lyricbox)。
 const LYRIC_LINE_H = 20;
+// 视口显示行数,以及「当前行」落在第几槽(0 基)。当前 = 4 行视口、当前行固定在第 2 行。
+const LYRIC_VIEW_LINES = 4;
+const LYRIC_CUR_SLOT = 1;
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -477,28 +480,45 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  // 音量:点击把整个控制区切换为内联滑动条(反之亦然)
-  _toggleVolumePop() {
+  // 音量:点击展开覆盖下半卡的音量遮罩层。
+  // 必须 stopPropagation,否则事件冒泡到 .wrap 的「点外部关闭」会立刻把刚打开的面板关掉。
+  _toggleVolumePop(e) {
+    e?.stopPropagation?.();
     this._ui.showVolume = !this._ui.showVolume;
     this.requestUpdate();
   }
 
-  // 音量内联面板:用水平滑动条替换整个播放控件区(去掉弹窗)。
-  // 触屏优化:采用「相对拖动」——按下只记录起点、不跳值;移动时按位移增量调音量,
-  // 松开才提交。避免触屏一点就直接跳到 100。
-  _renderVolumeInline() {
+  // 点击音量控件本体以外的任意位置 = 关闭并保存(音量拖动时已实时下发,无需确认按钮)
+  _onWrapClick(e) {
+    if (!this._ui.showVolume) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    for (const n of path) {
+      if (n?.classList?.contains?.("vol-row")) return; // 点在静音键/音量条上不关闭
+    }
+    this._ui.showVolume = false;
+    this.requestUpdate();
+  }
+
+  // 音量遮罩面板:从控件行顶部一直盖到卡片底部(控件行 + 进度条 + 队列面板全部遮住),
+  // 上半部分(播放器名/歌名/歌词/封面)保持可见可点(点一下即关闭)。
+  // 布局对齐:静音键 42px 顶替进度条左侧时间标签的位置,右侧留 42px 空位,
+  // 使音量条与下方 seek 严格等长、上下重合。
+  // 触屏优化:采用「相对拖动」——按下只记录起点、不跳值;移动时按位移增量调音量。
+  _renderVolumeOverlay() {
     const u = this._ui;
     const vpct = Math.round(u.volume * 100);
     return html`
-      <div class="vol-inline">
-        <button class="ctl" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
-        <div class="vol-slider" @pointerdown=${this._volPointerDown} @pointermove=${this._volPointerMove} @pointerup=${this._volPointerUp} @pointercancel=${this._volPointerUp}>
-          <div class="vol-track"></div>
-          <div class="vol-fill" style="width:${vpct}%"></div>
-          <div class="vol-knob" style="left:${vpct}%"></div>
-          <span class="vol-value" style="left:${vpct}%">${vpct}%</span>
+      <div class="vol-overlay">
+        <div class="vol-row" @click=${(e) => e.stopPropagation()}>
+          <button class="ctl" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
+          <div class="vol-slider" @pointerdown=${this._volPointerDown} @pointermove=${this._volPointerMove} @pointerup=${this._volPointerUp} @pointercancel=${this._volPointerUp}>
+            <div class="vol-track"></div>
+            <div class="vol-fill" style="width:${vpct}%"></div>
+            <div class="vol-knob" style="left:${vpct}%"></div>
+            <span class="vol-value" style="left:${vpct}%">${vpct}%</span>
+          </div>
+          <span class="vol-gap"></span>
         </div>
-        <button class="ctl" title="完成" @click=${() => { u.showVolume = false; this.requestUpdate(); }}>${this._icon("check", 20)}</button>
       </div>`;
   }
 
@@ -861,40 +881,43 @@ class MusicFlowRemoteCard extends LitElement {
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"}">
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"}" @click=${this._onWrapClick}>
           ${this._renderOutputs()}
 
           <div class="now">
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
-              ${this._renderLyric3()}
+              ${this._renderLyricBox()}
             </div>
             <div class="cover" role="button" @click=${this._openBrowser}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
               : html`<div class="nocover">♪</div>`}</div>
           </div>
 
-          <div class="controls">
-            <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
-            ${u.showVolume ? this._renderVolumeInline() : html`
+          <!-- 下半区(控件行 + 进度条 + 队列)整体作为音量遮罩的定位容器 -->
+          <div class="lower">
+            <div class="controls">
+              <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
               <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
               <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
               <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 22, true)}</button>
               <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
               <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
               <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
-            `}
+            </div>
+
+            <div class="progress-row">
+              <span class="t">${this._fmtTime(u.currentTime)}</span>
+              <input class="seek" type="range" min="0" max="100" step="0.1" value="${prog}"
+                style="background: linear-gradient(90deg, #f62c55 ${prog}%, var(--seek-bg) ${prog}%)"
+                @input=${this._seek} />
+              <span class="t">${this._fmtTime(u.duration)}</span>
+            </div>
+
+            ${u.showQueue ? this._renderQueue() : ""}
+            ${u.showVolume ? this._renderVolumeOverlay() : ""}
           </div>
 
-          <div class="progress-row">
-            <span class="t">${this._fmtTime(u.currentTime)}</span>
-            <input class="seek" type="range" min="0" max="100" step="0.1" value="${prog}"
-              style="background: linear-gradient(90deg, #f62c55 ${prog}%, var(--seek-bg) ${prog}%)"
-              @input=${this._seek} />
-            <span class="t">${this._fmtTime(u.duration)}</span>
-          </div>
-
-          ${u.showQueue ? this._renderQueue() : ""}
           ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
       </ha-card>
@@ -917,18 +940,18 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  // 歌词三行滚动:视口固定 3 行高,整条歌词轨道按当前行整体上移,
-  // 让当前行始终停在中间那一行(上一行在上、下一行在下),不再展开独立面板。
-  _renderLyric3() {
+  // 歌词滚动:视口固定 LYRIC_VIEW_LINES 行高,整条歌词轨道按当前行整体上移,
+  // 让当前行始终停在第 LYRIC_CUR_SLOT 槽(即第二行),上方 1 行已唱、下方 2 行待唱。
+  _renderLyricBox() {
     const lines = this._ui.lyrics || [];
-    if (!lines.length) return html`<div class="lyric3"></div>`;
+    if (!lines.length) return html`<div class="lyricbox"></div>`;
     const idx = this._ui.lyricIndex;
-    // 当前行居中 => 轨道上移 (idx-1) 行高;idx<1 时为负,轨道下沉、上方留空行。
-    const shift = (idx - 1) * LYRIC_LINE_H;
+    // 当前行落到第二槽 => 轨道上移 (idx - LYRIC_CUR_SLOT) 行高;idx 更小时为负,轨道下沉、上方留空行。
+    const shift = (idx - LYRIC_CUR_SLOT) * LYRIC_LINE_H;
     return html`
-      <div class="lyric3">
-        <div class="lyric3-track" style="transform: translateY(${-shift}px)">
-          ${lines.map((l, i) => html`<div class="lyric3-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
+      <div class="lyricbox">
+        <div class="lyricbox-track" style="transform: translateY(${-shift}px)">
+          ${lines.map((l, i) => html`<div class="lyricbox-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
         </div>
       </div>`;
   }
@@ -965,6 +988,8 @@ class MusicFlowRemoteCard extends LitElement {
   // ============ Media library browser ============
   _openBrowser() {
     const u = this._ui;
+    // 音量面板打开时,点封面只表示「点外部退出」,不顺带进媒体库(需再点一次)。
+    if (u.showVolume) { u.showVolume = false; this.requestUpdate(); return; }
     u.showBrowser = true;
     u.showQueue = false;
     u.browserStack = [{
@@ -1389,18 +1414,19 @@ class MusicFlowRemoteCard extends LitElement {
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      /* 歌词三行滚动:视口固定 3 行,当前行恒在中间;上下边缘渐隐做出滚动纵深。
-         .lyric3-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致。 */
-      .lyric3 { height: 60px; overflow: hidden; margin-top: 2px; position: relative;
-        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 28%, #000 72%, transparent 100%);
-        mask-image: linear-gradient(180deg, transparent 0%, #000 28%, #000 72%, transparent 100%); }
-      .lyric3-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
-      .lyric3-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.6;
+      /* 歌词滚动:视口固定 4 行(4 x 20px = 80px),当前行恒在第二行;上下边缘渐隐做出滚动纵深。
+         .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致,
+         .lyricbox 的 height 必须等于 LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
+      .lyricbox { height: 80px; overflow: hidden; margin-top: 2px; position: relative;
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%); }
+      .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
+      .lyricbox-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.55;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         transition: color 0.3s ease, opacity 0.3s ease; }
-      .lyric3-line.cur { color: #ffd400; opacity: 1; }
+      .lyricbox-line.cur { color: #ffd400; opacity: 1; }
       /* 浅色封面(整卡切深色文字)时金色对比不足,换成深琥珀 */
-      ha-card.dark .lyric3-line.cur { color: #a3690a; }
+      ha-card.dark .lyricbox-line.cur { color: #a3690a; }
       .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }
       .progress-row { display: flex; align-items: center; gap: 8px; }
       .progress-row .t { font-size: 11px; color: var(--fg-faint); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -1421,18 +1447,30 @@ class MusicFlowRemoteCard extends LitElement {
         transition: box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
       .ctl svg { display: block; }
       /* 悬停反馈与封面统一:仅放大上浮 + 中性阴影,不加红圈、不改底色 */
-      .ctl:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      .ctl:hover { transform: scale(1.10); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .ctl:active { transform: scale(0.92); }
       .ctl.play { width: 42px; height: 42px; background: transparent; color: var(--ctl); }
-      .ctl.play:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      .ctl.play:hover { transform: scale(1.10); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .ctl.play:active { transform: scale(0.92); }
       .ctl.like.on { color: #f62c55; }
       /* 展开态只用图标变色标识,不再加红圈描边 */
       .ctl.active { color: #f62c55; }
       .ctl.vol-open { background: transparent; color: var(--ctl); }
-      /* 音量内联面板:点击音量键后把整个控制区替换为水平滑动条(无弹窗)。
-         触屏用相对拖动(touch-action:none + pointer 事件),按下不跳值、仅按位移增量调音量。 */
-      .vol-inline { display: flex; align-items: center; gap: 10px; width: 100%; }
+      /* 下半区容器:音量遮罩以它为定位参照,盖住控件行 + 进度条 + 队列面板 */
+      .lower { position: relative; display: flex; flex-direction: column; gap: 12px; }
+      /* 音量遮罩:从控件行顶部一直盖到卡片底部,上半部分(播放器名/歌名/歌词/封面)保持可见。
+         点遮罩(或上半部分)任意处即关闭并保存——音量拖动时已实时下发,无需确认按钮。 */
+      /* 负 inset + 等量 padding:遮罩向外多盖一圈(直抵卡片底缘),但内容框仍与 .lower 对齐,
+         保证音量条左右端与下方 seek 严格重合。 */
+      .vol-overlay { position: absolute; top: -6px; left: -4px; right: -4px; bottom: -14px;
+        z-index: 6; border-radius: 12px;
+        background: rgba(14, 12, 22, 0.62); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+        display: flex; align-items: flex-start; padding: 6px 4px 14px; }
+      ha-card.dark .vol-overlay { background: rgba(250, 250, 252, 0.66); }
+      /* 静音键占最左 42px(顶替进度条左侧时间标签的位置),右侧留 42px 空位,
+         使音量条与下方 seek 严格等长、左右端上下重合。gap 必须为 0。 */
+      .vol-row { display: flex; align-items: center; gap: 0; width: 100%; height: 42px; }
+      .vol-gap { width: 42px; flex: 0 0 auto; }
       .vol-slider { position: relative; flex: 1; height: 30px; cursor: pointer; touch-action: none; display: flex; align-items: center; }
       .vol-track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: var(--seek-bg); }
       .vol-fill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 3px; background: #f62c55; }
