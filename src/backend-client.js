@@ -180,6 +180,10 @@ export class BackendClient {
       case "group_deleted":
         this._emit("group_deleted", msg.id);
         break;
+      case "device_list_changed":
+        // 后端发现 DLNA 设备上线/下线(实时 SSDP) -> 兜底刷新一次 peers
+        this._emit("device_list_changed", { deviceCount: msg.deviceCount });
+        break;
       default:
         break;
     }

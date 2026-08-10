@@ -139,6 +139,9 @@ class MusicFlowRemoteCard extends LitElement {
     c.on("media", ({ deviceId, media }) => this._applyDeviceMedia(deviceId, media));
     c.on("group", () => this._refreshPeers());
     c.on("group_deleted", () => this._refreshPeers());
+    // 后端实时发现 DLNA 设备上线/下线 -> 刷新设备列表(peer_registered/available
+    // 事件通常也会到,这里兜底确保卡片立刻显示刚上线的设备)。
+    c.on("device_list_changed", () => this._refreshPeers());
   }
 
   // ============ Peer / output management ============
@@ -700,7 +703,7 @@ class MusicFlowRemoteCard extends LitElement {
               <div class="volpop" style="${volpopStyle}" @click=${(e) => e.stopPropagation()}>
                 <span class="vpct">${vpct}%</span>
                 <input class="vol-v" type="range" orient="vertical" min="0" max="100" value="${vpct}"
-                  style="background: linear-gradient(to top, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%)"
+                  style="background: linear-gradient(to top, #f62c55 ${vpct}%, rgba(255,255,255,0.18) ${vpct}%) center / 6px 100% no-repeat"
                   @input=${this._setVolume} />
                 <button class="vbtn ${u.muted ? "muted" : ""}" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 18)}</button>
               </div>
@@ -1162,27 +1165,32 @@ class MusicFlowRemoteCard extends LitElement {
       .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
-      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 6px; height: 110px; border-radius: 3px; }
-      .seek, .vol-v { -webkit-appearance: none; appearance: none;
-        background: rgba(255, 255, 255, 0.18); outline: none; cursor: pointer; }
-      .seek::-webkit-slider-thumb, .vol-v::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+      .vol-v { writing-mode: vertical-lr; direction: rtl; width: 18px; height: 110px; border-radius: 3px;
+        background: transparent; }
+      .seek, .vol-v { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; }
+      .seek { background: rgba(255, 255, 255, 0.18); }
+      .seek::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
         width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid #f62c55;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer; transition: transform 0.15s ease; }
-      .seek:hover::-webkit-slider-thumb, .vol-v:hover::-webkit-slider-thumb { transform: scale(1.2); }
+      .seek:hover::-webkit-slider-thumb { transform: scale(1.2); }
       .seek::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: #f62c55; }
       .vol-v::-moz-range-track { width: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); }
       .vol-v::-moz-range-progress { width: 6px; border-radius: 3px; background: #f62c55; }
-      .seek::-moz-range-thumb, .vol-v::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
+      .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid #f62c55; }
-      /* 音量滑块:主项目 Windows10 风格 —— 一道横线贯穿轨道,hover/拖动发白光 */
-      .vol-v::-webkit-slider-thumb { width: 16px; height: 4px; border-radius: 2px; border: none;
-        background: rgba(255, 255, 255, 0.85); box-shadow: none; }
-      .vol-v:hover::-webkit-slider-thumb, .vol-v:active::-webkit-slider-thumb { background: #fff;
-        box-shadow: 0 0 8px rgba(255, 255, 255, 0.9); transform: none; }
-      .vol-v::-moz-range-thumb { width: 16px; height: 4px; border-radius: 2px; border: none;
-        background: rgba(255, 255, 255, 0.85); box-shadow: none; }
-      .vol-v:hover::-moz-range-thumb { background: #fff; box-shadow: 0 0 8px rgba(255, 255, 255, 0.9); }
+      /* 音量滑块:主项目 Windows10 风格 —— 一道横线被轨道正中穿过。
+         输入框 18px 宽、轨道居中画 6px(内联背景),thumb 16px 宽即被轨道穿中;
+         thumb 做成 16x14 大抓取热区(可按住拖动),视觉横线 14x4 居中绘制。 */
+      .vol-v::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+        width: 16px; height: 14px; border: none; border-radius: 2px; box-shadow: none; cursor: pointer;
+        background: rgba(255, 255, 255, 0.85) center / 14px 4px no-repeat; }
+      .vol-v:hover::-webkit-slider-thumb, .vol-v:active::-webkit-slider-thumb {
+        background: #fff center / 14px 4px no-repeat; transform: none;
+        filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.9)); }
+      .vol-v::-moz-range-thumb { width: 16px; height: 14px; border: none; border-radius: 2px;
+        background: rgba(255, 255, 255, 0.85) center / 14px 4px no-repeat; }
+      .vol-v:hover::-moz-range-thumb { background: #fff center / 14px 4px no-repeat; }
       .controls { display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; }
       .ctl { border: none; background: transparent; color: rgba(255, 255, 255, 0.85); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
