@@ -1,6 +1,6 @@
 {
   "name": "hass-musicflow-card",
-  "version": "1.6.12",
+  "version": "1.6.13",
   "description": "MusicFlow Remote Card: a dedicated external controller that connects directly to the MusicFlow backend over WebSocket for real-time, bidirectional sync of playback, outputs, lyrics, queue, search, playlists and favorites.",
   "type": "module",
   "main": "dist/hass-musicflow-card.js",

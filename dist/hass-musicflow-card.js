@@ -42,15 +42,8 @@
           <div class="now">
             <div class="cover">${t?.coverArt?d`<img class="nowcover" data-cover-id="${t.coverArt}" alt="" />`:d`<div class="nocover">♪</div>`}</div>
             <div class="meta">
-              <div class="track">${t?t.title+(t.artist?" - "+t.artist:""):"\u672A\u5728\u64AD\u653E"}</div>
+              <div class="track">${t?t.title:"\u672A\u5728\u64AD\u653E"}<span class="t-art">${t&&t.artist?" - "+t.artist:""}</span></div>
               <div class="artist">${e.currentLyric||""}</div>
-              <div class="progress-row">
-                <span class="t">${this._fmtTime(e.currentTime)}</span>
-                <input class="seek" type="range" min="0" max="100" step="0.1" value="${s}"
-                  style="background: linear-gradient(90deg, #f62c55 ${s}%, rgba(255,255,255,0.18) ${s}%)"
-                  @input=${this._seek} />
-                <span class="t">${this._fmtTime(e.duration)}</span>
-              </div>
             </div>
           </div>
 
@@ -65,6 +58,14 @@
               <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(e.muted||e.volume<=0?"volumeX":"volume2",20)}</button>
             `}
             <button class="ctl ${e.showBrowser?"active":""}" title="媒体库" @click=${this._openBrowser}>${this._icon("mediaLibrary",20)}</button>
+          </div>
+
+          <div class="progress-row">
+            <span class="t">${this._fmtTime(e.currentTime)}</span>
+            <input class="seek" type="range" min="0" max="100" step="0.1" value="${s}"
+              style="background: linear-gradient(90deg, #f62c55 ${s}%, rgba(255,255,255,0.18) ${s}%)"
+              @input=${this._seek} />
+            <span class="t">${this._fmtTime(e.duration)}</span>
           </div>
 
           ${e.showQueue?this._renderQueue():""}
@@ -213,7 +214,8 @@
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .artist { font-size: 13px; color: #ffd400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-      .progress-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+      .t-art { font-size: 13px; font-weight: 400; color: rgba(255, 255, 255, 0.6); }
+      .progress-row { display: flex; align-items: center; gap: 8px; }
       .progress-row .t { font-size: 11px; color: rgba(255, 255, 255, 0.5); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
       .seek { flex: 1; height: 6px; border-radius: 3px; }
       .seek { -webkit-appearance: none; appearance: none; outline: none; cursor: pointer; background: rgba(255, 255, 255, 0.18); }
