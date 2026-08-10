@@ -1118,9 +1118,16 @@ class MusicFlowRemoteCard extends LitElement {
     }
     level.viewItems = view;
     level.total = view.length;
-    const start = (page - 1) * PAGE_SIZE;
-    level.items = view.slice(start, start + PAGE_SIZE);
-    level.totalPages = Math.max(1, Math.ceil(level.total / PAGE_SIZE));
+    if (level.type === "playlists") {
+      // 歌单列表一次性全显:后端 /getPlaylists 已全量返回,1000 级行数浏览器轻松渲染,
+      // 封面走 IntersectionObserver 懒加载只取视口内,无需分页(分页器 totalPages=1 自动隐藏)。
+      level.items = view;
+      level.totalPages = 1;
+    } else {
+      const start = (page - 1) * PAGE_SIZE;
+      level.items = view.slice(start, start + PAGE_SIZE);
+      level.totalPages = Math.max(1, Math.ceil(level.total / PAGE_SIZE));
+    }
     this.requestUpdate();
   }
 
