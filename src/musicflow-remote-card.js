@@ -1219,8 +1219,8 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
       .ctl:active { transform: scale(0.92); }
       .ctl.play { width: 54px; height: 54px; background: #f62c55; color: #fff;
-        box-shadow: 0 4px 16px rgba(246, 44, 85, 0.4); }
-      .ctl.play:hover { background: #e63954; box-shadow: 0 6px 22px rgba(246, 44, 85, 0.55); transform: scale(1.06); }
+        box-shadow: 0 0 14px rgba(246, 44, 85, 0.32); }
+      .ctl.play:hover { background: #e63954; box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); transform: scale(1.06); }
       .ctl.play:active { transform: scale(0.94); }
       .ctl.like.on { color: #f62c55; }
       .ctl.vol-open { background: rgba(246, 44, 85, 0.16); color: #f62c55; }
