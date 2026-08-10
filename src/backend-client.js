@@ -3,7 +3,7 @@
 // the card is an equal peer to the Web/App clients: any action taken here is
 // reflected on every other client via the same /ws channel, and vice-versa.
 //
-// Hybrid transport (v1.6.3):
+// Hybrid transport (v1.6.7):
 //   mode "direct"  - WebSocket + REST straight to the backend (lowest latency,
 //                    used on the LAN).
 //   mode "proxy"   - everything goes through the HA integration:
@@ -130,7 +130,18 @@ export class BackendClient {
 
   async rest(path, { method = "GET", body } = {}) {
     if (this.mode === "proxy") {
-      const url = "/api/musicflow/rest" + path;
+      // 代理模式下仍带上卡片自己的 api_key 作为 ?token= 兜底。
+      // 集成代理补的 `Authorization: Bearer <api_key>` 头依赖后端 v1.1.7+ 的
+      // "Bearer->apiKey 回退";较旧后端(或 :latest 镜像滞后)或某些反向代理
+      // 剥离自定义头时该头认证失败,导致 star 等需要用户身份的操作在外网代理
+      // 模式 401。卡片从 backend_config 拿到的 api_key 是经 HA 校验过的同一把
+      // 钥匙,用 ?token= 走与直连完全相同的契约(后端各版本均支持),使收藏等
+      // 操作在外网代理下稳定可用——这才是"之前只显示失败"那次修复真正该做的。
+      let url = "/api/musicflow/rest" + path;
+      if (this.apiKey) {
+        const sep = url.includes("?") ? "&" : "?";
+        url += `${sep}token=${encodeURIComponent(this.apiKey)}`;
+      }
       const init = { method, headers: {} };
       if (body !== undefined) {
         init.headers["Content-Type"] = "application/json";
