@@ -49,6 +49,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui = {
       error: "",
       connected: false,
+      serverOk: false,
       peers: [],
       currentPeerId: "",
       queue: [],
@@ -91,6 +92,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
+    if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._client) this._client.disconnect();
   }
 
@@ -120,16 +122,33 @@ class MusicFlowRemoteCard extends LitElement {
     }
     this._bindClient();
     this._client.connect();
+    // WS 断开期间每 15s 用 REST 探测一次服务器可达性,作为"调暗"的判定依据。
+    this._probeTimer = setInterval(() => { if (!this._ui.connected) this._probeServer(); }, 15000);
+  }
+
+  // REST 探测服务器是否可达(只在 WS 断开时调用);成功=能和服务器通信,不变暗。
+  _probeServer() {
+    if (this._ui.connected || !this._client) return;
+    this._client.getPeers()
+      .then(() => { this._ui.serverOk = true; })
+      .catch(() => { this._ui.serverOk = false; })
+      .finally(() => this.requestUpdate());
   }
 
   _bindClient() {
     const c = this._client;
     c.on("open", () => {
       this._ui.connected = true;
+      this._ui.serverOk = true;
       this._startHeartbeat();
       this.requestUpdate();
     });
-    c.on("close", () => { this._ui.connected = false; this.requestUpdate(); });
+    // WS 断开 ≠ 连不上服务器(可能只是 WS 通道被空闲超时掐断)。先 REST 探测,
+    // 探测成功说明服务器可达,保持卡片正常显示;探测失败才调暗。
+    c.on("close", () => { this._ui.connected = false; this._probeServer(); this.requestUpdate(); });
+    c.on("rest_ok", () => {
+      if (!this._ui.serverOk) { this._ui.serverOk = true; this.requestUpdate(); }
+    });
     c.on("snapshot", (devices) => this._applySnapshot(devices));
     c.on("peer_snapshot", (peers) => this._applyPeerSnapshot(peers));
     c.on("peer_update", (peer) => this._upsertPeer(peer));
@@ -671,7 +690,7 @@ class MusicFlowRemoteCard extends LitElement {
 
     return html`
       <ha-card>
-        <div class="wrap ${u.connected ? "" : "off"}">
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"}">
           ${this._renderOutputs()}
 
           <div class="now">

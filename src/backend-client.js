@@ -101,6 +101,7 @@ export class BackendClient {
       error("REST failed", method, path, res.status, text.slice(0, 200));
       throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
     }
+    this._emit("rest_ok"); // 任何一次 REST 成功都证明"能和服务器通信"
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
       const data = await res.json();
@@ -126,9 +127,35 @@ export class BackendClient {
       try { msg = JSON.parse(ev.data); } catch { return; }
       this._handle(msg);
     };
-    ws.onopen = () => { this._connected = true; log("WS open"); this._emit("open"); };
-    ws.onclose = () => { this._connected = false; warn("WS close"); this._emit("close"); this._scheduleReconnect(); };
+    ws.onopen = () => {
+      this._connected = true;
+      log("WS open");
+      this._emit("open");
+      this._startWsKeepalive();
+    };
+    ws.onclose = () => {
+      this._connected = false;
+      this._stopWsKeepalive();
+      warn("WS close");
+      this._emit("close");
+      this._scheduleReconnect();
+    };
     ws.onerror = (e) => { error("WS error", e); try { ws.close(); } catch {} };
+  }
+
+  // 应用层 WS 心跳:没有 DLNA 设备/未播放时 WS 完全无流量,代理或防火墙的
+  // 空闲超时会把连接掐掉,卡片被误判为"连不上服务器"而变暗。25s 一次 ping
+  // (服务端回 pong)保持连接活跃。
+  _startWsKeepalive() {
+    this._stopWsKeepalive();
+    this._wsPingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try { this.ws.send(JSON.stringify({ type: "ping" })); } catch {}
+      }
+    }, 25000);
+  }
+  _stopWsKeepalive() {
+    if (this._wsPingTimer) { clearInterval(this._wsPingTimer); this._wsPingTimer = null; }
   }
   _scheduleReconnect() {
     if (this._reconnectTimer) return;
@@ -139,6 +166,7 @@ export class BackendClient {
   }
   disconnect() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    this._stopWsKeepalive();
     if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} this.ws = null; }
   }
 
