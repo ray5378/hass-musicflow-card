@@ -519,7 +519,11 @@ export class BackendClient {
     if (!coverId) return null;
     const path = `/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`;
     if (this.mode === "proxy") {
-      return `/api/musicflow/rest${path}?token=${encodeURIComponent(this.apiKey)}`;
+      // 经 HA 同源代理:路径走 /api/musicflow/rest,并把 token 一并带在 query 里。
+      // path 本身已含 '?',必须按 separator 用 '&' 追加,否则出现两个 '?' 会让
+      // token 落到第二个 '?' 之后而失效,且 size 被污染 → 代理模式封面全失败。
+      const sep = path.includes("?") ? "&" : "?";
+      return `/api/musicflow/rest${path}${sep}token=${encodeURIComponent(this.apiKey)}`;
     }
     return this._withToken(path);
   }

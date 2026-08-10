@@ -84,6 +84,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
+    this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
   }
 
   disconnectedCallback() {
@@ -98,6 +99,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._client) this._client.disconnect();
     if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
+    this._coverObserverRoot = null;
   }
 
   set hass(hass) {
@@ -734,7 +736,12 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _ensureCoverObserver(root) {
-    if (this._coverObserver) return;
+    // 媒体库每次重开,滚动容器 .br-list 都是全新节点。若复用上次绑定在旧节点上的
+    // observer,新封面 img 不在旧 root 子树内,IntersectionObserver 永不触发
+    // isIntersecting → 关闭再打开后封面全空。故 root 变化时重建 observer。
+    if (this._coverObserver && this._coverObserverRoot === root) return;
+    if (this._coverObserver) this._coverObserver.disconnect();
+    this._coverObserverRoot = root;
     this._coverObserver = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (e.isIntersecting) {
