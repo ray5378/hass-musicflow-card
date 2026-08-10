@@ -318,15 +318,15 @@
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
-      .panel { background: var(--panel-bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; }
+      .panel { background: var(--panel-bg); border-radius: 12px; padding: 10px; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
       .empty { color: var(--fg-faint); font-size: 13px; padding: 10px 0; text-align: center; }
       /* 歌词展开面板已移除,当前行常驻显示在 .artist(this._ui.currentLyric) */
-      .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+      .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
       .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar,
-      .br-list::-webkit-scrollbar { width: 6px; }
+      .br-list::-webkit-scrollbar { width: 4px; }
       .qlist::-webkit-scrollbar-thumb, .slist::-webkit-scrollbar-thumb,
-      .br-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+      .br-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 2px; }
       .qlist::-webkit-scrollbar-thumb:hover, .slist::-webkit-scrollbar-thumb:hover,
       .br-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
       .qitem, .sitem { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; transition: background 0.15s; }
@@ -352,7 +352,7 @@
         transition: border-color 0.2s, box-shadow 0.2s; }
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
-      .browser { background: var(--panel-bg); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px; width: 100%; display: flex; flex-direction: column; }
+      .browser { background: var(--panel-bg); border-radius: 12px; padding: 10px; width: 100%; display: flex; flex-direction: column; }
       .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 15px; font-weight: 600;
         color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
       .crumb { cursor: pointer; transition: color 0.15s; }
@@ -360,7 +360,7 @@
       .crumb.cur { color: #f62c55; font-weight: 600; }
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
-      .br-list { overflow-y: auto; max-height: 240px; display: flex; flex-direction: column; gap: 2px; }
+      .br-list { overflow-y: auto; max-height: 240px; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
       .br-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px;
         margin-top: 8px; border-top: 1px solid var(--line-soft); padding: 10px 4px 4px; }
       .br-pager .pg-total { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-right: 6px; }
