@@ -261,10 +261,10 @@
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      /* 歌词滚动:视口固定 4 行(4 x 20px = 80px),当前行恒在第二行;上下边缘渐隐做出滚动纵深。
+      /* 歌词滚动:视口固定 5 行(5 x 20px = 100px),当前行恒在第二行;上下边缘渐隐做出滚动纵深。
          .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致,
          .lyricbox 的 height 必须等于 LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
-      .lyricbox { height: 80px; overflow: hidden; margin-top: 2px; position: relative;
+      .lyricbox { height: 100px; overflow: hidden; margin-top: 2px; position: relative;
         -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%);
         mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%); }
       .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
