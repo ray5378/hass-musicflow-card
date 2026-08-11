@@ -53,6 +53,7 @@ const MF_ICONS = {
   list: '<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>',
   library: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
   heart2: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
+  speaker: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 6h.01"/><circle cx="12" cy="14" r="4"/><path d="M12 14h.01"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -1015,7 +1016,7 @@ class MusicFlowRemoteCard extends LitElement {
           <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"}"
             title="${p.kind || ""}"
             @click=${() => this._selectPeer(p.peerId)}>
-            ${p.kind === "group" ? "👥" : p.kind === "dlna" ? "🔊" : "💻"} ${p.name || p.peerId}
+            ${this._icon("speaker", 16)} ${p.name || p.peerId}
           </button>
         `)}
       </div>
@@ -1638,16 +1639,15 @@ class MusicFlowRemoteCard extends LitElement {
       .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
       .outputs { display: flex; flex-wrap: wrap; gap: 6px; }
-      .out { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
+      .out { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
+      .out .ic { display: inline-flex; }
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影 */
       .out:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 激活态与播放控件同语言:半透明一体感 + 周边亮框(无实底色块),颜色随封面底色。
-         默认态:半透明底 + 细框;激活态:亮框(var(--fg)) + 亮文字加粗。 */
-      .out.active { background: var(--panel-bg); border-color: var(--fg); color: var(--fg); font-weight: 600;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
+      /* 选中/未选中边框完全一致(不加高亮边框),只靠音箱图标颜色区分:选中=红 */
+      .out.active .ic { color: #f62c55; }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
@@ -1665,8 +1665,8 @@ class MusicFlowRemoteCard extends LitElement {
          .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致,
          .lyricbox 的 height 必须等于 LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
       .lyricbox { height: 100px; overflow: hidden; margin-top: 2px; position: relative;
-        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%);
-        mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%); }
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%); }
       .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
       .lyricbox-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.55;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
