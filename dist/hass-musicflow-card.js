@@ -237,7 +237,9 @@
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
       .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
-      .outputs { display: flex; flex-wrap: wrap; gap: 6px; }
+      /* 切换播放器按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
+         避免相邻按钮放大后贴在一起。 */
+      .outputs { display: flex; flex-wrap: wrap; gap: 12px; }
       .out { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
