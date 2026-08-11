@@ -242,8 +242,10 @@
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
       .out .ic { display: inline-flex; }
-      /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影 */
-      .out:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影。
+         选中播放器(.active)恒保持放大状态(等同悬停效果),切换后才缩小;
+         未选中仅悬停放大、移走恢复。 */
+      .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
       /* 选中/未选中边框完全一致(不加高亮边框),只靠音箱图标颜色区分:选中=红 */
       .out.active .ic { color: #f62c55; }
