@@ -22,13 +22,12 @@ const ROW_STEP = 50;
 const VS_OVERSCAN = 6;
 const VS_CONCURRENCY = 2;
 
-// 歌词背景层滚动:单行高度(px)。必须与 CSS .lyricbox-line 的 height/line-height 一致,
-// 因为轨道位移是按「行数 x 行高」算的。背景层铺满整卡(见 CSS .lyricbg)。
+// 歌词滚动:单行高度(px)。必须与 CSS .lyricbox-line 的 height/line-height 一致,
+// 因为轨道位移是按「行数 x 行高」算的。视口高 = LYRIC_VIEW_LINES x 该值(见 CSS .lyricbox)。
 const LYRIC_LINE_H = 20;
-// 「当前行」停在第几槽(0 基):2 = 第 3 行。上方 2 行已唱、下方大量待唱。
-const LYRIC_CUR_SLOT = 2;
-// 歌词行数上限(超出截断,兜底防超长歌词文件拖垮 DOM)。
-const LYRIC_MAX_LINES = 300;
+// 视口显示行数,以及「当前行」落在第几槽(0 基)。当前 = 4 行视口、当前行固定在第 2 行。
+const LYRIC_VIEW_LINES = 4;
+const LYRIC_CUR_SLOT = 1;
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -962,12 +961,12 @@ class MusicFlowRemoteCard extends LitElement {
             <div class="coverbg-veil"></div>
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""}" @click=${this._onWrapClick}>
-          ${this._renderLyricBox()}
           ${this._renderOutputs()}
 
           <div class="now">
             <div class="meta">
               <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
+              ${this._renderLyricBox()}
             </div>
             <div class="cover" role="button" @click=${(e) => { e.stopPropagation(); this._openBrowser(); }}>${song?.coverArt
               ? html`<img class="nowcover" data-cover-id="${song.coverArt}" alt="" />`
@@ -1023,19 +1022,18 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  // 歌词背景层:铺满整卡(z-index 1,内容区 z-index 2 浮于其上),整条轨道按当前行整体上移,
-  // 当前行停在第 LYRIC_CUR_SLOT 槽(第 3 行);遇到播放按钮/进度条等元素从它们背后滚过。
-  // 颜色机制沿用 .lyricbox-line(自动随背景深浅切换);无歌词时不渲染该层(界面完全不变)。
+  // 歌词滚动:视口固定 LYRIC_VIEW_LINES 行高,整条歌词轨道按当前行整体上移,
+  // 让当前行始终停在第 LYRIC_CUR_SLOT 槽(即第二行),上方 1 行已唱、下方 2 行待唱。
   _renderLyricBox() {
     const lines = this._ui.lyrics || [];
-    if (!lines.length) return html``;
+    if (!lines.length) return html`<div class="lyricbox"></div>`;
     const idx = this._ui.lyricIndex;
+    // 当前行落到第二槽 => 轨道上移 (idx - LYRIC_CUR_SLOT) 行高;idx 更小时为负,轨道下沉、上方留空行。
     const shift = (idx - LYRIC_CUR_SLOT) * LYRIC_LINE_H;
-    const view = lines.slice(0, LYRIC_MAX_LINES);
     return html`
-      <div class="lyricbg">
-        <div class="lyricbg-track" style="transform: translateY(${-shift}px)">
-          ${view.map((l, i) => html`<div class="lyricbox-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
+      <div class="lyricbox">
+        <div class="lyricbox-track" style="transform: translateY(${-shift}px)">
+          ${lines.map((l, i) => html`<div class="lyricbox-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
         </div>
       </div>`;
   }
@@ -1658,20 +1656,14 @@ class MusicFlowRemoteCard extends LitElement {
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      /* 歌词背景层:铺满整卡(absolute inset:0, z-index 1),整条轨道向上滚动,
-         当前行停第 3 行;outputs/now/lower 提升 z-index:2 浮于其上 → 歌词从按钮、
-         进度条等元素背后滚过。pointer-events:none 不挡点击;上下渐隐出滚动纵深。
-         .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致。
-         颜色机制沿用 .lyricbox-line(当前行 #ffd400,浅封面卡 .dark 自动换琥珀)。 */
-      .lyricbg { position: absolute; inset: 0; z-index: 1; overflow: hidden; pointer-events: none;
-        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 88%, transparent 100%);
-        mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 88%, transparent 100%); }
-      .lyricbg-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
-      /* 内容区浮在歌词背景层之上;队列/媒体库面板(z-index:5)不受影响 */
-      .wrap > .outputs, .wrap > .now, .wrap > .lower { position: relative; z-index: 2; }
-      /* 队列/媒体库全屏覆盖时隐藏歌词背景层,避免与面板内容互相干扰 */
-      .wrap.panelmode .lyricbg { visibility: hidden; }
-      .lyricbox-line { height: 20px; line-height: 20px; font-size: 14px; color: var(--fg-dim); opacity: 0.55;
+      /* 歌词滚动:视口固定 4 行(4 x 20px = 80px),当前行恒在第二行;上下边缘渐隐做出滚动纵深。
+         .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致,
+         .lyricbox 的 height 必须等于 LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
+      .lyricbox { height: 80px; overflow: hidden; margin-top: 2px; position: relative;
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 20%, #000 74%, transparent 100%); }
+      .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
+      .lyricbox-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.55;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         transition: color 0.3s ease, opacity 0.3s ease; }
       .lyricbox-line.cur { color: #ffd400; opacity: 1; }
