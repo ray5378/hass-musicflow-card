@@ -928,7 +928,9 @@ class MusicFlowRemoteCard extends LitElement {
           if (!el) return;
           // 固定开销:每项 gap6+文字12+上下 padding22=40,2行+行距10+grid padding16=106。
           // 上限 42:卡片宽已由容器查询保证 hover 放大不超列宽,图标不再受此约束。
-          const size = Math.max(20, Math.min(42, Math.floor((el.clientHeight - 106) / 2)));
+          // 垂直留 1.06 余量(类比 v1.6.33 水平「列宽/1.06-10」):2 行卡片 hover 放大后
+          // 总高仍 ≤ 可用高,第二行底部不再溢出被裁。
+          const size = Math.max(18, Math.min(42, Math.floor((el.clientHeight / 1.06 - 106) / 2)));
           if (size !== this._ui.catIconSize) { this._ui.catIconSize = size; this.requestUpdate(); }
         }).catch(() => {});
       }
