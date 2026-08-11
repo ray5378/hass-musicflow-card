@@ -519,7 +519,7 @@ class MusicFlowRemoteCard extends LitElement {
     }
     // 队列/媒体库面板(无感全屏覆盖)打开时:点列表项/按钮/面包屑/搜索框不收起,点面板空白处收起。
     if (this._ui.showQueue || this._ui.showBrowser) {
-      const keep = ["qitem", "sitem", "bitem", "mini", "bplay", "crumb",
+      const keep = ["qitem", "sitem", "bitem", "mini", "crumb",
         "br-search", "search-input", "cat", "pg-btn", "pg-input", "pg-jump"];
       for (const n of path) {
         const cls = n && n.classList;
@@ -1490,7 +1490,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="bt">${it.name}</div>
           <div class="ba">${sub}</div>
         </div>
-        <button class="bplay" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>${this._icon("play", 18, true)}</button>
+        <button class="mini" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
       </div>`;
   }
 
@@ -1734,13 +1734,6 @@ class MusicFlowRemoteCard extends LitElement {
         border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer;
         transition: box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
       .mini:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
-      .bplay { border: none; background: #f62c55; color: #fff; cursor: pointer;
-        width: 38px; height: 38px; padding: 0; border-radius: 50%; flex: 0 0 auto;
-        display: flex; align-items: center; justify-content: center;
-        transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .bplay:hover { background: #e63954; box-shadow: 0 0 0 1px rgba(246, 44, 85, 0.5); }
-      .bplay:active { transform: scale(0.92); }
-      .bplay svg { display: block; }
       .mini:active { transform: scale(0.94); }
       .search-input { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px;
         padding: 7px 10px; background: rgba(0, 0, 0, 0.3); color: #fff; outline: none;
