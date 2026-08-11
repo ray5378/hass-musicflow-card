@@ -92,6 +92,7 @@ class MusicFlowRemoteCard extends LitElement {
       qLoading: new Set(),
       qWinStart: 0,
       qWinEnd: -1,
+      catIconSize: 42, // 媒体库根层级分类图标尺寸(按可用高度自适应,见 updated)
       currentIndex: -1,
       isPlaying: false,
       currentTime: 0,
@@ -905,6 +906,17 @@ class MusicFlowRemoteCard extends LitElement {
   updated() {
     if (this._ui.showBrowser) {
       this.updateComplete.then(() => this._observeBrowserCovers()).catch(() => {});
+      // 根层级分类网格:图标尺寸按可用高度自适应(3x2 保证不出现纵向滚动)。
+      const bl = this._ui.browserStack[this._ui.browserStack.length - 1];
+      if (bl && bl.type === "root") {
+        this.updateComplete.then(() => {
+          const el = this.shadowRoot?.querySelector(".br-list");
+          if (!el) return;
+          // 固定开销:每项 gap6+文字12+上下 padding22=40,2行+行距10+grid padding16=106
+          const size = Math.max(20, Math.min(42, Math.floor((el.clientHeight - 106) / 2)));
+          if (size !== this._ui.catIconSize) { this._ui.catIconSize = size; this.requestUpdate(); }
+        }).catch(() => {});
+      }
     }
     if (this._ui.showQueue) {
       this.updateComplete.then(() => this._qEnsureLoaded()).catch(() => {});
@@ -1512,12 +1524,12 @@ class MusicFlowRemoteCard extends LitElement {
             <button class="mini" @click=${this._browserSearch}>搜索</button>
           </div>
         ` : ""}
-        <div class="br-list" @scroll=${this._onBrScroll}>
+        <div class="br-list ${isRoot ? "root-grid" : ""}" @scroll=${this._onBrScroll}>
           ${isRoot ? html`
             <div class="cat-grid">
               ${(level.items || []).map((c) => html`
                 <button class="cat" @click=${() => this._browserItemClick(c)}>
-                  <span class="cat-ic ${CAT_HEART.has(c.cat) ? "heart" : ""}">${this._icon(CAT_ICONS[c.cat] || "list", 42, CAT_HEART.has(c.cat))}</span>
+                  <span class="cat-ic ${CAT_HEART.has(c.cat) ? "heart" : ""}">${this._icon(CAT_ICONS[c.cat] || "list", this._ui.catIconSize || 42, CAT_HEART.has(c.cat))}</span>
                   <span class="cat-name">${c.name}</span>
                 </button>
               `)}
@@ -1740,10 +1752,13 @@ class MusicFlowRemoteCard extends LitElement {
         color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; padding-right: 30px; }
       .crumb { cursor: pointer; transition: color 0.15s; }
       .crumb:hover { color: rgba(255, 255, 255, 0.85); }
-      .crumb.cur { color: #f62c55; font-weight: 600; }
+      /* 当前目录:金黄(与歌词当前行同色系),.dark 浅色封面下换琥珀保证对比 */
+      .crumb.cur { color: #ffd400; font-weight: 600; }
+      ha-card.dark .crumb.cur { color: #a3690a; }
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
-      .br-list { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; scrollbar-width: thin; }
+      .br-list { overflow-y: auto; flex: 1; min-height: 0; min-width: 0; max-width: 100%;
+        display: flex; flex-direction: column; scrollbar-width: thin; }
       /* 虚拟滚动:总高占位(level.total x ROW_STEP)+ 绝对定位窗口行;骨架行避免空白闪烁 */
       .vs-spacer { position: relative; width: 100%; }
       .vs-row { position: absolute; left: 0; right: 0; height: 48px; }
@@ -1751,8 +1766,10 @@ class MusicFlowRemoteCard extends LitElement {
       .vs-more { position: sticky; bottom: 0; text-align: center; font-size: 12px; color: var(--fg-faint);
         padding: 5px; background: var(--panel-bg); border-radius: 8px; margin-top: 2px; }
       /* 媒体库根层级分类:图标在上、文字在下(类似 Windows 文件夹中等图标视图)。
-         网格 auto-fill 自适应列数(正常卡宽 3 列,窄卡自动降 2 列);悬停统一 scale+中性阴影。 */
-      .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; padding: 8px 0; }
+         固定 3 列(6 分类 = 3x2),图标尺寸按可用高度 JS 自适应(见 _catIconSize),
+         网格区域禁止滚动(overflow hidden),任何情况不出现上下/左右滚动条。 */
+      .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 8px 0; }
+      .br-list.root-grid { overflow: hidden; }
       .cat { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px;
         border: 1px solid var(--line); background: var(--panel-bg); color: var(--fg); border-radius: 12px;
         cursor: pointer; min-width: 0;
