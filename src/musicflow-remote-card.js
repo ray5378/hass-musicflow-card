@@ -46,7 +46,7 @@ const MF_ICONS = {
   queue: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
   mediaLibrary: '<path d="M20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H8V4H20M12.5,15A2.5,2.5 0 0,0 15,12.5V7H18V5H14V10.5C13.58,10.19 13.07,10 12.5,10A2.5,2.5 0 0,0 10,12.5A2.5,2.5 0 0,0 12.5,15M4,6H2V20A2,2 0 0,0 4,22H18V20H4"/>',
   // 媒体库分类图标(lucide,与主项目前端 lucide-vue-next 完全同款路径):
-  // 音乐→Headphones / 专辑→Disc3 / 艺术家→User / 流派→Library / 歌单→List / 我喜欢→Heart(filled)
+  // 音乐→Headphones / 专辑→Disc3 / 艺术家→User / 风格→Library / 歌单→List / 我喜欢→Heart(filled)
   headphones: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
   disc3: '<circle cx="12" cy="12" r="10"/><path d="M6 12c0-1.7.7-3.2 1.8-4.2"/><circle cx="12" cy="12" r="2"/><path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/>',
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
@@ -59,7 +59,7 @@ function log(...args) { console.log("[MF card]", ...args); }
 function err(...args) { console.error("[MF card]", ...args); }
 
 // 媒体库根层级分类图标映射(与主项目前端同款):歌单→List / 专辑→Disc3 / 音乐→Headphones
-// 艺术家→User / 流派→Library / 我喜欢的音乐→Heart(实心红)
+// 艺术家→User / 风格→Library / 我喜欢的音乐→Heart(实心红)
 const CAT_ICONS = { playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library", starred: "heart2" };
 const CAT_HEART = new Set(["starred"]); // 心形分类:filled + 实心红
 
@@ -1180,7 +1180,7 @@ class MusicFlowRemoteCard extends LitElement {
         { kind: "cat", cat: "albums", name: "专辑" },
         { kind: "cat", cat: "songs", name: "音乐" },
         { kind: "cat", cat: "artists", name: "艺术家" },
-        { kind: "cat", cat: "genres", name: "流派" },
+        { kind: "cat", cat: "genres", name: "风格" },
         { kind: "cat", cat: "starred", name: "我喜欢的音乐" },
       ],
       query: "", loading: false,
@@ -1198,8 +1198,8 @@ class MusicFlowRemoteCard extends LitElement {
       case "songs": return "音乐";
       case "artists": return "艺术家";
       case "artist": return lv.name || "艺术家";
-      case "genres": return "流派";
-      case "genre": return lv.name || "流派";
+      case "genres": return "风格";
+      case "genre": return lv.name || "风格";
       case "starred": return "我喜欢的音乐";
       default: return "";
     }
@@ -1214,7 +1214,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // ============ 全库统一滚动:虚拟滚动 + 窗口化预取 ============
-  // 所有库类型(歌曲/专辑/艺术家/流派/歌单列表/歌单内/专辑内/我喜欢的)共用同一套:
+  // 所有库类型(歌曲/专辑/艺术家/风格/歌单列表/歌单内/专辑内/我喜欢的)共用同一套:
   // 后端按 offset/size 服务端分页(内存恒定 1 块),卡片只渲染视口窗口(约一屏+2*OVERSCAN 行),
   // 滚动到未加载区域时按 CHUNK 预取;total 恒取服务端最新值(扫描变更自动收敛)。
   // level 滚动状态:total / vCache(Map idx→item) / vLoaded、vLoading(Set 块号) / vWinStart、vWinEnd。
@@ -1323,7 +1323,7 @@ class MusicFlowRemoteCard extends LitElement {
         const res = await this._client.getGenresV2({ page, pageSize: size, query: q });
         return { items: this._mapBrowseItems("genres", res?.items), total: res?.total };
       }
-      case "genre": { // 流派内 = 该流派全部歌曲(V2 支持 genre 过滤)
+      case "genre": { // 风格内 = 该风格全部歌曲(V2 支持 genre 过滤)
         const res = await this._client.getSongsV2({ page, pageSize: size, genre: level.name || "" });
         return { items: this._mapBrowseItems("songs", res?.items), total: res?.total };
       }
@@ -1419,12 +1419,12 @@ class MusicFlowRemoteCard extends LitElement {
       case "playlist": return "歌单";
       case "album": return "专辑";
       case "artist": return "艺人";
-      case "genre": return "流派";
+      case "genre": return "风格";
       default: return "列表";
     }
   }
 
-  // 点击封面:直接播放整个集合(歌单/专辑/艺人/流派)的全部歌曲,
+  // 点击封面:直接播放整个集合(歌单/专辑/艺人/风格)的全部歌曲,
   // 用集合歌曲替换当前队列并从第 1 首开始播放。
   async _browserPlayCollection(item) {
     const pid = this._ui.currentPeerId;
