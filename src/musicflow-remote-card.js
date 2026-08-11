@@ -92,7 +92,7 @@ class MusicFlowRemoteCard extends LitElement {
       qLoading: new Set(),
       qWinStart: 0,
       qWinEnd: -1,
-      catIconSize: 42, // 媒体库根层级分类图标尺寸(按可用高度自适应,见 updated)
+      catIconSize: 34, // 媒体库根层级分类图标尺寸(按可用高度自适应,给 hover scale(1.06) 留余量)
       currentIndex: -1,
       isPlaying: false,
       currentTime: 0,
@@ -912,8 +912,9 @@ class MusicFlowRemoteCard extends LitElement {
         this.updateComplete.then(() => {
           const el = this.shadowRoot?.querySelector(".br-list");
           if (!el) return;
-          // 固定开销:每项 gap6+文字12+上下 padding22=40,2行+行距10+grid padding16=106
-          const size = Math.max(20, Math.min(42, Math.floor((el.clientHeight - 106) / 2)));
+          // 固定开销:每项 gap6+文字12+上下 padding22=40,2行+行距10+grid padding16=106。
+          // 上限 34 / 下限 18 给 hover scale(1.06) 留余量,放大后视觉尺寸不顶到容器边。
+          const size = Math.max(18, Math.min(34, Math.floor((el.clientHeight - 106) / 2)));
           if (size !== this._ui.catIconSize) { this._ui.catIconSize = size; this.requestUpdate(); }
         }).catch(() => {});
       }
