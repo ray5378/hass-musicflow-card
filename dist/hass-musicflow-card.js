@@ -194,6 +194,7 @@
       ha-card {
         /* 颜色变量:默认浅色文字(暗背景);.dark 时整体切深色文字(亮背景封面) */
         --fg: #ffffff;
+        --fg-invert: #1b1b1f; /* 实底高亮(如设备按钮激活态)上的反色文字:深封面=白底黑字 */
         --fg-dim: rgba(255, 255, 255, 0.6);
         --fg-faint: rgba(255, 255, 255, 0.5);
         --ctl: rgba(255, 255, 255, 0.85);
@@ -213,6 +214,7 @@
       }
       ha-card.dark {
         --fg: #1b1b1f;
+        --fg-invert: #ffffff; /* 浅封面=黑底白字 */
         --fg-dim: rgba(0, 0, 0, 0.6);
         --fg-faint: rgba(0, 0, 0, 0.5);
         --ctl: rgba(0, 0, 0, 0.78);
@@ -242,7 +244,8 @@
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影 */
       .out:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      .out.active { background: #f62c55; border-color: #f62c55; color: #fff; box-shadow: 0 4px 14px rgba(246, 44, 85, 0.35); }
+      /* 激活态跟随封面底色:深封面=白块黑字、浅封面=黑块白字(不再固定红块,与卡片融合) */
+      .out.active { background: var(--fg); border-color: var(--fg); color: var(--fg-invert); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
