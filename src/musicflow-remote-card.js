@@ -484,6 +484,7 @@ class MusicFlowRemoteCard extends LitElement {
   // 必须 stopPropagation,否则事件冒泡到 .wrap 的「点外部关闭」会立刻把刚打开的面板关掉。
   _toggleVolumePop(e) {
     e?.stopPropagation?.();
+    if (!this._ui.showVolume) { this._ui.showQueue = false; this._ui.showBrowser = false; } // 打开音量时关闭队列/媒体库面板(互斥)
     this._ui.showVolume = !this._ui.showVolume;
     this.requestUpdate();
   }
@@ -499,11 +500,15 @@ class MusicFlowRemoteCard extends LitElement {
       this.requestUpdate();
       return;
     }
-    // 媒体库下拉打开时,点面板以外(上半部分/控件/进度条等)即收起,与音量面板一致。
-    if (this._ui.showBrowser) {
+    // 队列/媒体库面板(无感全屏覆盖)打开时:点列表项/按钮/面包屑/搜索框不收起,点面板空白处收起。
+    if (this._ui.showQueue || this._ui.showBrowser) {
+      const keep = ["qitem", "sitem", "bitem", "mini", "bplay", "crumb",
+        "br-search", "search-input", "cat", "pg-btn", "pg-input", "pg-jump"];
       for (const n of path) {
-        if (n?.classList?.contains?.("browser")) return; // 点在媒体库面板内不收起
+        const cls = n && n.classList;
+        if (cls && Array.from(cls).some((c) => keep.includes(c))) return; // 点在交互元素上不收起
       }
+      this._ui.showQueue = false;
       this._ui.showBrowser = false;
       this.requestUpdate();
       return;
@@ -893,7 +898,7 @@ class MusicFlowRemoteCard extends LitElement {
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"}" @click=${this._onWrapClick}>
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""}" @click=${this._onWrapClick}>
           ${this._renderOutputs()}
 
           <div class="now">
@@ -906,8 +911,9 @@ class MusicFlowRemoteCard extends LitElement {
               : html`<div class="nocover">♪</div>`}</div>
           </div>
 
-          <!-- 下半区(控件行 + 进度条 + 队列)整体作为音量面板的定位容器。
-               volmode 时下面几块用 visibility:hidden 原地隐身(保留占位,卡片高度零跳变)。 -->
+          <!-- 下半区(控件行 + 进度条)作为音量面板的定位容器。
+               volmode 时下面几块用 visibility:hidden 原地隐身(保留占位,卡片高度零跳变)。
+               队列/媒体库面板已移出到 .wrap 级(.panelmode 时覆盖整张卡)。 -->
           <div class="lower ${u.showVolume ? "volmode" : ""}">
             <div class="controls">
               <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
@@ -927,10 +933,11 @@ class MusicFlowRemoteCard extends LitElement {
               <span class="t">${this._fmtTime(u.duration)}</span>
             </div>
 
-            ${u.showQueue ? this._renderQueue() : ""}
-            ${u.showBrowser ? this._renderMediaBrowser() : ""}
             ${u.showVolume ? this._renderVolumeOverlay() : ""}
           </div>
+
+          ${u.showQueue ? this._renderQueue() : ""}
+          ${u.showBrowser ? this._renderMediaBrowser() : ""}
         </div>
       </ha-card>
     `;
@@ -975,6 +982,7 @@ class MusicFlowRemoteCard extends LitElement {
         <div class="panel-head">
           <span>队列 (${q.length})</span>
           <button class="mini" @click=${this._clearQueue}>清空</button>
+          <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showQueue = false; this._ui.showBrowser = false; this.requestUpdate(); }}>✕</button>
         </div>
         ${q.length === 0 ? html`<div class="empty">队列为空</div>` : html`
           <div class="qlist">
@@ -1299,6 +1307,7 @@ class MusicFlowRemoteCard extends LitElement {
     const showSearch = ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
     return html`
       <div class="panel browser">
+        <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showBrowser = false; this._ui.showQueue = false; this.requestUpdate(); }}>✕</button>
         <div class="br-crumbs">
           ${stack.map((lv, i) => html`
             <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
@@ -1478,8 +1487,7 @@ class MusicFlowRemoteCard extends LitElement {
          露出的就是卡片自身那层模糊封面背景,与上半部分同源,不可能有色差/边界。
          队列展开时那块列表会留一片空白(刻意为之:保高度不抖)。 */
       .lower.volmode > .controls,
-      .lower.volmode > .progress-row,
-      .lower.volmode > .panel { visibility: hidden; }
+      .lower.volmode > .progress-row { visibility: hidden; }
       /* 音量面板层本身完全透明,只负责承载音量行 + 接管「点外部关闭」。
          inset:0 与 .lower 严格对齐,不再需要负 inset/padding 那套魔数补偿,
          音量条左右端与下方 seek 天然重合。 */
@@ -1502,11 +1510,19 @@ class MusicFlowRemoteCard extends LitElement {
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
-      .panel { background: var(--panel-bg); border-radius: 12px; padding: 10px; }
+      /* 面板无感全屏覆盖:打开队列/媒体库时,主视图(.outputs/.now/.lower)原地隐身(保留占位→卡高恒定),
+         面板透明铺满整张卡(inset:0),露出卡片自身模糊封面背景,与卡片同源、无边框。 */
+      .wrap.panelmode > .outputs { visibility: hidden; }
+      .wrap.panelmode > .now { visibility: hidden; }
+      .wrap.panelmode > .lower > .controls,
+      .wrap.panelmode > .lower > .progress-row { visibility: hidden; }
+      .panel { position: absolute; inset: 0; z-index: 5; background: transparent; border: none; border-radius: 0;
+        padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+      .panel-head .close { margin-left: auto; }
       .empty { color: var(--fg-faint); font-size: 13px; padding: 10px 0; text-align: center; }
       /* 歌词展开面板已移除,当前行常驻显示在 .artist(this._ui.currentLyric) */
-      .qlist, .slist { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
+      .qlist, .slist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
       .qlist::-webkit-scrollbar, .slist::-webkit-scrollbar,
       .br-list::-webkit-scrollbar { width: 4px; }
       .qlist::-webkit-scrollbar-thumb, .slist::-webkit-scrollbar-thumb,
@@ -1536,15 +1552,16 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.2s, box-shadow 0.2s; }
       .search-input::placeholder { color: rgba(255, 255, 255, 0.35); }
       .search-input:focus { border-color: #f62c55; box-shadow: 0 0 0 1px #f62c55; }
-      .browser { background: var(--panel-bg); border-radius: 12px; padding: 10px; width: 100%; display: flex; flex-direction: column; }
+      .browser { width: 100%; height: 100%; display: flex; flex-direction: column; }
+      .browser .close { position: absolute; top: 8px; right: 8px; z-index: 7; }
       .br-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 15px; font-weight: 600;
-        color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
+        color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; padding-right: 30px; }
       .crumb { cursor: pointer; transition: color 0.15s; }
       .crumb:hover { color: rgba(255, 255, 255, 0.85); }
       .crumb.cur { color: #f62c55; font-weight: 600; }
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
-      .br-list { overflow-y: auto; max-height: 240px; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
+      .br-list { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
       .br-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px;
         margin-top: 8px; border-top: 1px solid var(--line-soft); padding: 10px 4px 4px; }
       .br-pager .pg-total { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-right: 6px; }
