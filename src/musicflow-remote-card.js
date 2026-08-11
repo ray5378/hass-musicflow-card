@@ -45,10 +45,23 @@ const MF_ICONS = {
   check: '<polyline points="20 6 9 17 4 12"/>',
   queue: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
   mediaLibrary: '<path d="M20,2H8A2,2 0 0,0 6,4V16A2,2 0 0,0 8,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H8V4H20M12.5,15A2.5,2.5 0 0,0 15,12.5V7H18V5H14V10.5C13.58,10.19 13.07,10 12.5,10A2.5,2.5 0 0,0 10,12.5A2.5,2.5 0 0,0 12.5,15M4,6H2V20A2,2 0 0,0 4,22H18V20H4"/>',
+  // 媒体库分类图标(lucide,与主项目前端 lucide-vue-next 完全同款路径):
+  // 音乐→Headphones / 专辑→Disc3 / 艺术家→User / 流派→Library / 歌单→List / 我喜欢→Heart(filled)
+  headphones: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+  disc3: '<circle cx="12" cy="12" r="10"/><path d="M6 12c0-1.7.7-3.2 1.8-4.2"/><circle cx="12" cy="12" r="2"/><path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  list: '<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>',
+  library: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
+  heart2: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
 function err(...args) { console.error("[MF card]", ...args); }
+
+// 媒体库根层级分类图标映射(与主项目前端同款):歌单→List / 专辑→Disc3 / 音乐→Headphones
+// 艺术家→User / 流派→Library / 我喜欢的音乐→Heart(实心红)
+const CAT_ICONS = { playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library", starred: "heart2" };
+const CAT_HEART = new Set(["starred"]); // 心形分类:filled + 实心红
 
 class MusicFlowRemoteCard extends LitElement {
   static get properties() {
@@ -1502,7 +1515,12 @@ class MusicFlowRemoteCard extends LitElement {
         <div class="br-list" @scroll=${this._onBrScroll}>
           ${isRoot ? html`
             <div class="cat-grid">
-              ${(level.items || []).map((c) => html`<button class="cat" @click=${() => this._browserItemClick(c)}>${c.name}</button>`)}
+              ${(level.items || []).map((c) => html`
+                <button class="cat" @click=${() => this._browserItemClick(c)}>
+                  <span class="cat-ic ${CAT_HEART.has(c.cat) ? "heart" : ""}">${this._icon(CAT_ICONS[c.cat] || "list", 42, CAT_HEART.has(c.cat))}</span>
+                  <span class="cat-name">${c.name}</span>
+                </button>
+              `)}
             </div>
           ` : (level.loading && !level.total ? html`<div class="empty">加载中…</div>` : html`
             ${!level.total && !level.loading ? html`<div class="empty">无内容</div>` : ""}
@@ -1732,11 +1750,17 @@ class MusicFlowRemoteCard extends LitElement {
       .bitem.vs-skel { background: var(--panel-bg); border-radius: 8px; height: 38px; }
       .vs-more { position: sticky; bottom: 0; text-align: center; font-size: 12px; color: var(--fg-faint);
         padding: 5px; background: var(--panel-bg); border-radius: 8px; margin-top: 2px; }
-      .cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0; }
-      .cat { border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.9);
-        border-radius: 12px; padding: 20px 8px; font-size: 14px; cursor: pointer;
-        transition: background 0.2s, box-shadow 0.2s, transform 0.12s; }
-      .cat:hover { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 2px rgba(246, 44, 85, 0.42); }
+      /* 媒体库根层级分类:图标在上、文字在下(类似 Windows 文件夹中等图标视图)。
+         网格 auto-fill 自适应列数(正常卡宽 3 列,窄卡自动降 2 列);悬停统一 scale+中性阴影。 */
+      .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; padding: 8px 0; }
+      .cat { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px;
+        border: 1px solid var(--line); background: var(--panel-bg); color: var(--fg); border-radius: 12px;
+        cursor: pointer; min-width: 0;
+        transition: background 0.2s, box-shadow 0.18s ease, transform 0.18s ease; }
+      .cat .cat-ic { display: flex; align-items: center; justify-content: center; color: var(--ctl); }
+      .cat .cat-ic.heart { color: #f62c55; }
+      .cat .cat-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+      .cat:hover { background: var(--ctl-hover); transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .cat:active { transform: scale(0.97); }
       .bitem { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; transition: background 0.15s; }
       .bitem:hover { background: var(--ctl-hover); }
