@@ -431,7 +431,15 @@ export class BackendClient {
   clearQueue(peerId) {
     return this.rest(this.peerPath(peerId, "/queue"), { method: "DELETE" });
   }
-  getQueue(peerId) { return this.rest(this.peerPath(peerId, "/queue")); }
+  getQueue(peerId, { offset = 0, size = 0 } = {}) {
+    const qs = [];
+    if (offset) qs.push(`offset=${offset}`);
+    if (size) qs.push(`size=${size}`);
+    return this.rest(this.peerPath(peerId, `/queue${qs.length ? "?" + qs.join("&") : ""}`));
+  }
+  reorderQueue(peerId, from, to) {
+    return this.rest(this.peerPath(peerId, "/queue/reorder"), { method: "POST", body: { from, to } });
+  }
   getStatus(peerId) { return this.rest(this.peerPath(peerId, "/status")); }
   getPeers() { return this.rest("/api/v1/peers"); }
 

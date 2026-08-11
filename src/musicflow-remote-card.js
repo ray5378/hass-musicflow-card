@@ -72,7 +72,13 @@ class MusicFlowRemoteCard extends LitElement {
       serverOk: false,
       peers: [],
       currentPeerId: "",
-      queue: [],
+      queue: { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false },
+      // 队列虚拟滚动状态:稀疏缓存(Map idx→item)+ 已加载/加载中块集合 + 渲染窗口
+      qCache: new Map(),
+      qLoaded: new Set(),
+      qLoading: new Set(),
+      qWinStart: 0,
+      qWinEnd: -1,
       currentIndex: -1,
       isPlaying: false,
       currentTime: 0,
@@ -257,19 +263,33 @@ class MusicFlowRemoteCard extends LitElement {
 
   _applyQueue(queue) {
     if (!queue) return;
-    if (Array.isArray(queue.items)) {
-      this._ui.queue = queue.items.map((it) => ({
-        songId: it.songId,
-        title: it.title || "未知",
-        artist: it.artist || "",
-        album: it.album || "",
-        coverArt: it.coverArt,
-        duration: it.duration || 0,
-      }));
-    }
+    const items = Array.isArray(queue.items) ? queue.items : null;
+    const prev = this._ui.queue || {};
+    const total = typeof queue.total === "number" ? queue.total : (items ? items.length : (prev.total || 0));
+    this._ui.queue = {
+      total,
+      currentIndex: typeof queue.currentIndex === "number" ? queue.currentIndex : (prev.currentIndex ?? -1),
+      playMode: typeof queue.playMode === "string" ? queue.playMode : (prev.playMode || "shuffle"),
+      isActive: queue.isActive ?? prev.isActive,
+      ended: queue.ended ?? prev.ended,
+    };
+    // 镜像字段:旧代码仍读 _ui.currentIndex / _ui.playMode(切歌高亮、模式切换等)。
     if (typeof queue.currentIndex === "number") this._ui.currentIndex = queue.currentIndex;
     if (typeof queue.playMode === "string") this._ui.playMode = queue.playMode;
-    this._syncCurrentSong();
+    if (items && items.length >= (total || 0)) {
+      // 仅"全量 items"(len===total,小队列 WS 整推或旧后端全量返回)才视为权威重建缓存;
+      // 分块/部分 items 不覆盖窗口缓存,避免 2s 轮询把滚动中已加载的块清空。
+      this._ui.qCache = new Map(items.map((it, i) => [i, it]));
+      this._ui.qLoaded = new Set([0]);
+      this._ui.qLoading = new Set();
+      this._ui.qWinStart = 0;
+      this._ui.qWinEnd = -1;
+    } else if (total !== (prev.total ?? 0)) {
+      // 摘要且 total 变化(增删/清空/换队列):内容变了,清缓存重拉当前窗口。
+      this._qReset();
+    }
+    if (this._ui.showQueue) this._qEnsureLoaded();
+    this.requestUpdate();
   }
 
   _applyDeviceState(deviceId, state) {
@@ -325,29 +345,6 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  _syncCurrentSong() {
-    const idx = this._ui.currentIndex;
-    const q = this._ui.queue;
-    if (idx >= 0 && idx < q.length) {
-      const it = q[idx];
-      if (!this._ui.song || this._ui.song.songId !== it.songId) {
-        this._ui.song = {
-          songId: it.songId,
-          title: it.title,
-          artist: it.artist,
-          album: it.album,
-          coverArt: it.coverArt,
-          duration: it.duration,
-        };
-        if (it.songId) {
-          this._client.scrobble?.(it.songId).catch((e) => err("scrobble failed", e));
-          this._loadLyrics(it.songId);
-          this._loadLiked(it.songId);
-        }
-      }
-    }
-  }
-
   _refreshPeers() {
     this._client.getPeers().then((res) => {
       const peers = this._filterDlna(res?.peers || []);
@@ -361,7 +358,7 @@ class MusicFlowRemoteCard extends LitElement {
     try {
       const [status, queue] = await Promise.all([
         this._client.getStatus(pid),
-        this._client.getQueue(pid),
+        this._client.getQueue(pid, { size: CHUNK }), // 分块:只同步元数据,队列内容按需窗口化拉取
       ]);
       this._applyStatus(status);
       this._applyQueue(queue);
@@ -374,8 +371,9 @@ class MusicFlowRemoteCard extends LitElement {
     if (peerId === this._ui.currentPeerId) return;
     this._ui.currentPeerId = peerId;
     this._stopTracking();
-    this._ui.queue = [];
+    this._ui.queue = { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false };
     this._ui.currentIndex = -1;
+    this._qReset();
     this._ui.song = null;
     this._ui.lyrics = [];
     this._ui.currentLyric = "";
@@ -396,7 +394,7 @@ class MusicFlowRemoteCard extends LitElement {
       try {
         const [status, queue] = await Promise.all([
           this._client.getStatus(pid),
-          this._client.getQueue(pid),
+          this._client.getQueue(pid, { size: CHUNK }), // 分块:只同步 total/currentIndex,不全量拉
         ]);
         this._applyStatus(status);
         this._applyQueue(queue);
@@ -688,13 +686,16 @@ class MusicFlowRemoteCard extends LitElement {
   _jumpTo(index) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    if (!this._ui.queue[index]) return;
+    const total = (this._ui.queue && this._ui.queue.total) || 0;
+    if (index < 0 || index >= total) return;
     this._client.jumpToIndex(pid, index)
       .catch((e) => {
-        // 后端未升级:退化成完整队列 + 目标索引重放
+        // 后端未升级:退化成完整队列 + 目标索引重放(REST 拉全量,不再依赖本地全量数组)
         err("jumpToIndex unavailable, fallback to playQueue", e);
-        const items = this._ui.queue.map((it) => childToQueueItem(it));
-        this._client.playQueue(pid, items, index).catch((e2) => err("jumpTo failed", e2));
+        this._client.getQueue(pid).then((q) => {
+          const items = (q && q.items) || [];
+          this._client.playQueue(pid, items, index).catch((e2) => err("jumpTo failed", e2));
+        }).catch((e2) => err("jumpTo fallback getQueue failed", e2));
       });
   }
 
@@ -726,8 +727,9 @@ class MusicFlowRemoteCard extends LitElement {
         } catch (e2) {
           // 后端未升级(无 /queue/jump):退化成"重建队列=原队列+该曲,并跳到该曲"——保留原队列,绝不清空
           err("jumpToIndex unavailable, fallback preserves queue", e2);
-          const rebuilt = [...this._ui.queue.map((it) => childToQueueItem(it)), item];
-          await this._client.playQueue(pid, rebuilt, this._ui.queue.length);
+          const q2 = await this._client.getQueue(pid);
+          const rebuilt = [...((q2 && q2.items) || []), item];
+          await this._client.playQueue(pid, rebuilt, (q2 && q2.items) ? q2.items.length : 0);
         }
       }
     } catch (e) {
@@ -735,24 +737,37 @@ class MusicFlowRemoteCard extends LitElement {
     }
   }
 
-  _reorder(from, to) {
+  // 拖拽排序:优先走后端 reorder 端点(不整队列重建);本地缓存先做即时反馈。
+  async _qReorder(from, to) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    const items = this._ui.queue.slice();
-    if (from < 0 || from >= items.length || to < 0 || to >= items.length) return;
-    const [moved] = items.splice(from, 1);
-    items.splice(to, 0, moved);
-    const playingId = this._ui.song?.songId;
-    let newIndex = items.findIndex((it) => it.songId === playingId);
-    if (newIndex < 0) newIndex = Math.max(0, Math.min(to, items.length - 1));
-    this._ui.queue = items;
-    this._ui.currentIndex = newIndex;
-    // 先按新顺序重建队列(startIndex 任意,shuffle 下会被随机化,故随即 jump 修正)
-    this._client.playQueue(pid, items.map(childToQueueItem), 0)
-      .catch((e) => err("reorder failed", e));
-    this._client.jumpToIndex(pid, newIndex)
-      .catch((e) => err("reorder jump failed", e));
+    const meta = this._ui.queue || { total: 0 };
+    const total = meta.total || 0;
+    if (from < 0 || from >= total || to < 0 || to >= total || from === to) return;
+    // 本地先移动缓存中已加载的行,拖拽即时反馈;currentIndex 跟随被移动的曲目。
+    const cache = this._ui.qCache || new Map();
+    const ordered = [];
+    for (let i = 0; i < total; i++) ordered.push(cache.get(i));
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+    const newCache = new Map();
+    ordered.forEach((it, i) => { if (it) newCache.set(i, it); });
+    this._ui.qCache = newCache;
+    if (typeof meta.currentIndex === "number") {
+      const cur = cache.get(meta.currentIndex);
+      if (cur) {
+        let ni = -1;
+        newCache.forEach((v, i) => { if (v === cur) ni = i; });
+        if (ni >= 0) { this._ui.queue = { ...meta, currentIndex: ni }; this._ui.currentIndex = ni; }
+      }
+    }
     this.requestUpdate();
+    try {
+      await this._client.reorderQueue(pid, from, to);
+    } catch (e) {
+      err("reorder failed", e);
+      this._qReset(); // 失败回滚:清缓存等下一次 WS/重拉
+    }
   }
 
   // ============ Rendering ============
@@ -878,6 +893,9 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.showBrowser) {
       this.updateComplete.then(() => this._observeBrowserCovers()).catch(() => {});
     }
+    if (this._ui.showQueue) {
+      this.updateComplete.then(() => this._qEnsureLoaded()).catch(() => {});
+    }
     // 播放器清晰封面 + 背景融合封面都走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
     const pc = this.shadowRoot?.querySelector(".nowcover");
     if (pc) this._loadCoverInto(pc);
@@ -981,33 +999,143 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _renderQueue() {
-    const q = this._ui.queue || [];
+    const q = this._ui.queue || { total: 0, currentIndex: -1 };
+    const total = q.total || 0;
+    const cur = typeof q.currentIndex === "number" ? q.currentIndex : (this._ui.currentIndex ?? -1);
+    // 虚拟滚动窗口:只渲染 [qWinStart, qWinEnd](行高 ROW_STEP 与媒体库一致)。
+    const win = [];
+    if (total > 0 && (this._ui.qWinStart ?? -1) >= 0) {
+      const s = Math.max(0, this._ui.qWinStart);
+      const e = Math.min(total - 1, this._ui.qWinEnd ?? s);
+      for (let i = s; i <= e; i++) win.push(i);
+    }
     return html`
       <div class="panel queue">
         <div class="panel-head">
-          <span>队列 (${q.length})</span>
+          <span>队列 (${total})</span>
           <button class="mini" @click=${this._clearQueue}>清空</button>
           <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showQueue = false; this._ui.showBrowser = false; this.requestUpdate(); }}>✕</button>
         </div>
-        ${q.length === 0 ? html`<div class="empty">队列为空</div>` : html`
-          <div class="qlist">
-            ${q.map((it, i) => html`
-              <div class="qitem ${i === this._ui.currentIndex ? "cur" : ""}"
-                draggable="true"
-                @dragstart=${(e) => { e.dataTransfer.setData("text/plain", String(i)); }}
-                @dragover=${(e) => e.preventDefault()}
-                @drop=${(e) => { e.preventDefault(); const from = Number(e.dataTransfer.getData("text/plain")); this._reorder(from, i); }}>
-                <span class="idx">${i + 1}</span>
-                <span class="qt">${it.title}</span>
-                <span class="qa">${it.artist || ""}</span>
-                <button class="mini" title="跳播" @click=${() => this._jumpTo(i)}>▶</button>
-                <button class="mini" title="移除" @click=${() => this._removeFromQueue(i)}>✕</button>
-              </div>
-            `)}
+        ${total === 0 ? html`<div class="empty">队列为空</div>` : html`
+          <div class="qlist" @scroll=${this._qOnScroll}>
+            <div class="vs-spacer" style="height:${total * ROW_STEP}px">
+              ${win.map((i) => this._qRow(i, cur))}
+            </div>
+            ${this._qMoreHint()}
           </div>
         `}
       </div>
     `;
+  }
+
+  // 队列虚拟滚动行:缓存未到渲染骨架占位;当前行高亮用绝对下标(WS 直接给,无需等数据)。
+  _qRow(i, cur) {
+    const it = this._ui.qCache.get(i);
+    return html`
+      <div class="vs-row" style="top:${i * ROW_STEP}px">
+        ${it ? html`
+          <div class="qitem ${i === cur ? "cur" : ""}"
+            draggable="true"
+            @dragstart=${(e) => { e.dataTransfer.setData("text/plain", String(i)); }}
+            @dragover=${(e) => e.preventDefault()}
+            @drop=${(e) => { e.preventDefault(); const from = Number(e.dataTransfer.getData("text/plain")); this._qReorder(from, i); }}>
+            <span class="idx">${i + 1}</span>
+            <span class="qt">${it.title}</span>
+            <span class="qa">${it.artist || ""}</span>
+            <button class="mini" title="跳播" @click=${() => this._jumpTo(i)}>▶</button>
+            <button class="mini" title="移除" @click=${() => this._removeFromQueue(i)}>✕</button>
+          </div>
+        ` : html`<div class="qitem vs-skel"></div>`}
+      </div>`;
+  }
+
+  // 底部「加载中」提示(队列分块预取在途时显示)。
+  _qMoreHint() {
+    if (!this._ui.qLoading || this._ui.qLoading.size === 0) return html``;
+    return html`<div class="vs-more">加载中…</div>`;
+  }
+
+  // ============ 队列虚拟滚动 + 窗口化预取 ============
+  // 与媒体库同一套哲学:WS 只提供元数据(total/currentIndex/playMode,大队列摘要化),
+  // items 按 CHUNK 从 /v1/peers/:peerId/queue?offset=&size= 分块拉取,只渲染视口窗口。
+  _qReset() {
+    this._ui.qCache = new Map();
+    this._ui.qLoaded = new Set();
+    this._ui.qLoading = new Set();
+    this._ui.qWinStart = 0;
+    this._ui.qWinEnd = -1;
+    if (this.shadowRoot) {
+      const el = this.shadowRoot.querySelector(".qlist");
+      if (el) el.scrollTop = 0;
+    }
+  }
+
+  _qOnScroll(e) {
+    const el = e.currentTarget;
+    if (this._vsRaf) cancelAnimationFrame(this._vsRaf);
+    this._vsRaf = requestAnimationFrame(() => {
+      this._vsRaf = 0;
+      this._ui.qWinStart = Math.max(0, Math.floor(el.scrollTop / ROW_STEP) - VS_OVERSCAN);
+      this._ui.qWinEnd = Math.floor((el.scrollTop + el.clientHeight) / ROW_STEP) + VS_OVERSCAN;
+      this._qEnsureLoaded();
+      this.requestUpdate();
+    });
+  }
+
+  // 首次打开时初始化顶部窗口;之后保证 [窗口±overscan] 覆盖的块已加载。
+  _qEnsureLoaded() {
+    if (!this._ui.showQueue) return;
+    const meta = this._ui.queue || { total: 0 };
+    const total = meta.total || 0;
+    if (total <= 0) return;
+    if (!this._ui.qLoaded) this._qReset();
+    if ((this._ui.qWinEnd ?? -1) < 0) {
+      const el = this.shadowRoot?.querySelector(".qlist");
+      const vh = el ? el.clientHeight : 240;
+      this._ui.qWinStart = 0;
+      this._ui.qWinEnd = Math.floor(vh / ROW_STEP) + VS_OVERSCAN;
+    }
+    // currentIndex 所在块优先(当前行高亮不依赖数据,但行内容要尽快可见)
+    const ci = typeof meta.currentIndex === "number" && meta.currentIndex >= 0 ? meta.currentIndex : -1;
+    const start = Math.max(0, (this._ui.qWinStart || 0) - VS_OVERSCAN);
+    const end = Math.max(0, (this._ui.qWinEnd || 0) + VS_OVERSCAN);
+    const need = [];
+    if (ci >= 0 && ci < total) need.push(ci);
+    for (let i = start; i <= end; i++) need.push(i);
+    const seen = new Set();
+    for (const i of need) {
+      const ci2 = Math.floor(i / CHUNK);
+      if (seen.has(ci2) || this._ui.qLoaded.has(ci2) || this._ui.qLoading.has(ci2)) continue;
+      seen.add(ci2);
+      if (this._vsInflight >= VS_CONCURRENCY) continue;
+      this._ui.qLoading.add(ci2);
+      this._vsInflight++;
+      this._qFetchChunk(ci2).finally(() => {
+        this._vsInflight--;
+        this._ui.qLoaded.add(ci2);
+        this._ui.qLoading.delete(ci2);
+        this.requestUpdate();
+        this._qEnsureLoaded();
+      });
+    }
+  }
+
+  // 拉取一块队列写入稀疏缓存;total 恒以服务端为准(变更防御)。
+  async _qFetchChunk(ci) {
+    const pid = this._ui.currentPeerId;
+    if (!pid) return;
+    const offset = ci * CHUNK;
+    try {
+      const res = await this._client.getQueue(pid, { offset, size: CHUNK });
+      const items = (res && res.items) || [];
+      const total = typeof res?.total === "number" ? res.total : undefined;
+      if (typeof total === "number" && total >= 0) {
+        this._ui.queue = { ...(this._ui.queue || {}), total };
+      }
+      items.forEach((it, j) => { if (it) this._ui.qCache.set(offset + j, it); });
+    } catch (e) {
+      err("queue chunk load failed", e);
+    }
   }
 
   // ============ Media library browser ============
@@ -1563,6 +1691,9 @@ class MusicFlowRemoteCard extends LitElement {
       .qlist::-webkit-scrollbar-thumb:hover, .slist::-webkit-scrollbar-thumb:hover,
       .br-list::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
       .qitem, .sitem { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; transition: background 0.15s; }
+      /* 队列虚拟滚动:行高固定 50px(与媒体库 ROW_STEP 一致,绝对定位按它铺排) */
+      .qlist .qitem { height: 50px; box-sizing: border-box; }
+      .qitem.vs-skel { background: var(--panel-bg); }
       .qitem:hover, .sitem:hover { background: rgba(255, 255, 255, 0.06); }
       .qitem.cur { background: rgba(246, 44, 85, 0.16); }
       .qitem .idx { width: 18px; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
