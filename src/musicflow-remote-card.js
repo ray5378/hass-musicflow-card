@@ -92,7 +92,7 @@ class MusicFlowRemoteCard extends LitElement {
       qLoading: new Set(),
       qWinStart: 0,
       qWinEnd: -1,
-      catIconSize: 34, // 媒体库根层级分类图标尺寸(按可用高度自适应,给 hover scale(1.06) 留余量)
+      catIconSize: 42, // 媒体库根层级分类图标尺寸(按可用高度自适应;卡片宽由容器查询保证 hover 不超)
       currentIndex: -1,
       isPlaying: false,
       currentTime: 0,
@@ -913,8 +913,8 @@ class MusicFlowRemoteCard extends LitElement {
           const el = this.shadowRoot?.querySelector(".br-list");
           if (!el) return;
           // 固定开销:每项 gap6+文字12+上下 padding22=40,2行+行距10+grid padding16=106。
-          // 上限 34 / 下限 18 给 hover scale(1.06) 留余量,放大后视觉尺寸不顶到容器边。
-          const size = Math.max(18, Math.min(34, Math.floor((el.clientHeight - 106) / 2)));
+          // 上限 42:卡片宽已由容器查询保证 hover 放大不超列宽,图标不再受此约束。
+          const size = Math.max(20, Math.min(42, Math.floor((el.clientHeight - 106) / 2)));
           if (size !== this._ui.catIconSize) { this._ui.catIconSize = size; this.requestUpdate(); }
         }).catch(() => {});
       }
@@ -1769,14 +1769,16 @@ class MusicFlowRemoteCard extends LitElement {
       /* 媒体库根层级分类:图标在上、文字在下(类似 Windows 文件夹中等图标视图)。
          固定 3 列(6 分类 = 3x2),图标尺寸按可用高度 JS 自适应(见 _catIconSize),
          网格区域禁止滚动(overflow hidden),任何情况不出现上下/左右滚动条。
-         关键:卡片不 stretch 占满列宽(justify-items:center + width:fit-content),
-         否则 hover scale(1.06) 放大后必然左右各溢出 3% 列宽顶到容器边缘。
-         放大后不超列宽条件:S+10 ≤ 列宽/1.06(S 为图标尺寸,10=padding8+边框2)。 */
-      .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 8px 0; justify-items: center; }
+         卡片宽度用容器查询(cqi)自动算 = 列宽/1.06 − 10,保证 hover scale(1.06) 放大后
+         不超列宽(余量 ~5px);justify-items:center 使卡片居中,不 stretch 占满列宽。 */
+      .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 8px 0;
+        justify-items: center; container-type: inline-size; }
       .br-list.root-grid { overflow: hidden; }
       .cat { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px;
         border: 1px solid var(--line); background: var(--panel-bg); color: var(--fg); border-radius: 12px;
-        cursor: pointer; min-width: 0; width: fit-content; max-width: 100%;
+        cursor: pointer; min-width: 0;
+        /* 卡片宽 = 列宽/1.06 − 10(列宽=(100cqi−20)/3):hover 放大后不超列宽,且卡片饱满不缩成竖条 */
+        width: calc((100cqi - 20px) / 3.18 - 10px); max-width: 100%; box-sizing: border-box;
         transition: background 0.2s, box-shadow 0.18s ease, transform 0.18s ease; }
       .cat .cat-ic { display: flex; align-items: center; justify-content: center; color: var(--ctl); }
       .cat .cat-ic.heart { color: #f62c55; }
