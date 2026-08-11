@@ -1229,12 +1229,7 @@ class MusicFlowRemoteCard extends LitElement {
     const vh = list ? list.clientHeight : 240;
     level.vWinStart = 0;
     level.vWinEnd = Math.floor(vh / ROW_STEP) + VS_OVERSCAN;
-    try {
-      await this._vsFetchChunk(level, 0);
-      level.vLoaded.add(0);
-    } catch (e) {
-      err("browser load failed", e);
-    }
+    await this._vsFetchChunk(level, 0).catch((e) => err("browser load failed", e));
     level.loading = false;
     this.requestUpdate();
     this._vsEnsureLoaded(level);
@@ -1247,6 +1242,7 @@ class MusicFlowRemoteCard extends LitElement {
     level.total = 0;
     level.vWinStart = 0;
     level.vWinEnd = -1;
+    level.vSeq = (level.vSeq || 0) + 1; // 防乱序令牌:在途的旧分块响应将被丢弃
     if (this.shadowRoot) {
       const el = this.shadowRoot.querySelector(".br-list");
       if (el) el.scrollTop = 0;
@@ -1282,7 +1278,6 @@ class MusicFlowRemoteCard extends LitElement {
       this._vsInflight++;
       this._vsFetchChunk(level, ci).finally(() => {
         this._vsInflight--;
-        level.vLoaded.add(ci);
         level.vLoading.delete(ci);
         this.requestUpdate();
         this._vsEnsureLoaded(level);
@@ -1291,12 +1286,16 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 拉取一块(offset=ci*CHUNK,size=CHUNK)写入稀疏缓存;total 恒以服务端为准(变更防御)。
+  // vSeq 令牌:实时搜索快速输入时旧请求晚返回,seq 不匹配即丢弃(不写缓存/不改 total/不标 loaded)。
   async _vsFetchChunk(level, ci) {
+    const seq = level.vSeq || 0;
     const offset = ci * CHUNK;
     try {
       const { items, total } = await this._fetchBrowseRange(level, offset, CHUNK);
+      if (seq !== (level.vSeq || 0)) return; // 已发起新查询,丢弃过期响应
       if (typeof total === "number" && total >= 0) level.total = total;
       items.forEach((it, j) => { if (it) level.vCache.set(offset + j, it); });
+      level.vLoaded.add(ci);
     } catch (e) {
       err("browser chunk load failed", e);
     }
@@ -1384,6 +1383,18 @@ class MusicFlowRemoteCard extends LitElement {
   _browserPopTo(index) {
     while (this._ui.browserStack.length > index + 1) this._ui.browserStack.pop();
     this.requestUpdate();
+  }
+
+  // 实时搜索:输入停顿 300ms 自动触发(防抖,避免每键一次请求)。
+  // 中文输入法组字期间(compositionstart..end)暂停,只有选字上屏后才搜,避免搜到拼音。
+  // 清空输入框立即回全库(不等待防抖)。防乱序由 _vsReset 的 vSeq 令牌保证。
+  _browserSearchInput() {
+    clearTimeout(this._searchTimer);
+    if (this._searchComposing) return;
+    const level = this._ui.browserStack[this._ui.browserStack.length - 1];
+    if (!level || level.type === "root") return;
+    const q = (level.query || "").trim();
+    this._searchTimer = setTimeout(() => this._browserSearch(), q ? 300 : 0);
   }
 
   _browserSearch() {
@@ -1520,9 +1531,10 @@ class MusicFlowRemoteCard extends LitElement {
         ${showSearch ? html`
           <div class="br-search">
             <input class="search-input" placeholder="搜索…" .value=${level.query}
-              @input=${(e) => { level.query = e.target.value; }}
+              @input=${(e) => { level.query = e.target.value; this._browserSearchInput(); }}
+              @compositionstart=${(e) => { this._searchComposing = true; }}
+              @compositionend=${(e) => { this._searchComposing = false; this._browserSearchInput(); }}
               @keydown=${(e) => { if (e.key === "Enter") this._browserSearch(); }} />
-            <button class="mini" @click=${this._browserSearch}>搜索</button>
           </div>
         ` : ""}
         <div class="br-list ${isRoot ? "root-grid" : ""}" @scroll=${this._onBrScroll}>
