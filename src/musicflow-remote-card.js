@@ -1644,8 +1644,10 @@ class MusicFlowRemoteCard extends LitElement {
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影 */
       .out:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 激活态跟随封面底色:深封面=白块黑字、浅封面=黑块白字(不再固定红块,与卡片融合) */
-      .out.active { background: var(--fg); border-color: var(--fg); color: var(--fg-invert); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+      /* 激活态与播放控件同语言:半透明一体感 + 周边亮框(无实底色块),颜色随封面底色。
+         默认态:半透明底 + 细框;激活态:亮框(var(--fg)) + 亮文字加粗。 */
+      .out.active { background: var(--panel-bg); border-color: var(--fg); color: var(--fg); font-weight: 600;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
