@@ -1659,12 +1659,13 @@ class MusicFlowRemoteCard extends LitElement {
       .cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.18s ease; }
       .cover:hover img { transform: scale(1.04); }
       .nocover { font-size: 30px; color: rgba(255, 255, 255, 0.3); }
-      .meta { flex: 1; min-width: 0; }
+      .meta { flex: 1; min-width: 0; position: relative; min-height: 104px; /* 4 行歌词版的高度(标题22+间距2+80),保证加 1 行后卡片高度不变 */ }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       /* 歌词滚动:视口固定 5 行(5 x 20px = 100px),当前行恒在第二行;上下边缘渐隐做出滚动纵深。
-         .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致,
-         .lyricbox 的 height 必须等于 LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
-      .lyricbox { height: 100px; overflow: hidden; margin-top: 2px; position: relative;
+         歌词框绝对定位在标题下方(top:24 = 标题行高+间距),不撑高卡片;向下延伸到播放控件
+         区域,作为控件的背景(控件在 DOM 更后,盖住歌词)。.lyricbox-line 的 height/line-height
+         必须与 JS 常量 LYRIC_LINE_H 一致,.lyricbox 的 height = LYRIC_VIEW_LINES x LYRIC_LINE_H。 */
+      .lyricbox { position: absolute; left: 0; right: 0; top: 24px; height: 100px; overflow: hidden; z-index: 0;
         -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%);
         mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%); }
       .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
