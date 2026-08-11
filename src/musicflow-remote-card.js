@@ -939,7 +939,7 @@ class MusicFlowRemoteCard extends LitElement {
                队列/媒体库面板已移出到 .wrap 级(.panelmode 时覆盖整张卡)。 -->
           <div class="lower ${u.showVolume ? "volmode" : ""}">
             <div class="controls">
-              <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${() => { u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
+              <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${(e) => { e.stopPropagation(); u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
               <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
               <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
               <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 22, true)}</button>

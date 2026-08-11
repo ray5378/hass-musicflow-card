@@ -59,7 +59,7 @@
                队列/媒体库面板已移出到 .wrap 级(.panelmode 时覆盖整张卡)。 -->
           <div class="lower ${e.showVolume?"volmode":""}">
             <div class="controls">
-              <button class="ctl ${e.showQueue?"active":""}" title="队列" @click=${()=>{e.showQueue=!e.showQueue,e.showBrowser=!1,this.requestUpdate()}}>${this._icon("queue",20)}</button>
+              <button class="ctl ${e.showQueue?"active":""}" title="队列" @click=${i=>{i.stopPropagation(),e.showQueue=!e.showQueue,e.showBrowser=!1,this.requestUpdate()}}>${this._icon("queue",20)}</button>
               <button class="ctl" title="${je[e.playMode]}" @click=${this._cyclePlayMode}>${this._icon(Qe[e.playMode],20)}</button>
               <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev",22)}</button>
               <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(e.isPlaying?"pause":"play",22,!0)}</button>
