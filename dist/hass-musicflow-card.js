@@ -139,7 +139,7 @@
             <div class="ba">${e.artist||""}</div>
           </div>
           <button class="mini" title="播放这首歌" @click=${()=>this._browserPlaySong(e)}>▶</button>
-        </div>`;const t=e.kind==="album"?e.artist||"":e.kind==="genre"?`${e.albumCount||0} \u4E13\u8F91`:e.kind==="playlist"?`${e.songCount||0} \u9996`:"";return h`
+        </div>`;const t=e.kind==="album"?e.artist||"":e.kind==="genre"?`${e.songCount||0} \u9996`:e.kind==="playlist"?`${e.songCount||0} \u9996`:"";return h`
       <div class="bitem">
         <div class="bthumb" style="cursor:pointer" title="播放整个${this._collLabel(e)}" @click=${()=>this._browserPlayCollection(e)}>
           ${this._coverImgTag(e.coverArt)}

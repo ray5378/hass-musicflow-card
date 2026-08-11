@@ -1478,7 +1478,7 @@ class MusicFlowRemoteCard extends LitElement {
         </div>`;
     }
     const sub = it.kind === "album" ? (it.artist || "")
-      : it.kind === "genre" ? `${it.albumCount || 0} 专辑`
+      : it.kind === "genre" ? `${it.songCount || 0} 首`
       : it.kind === "playlist" ? `${it.songCount || 0} 首`
       : "";
     return html`
