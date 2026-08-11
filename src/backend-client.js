@@ -452,15 +452,22 @@ export class BackendClient {
   }
   async star(songId) { return this.rest(`/star?id=${encodeURIComponent(songId)}`); }
   async unstar(songId) { return this.rest(`/unstar?id=${encodeURIComponent(songId)}`); }
-  async getPlaylists() { return this.rest("/getPlaylists"); }
+  async getPlaylists({ offset = 0, size = 0, query = "" } = {}) {
+    const qs = [];
+    if (offset) qs.push(`offset=${offset}`);
+    if (size) qs.push(`size=${size}`);
+    if (query) qs.push(`query=${encodeURIComponent(query)}`);
+    return this.rest(`/getPlaylists${qs.length ? "?" + qs.join("&") : ""}`);
+  }
   async updatePlaylist(playlistId, { songIdsToAdd = [] } = {}) {
     const qs = songIdsToAdd.map((id) => `songIdToAdd=${encodeURIComponent(id)}`).join("&");
     return this.rest(`/updatePlaylist?playlistId=${encodeURIComponent(playlistId)}${qs ? "&" + qs : ""}`);
   }
-  async getStarred({ offset = 0, size = 0 } = {}) {
+  async getStarred({ offset = 0, size = 0, query = "" } = {}) {
     const qs = [];
     if (offset) qs.push(`offset=${offset}`);
     if (size) qs.push(`size=${size}`);
+    if (query) qs.push(`query=${encodeURIComponent(query)}`);
     return this.rest(`/getStarred2${qs.length ? "?" + qs.join("&") : ""}`);
   }
 
