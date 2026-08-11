@@ -936,6 +936,13 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.showQueue) {
       this.updateComplete.then(() => this._qEnsureLoaded()).catch(() => {});
     }
+    // 歌词轨道顶部对齐标题文字正下方:实测 .track 底部相对卡片的偏移,
+    // 使当前行恒停在「标题下第 3 行」(值变化才触发重渲染,防循环)。
+    const trk = this.shadowRoot?.querySelector(".track");
+    if (trk) {
+      const t = Math.round(trk.getBoundingClientRect().bottom - this.getBoundingClientRect().top);
+      if (t !== this._ui.lyricTop) { this._ui.lyricTop = t; this.requestUpdate(); }
+    }
     // 播放器清晰封面 + 背景融合封面都走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
     const pc = this.shadowRoot?.querySelector(".nowcover");
     if (pc) this._loadCoverInto(pc);
@@ -1023,18 +1030,20 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  // 歌词背景层:铺满整卡(z-index 1,内容区 z-index 2 浮于其上),整条轨道按当前行整体上移,
-  // 当前行停在第 LYRIC_CUR_SLOT 槽(第 3 行);遇到播放按钮/进度条等元素从它们背后滚过。
-  // 颜色机制沿用 .lyricbox-line(自动随背景深浅切换);无歌词时不渲染该层(界面完全不变)。
+  // 歌词背景层:铺满整卡(z-index 1,内容区 z-index 2 浮于其上),整条轨道向上滚动。
+  // 轨道第 0 行对齐「标题文字正下方」(_ui.lyricTop 由 updated 实测 .track 底部偏移),
+  // 当前行因此恒停在标题下第 LYRIC_CUR_SLOT+1 行(第 3 行);遇到播放按钮/进度条等
+  // 元素从它们背后滚过。颜色机制沿用 .lyricbox-line;无歌词时不渲染该层。
   _renderLyricBox() {
     const lines = this._ui.lyrics || [];
     if (!lines.length) return html``;
     const idx = this._ui.lyricIndex;
     const shift = (idx - LYRIC_CUR_SLOT) * LYRIC_LINE_H;
     const view = lines.slice(0, LYRIC_MAX_LINES);
+    const top = this._ui.lyricTop || 0;
     return html`
       <div class="lyricbg">
-        <div class="lyricbg-track" style="transform: translateY(${-shift}px)">
+        <div class="lyricbg-track" style="transform: translateY(${top - shift}px)">
           ${view.map((l, i) => html`<div class="lyricbox-line ${i === idx ? "cur" : ""}">${l.text || ""}</div>`)}
         </div>
       </div>`;
@@ -1659,13 +1668,14 @@ class MusicFlowRemoteCard extends LitElement {
       .meta { flex: 1; min-width: 0; }
       .track { font-weight: 600; font-size: 16px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       /* 歌词背景层:铺满整卡(absolute inset:0, z-index 1),整条轨道向上滚动,
-         当前行停第 3 行;outputs/now/lower 提升 z-index:2 浮于其上 → 歌词从按钮、
-         进度条等元素背后滚过。pointer-events:none 不挡点击;上下渐隐出滚动纵深。
+         轨道顶部对齐标题下方(_ui.lyricTop),当前行恒停「标题下第 3 行」;
+         outputs/now/lower 提升 z-index:2 浮于其上 → 歌词从按钮、进度条等元素背后滚过。
+         pointer-events:none 不挡点击;mask 顶部渐显、底部(进度条以下)透明。
          .lyricbox-line 的 height/line-height 必须与 JS 常量 LYRIC_LINE_H 一致。
          颜色机制沿用 .lyricbox-line(当前行 #ffd400,浅封面卡 .dark 自动换琥珀)。 */
       .lyricbg { position: absolute; inset: 0; z-index: 1; overflow: hidden; pointer-events: none;
-        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 88%, transparent 100%);
-        mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 88%, transparent 100%); }
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 72%, transparent 82%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 72%, transparent 82%, transparent 100%); }
       .lyricbg-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
       /* 内容区浮在歌词背景层之上;队列/媒体库面板(z-index:5)不受影响 */
       .wrap > .outputs, .wrap > .now, .wrap > .lower { position: relative; z-index: 2; }
