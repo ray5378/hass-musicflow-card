@@ -227,7 +227,8 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applyPeerSnapshot(peers) {
-    const list = this._filterDlna(peers);
+    // 只显示在线 DLNA 设备(离线设备由 _upsertPeer 移除,此处过滤兜底)。
+    const list = this._filterDlna(peers).filter((p) => p.available !== false);
     this._ui.peers = list;
     const pinned = this._resolveDefaultPeerId(list);
     if (!this._ui.currentPeerId || pinned) {
@@ -252,6 +253,18 @@ class MusicFlowRemoteCard extends LitElement {
 
   _upsertPeer(peer) {
     if (!peer || !this._isDlnaPeer(peer)) return;
+    // 设备离线:从列表移除(不再置灰显示);若正是当前播放设备,自动切到下一个可用。
+    if (peer.available === false) {
+      const before = this._ui.peers.length;
+      this._ui.peers = this._ui.peers.filter((x) => x.peerId !== peer.peerId);
+      if (this._ui.currentPeerId === peer.peerId) {
+        const next = this._ui.peers.find((x) => x.available);
+        if (next) this._selectPeer(next.peerId, true);
+        else this._ui.currentPeerId = null;
+      }
+      if (before !== this._ui.peers.length) this.requestUpdate();
+      return;
+    }
     const idx = this._ui.peers.findIndex((p) => p.peerId === peer.peerId);
     if (idx >= 0) this._ui.peers[idx] = { ...this._ui.peers[idx], ...peer };
     else this._ui.peers.push(peer);
@@ -361,7 +374,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _refreshPeers() {
     this._client.getPeers().then((res) => {
-      const peers = this._filterDlna(res?.peers || []);
+      const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
       if (peers.length) { this._ui.peers = peers; this.requestUpdate(); }
     }).catch((e) => err("getPeers failed", e));
   }
@@ -993,7 +1006,8 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _renderOutputs() {
-    const peers = this._ui.peers || [];
+    // 兜底过滤:任何路径进来的离线设备都不渲染。
+    const peers = (this._ui.peers || []).filter((p) => p.available !== false);
     if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span></div>`;
     return html`
       <div class="outputs">
