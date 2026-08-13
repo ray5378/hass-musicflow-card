@@ -1015,11 +1015,10 @@ class MusicFlowRemoteCard extends LitElement {
       const ctx = cv.getContext("2d");
       ctx.drawImage(img, 0, 0, 24, 24);
       const d = ctx.getImageData(0, 0, 24, 24).data;
-      let sum = 0, n = 0, rSum = 0, gSum = 0, bSum = 0;
+      let sum = 0, n = 0;
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2];
         sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        rSum += r; gSum += g; bSum += b;
         n++;
       }
       const avg = n ? sum / n : 0;
@@ -1029,27 +1028,45 @@ class MusicFlowRemoteCard extends LitElement {
         this._ui.coverLightText = lightText;
         this.requestUpdate();
       }
-      // 封面强调色:平均色提饱和 + 限亮度(保证在当前播放器立体样式上有对比度)。
-      // 与亮度判定共用同一次像素遍历,零额外成本。
+      // 封面强调色:主色提取——RGB 分桶(4bit/通道)统计,按「频次 × 饱和度」评分选最显著
+      // 色桶,桶内平均色作主色。比全图平均色更贴近封面主色调(光晕/图标/强调色统一使用),
+      // 避免多彩封面被平均成灰调。与亮度判定共用同一次像素遍历,零额外成本。
       if (n) {
-        const ar = rSum / n / 255, ag = gSum / n / 255, ab = bSum / n / 255;
-        const mx = Math.max(ar, ag, ab), mn = Math.min(ar, ag, ab);
-        const dl = mx - mn;
-        const l = (mx + mn) / 2;
-        let h = 0, s = 0;
-        if (dl) {
-          s = l > 0.5 ? dl / (2 - mx - mn) : dl / (mx + mn);
-          if (mx === ar) h = ((ag - ab) / dl + (ag < ab ? 6 : 0)) * 60;
-          else if (mx === ag) h = ((ab - ar) / dl + 2) * 60;
-          else h = ((ar - ag) / dl + 4) * 60;
+        const bucket = new Map();
+        for (let i = 0; i < d.length; i += 4) {
+          const k = ((d[i] >> 4) << 8) | ((d[i + 1] >> 4) << 4) | (d[i + 2] >> 4);
+          let e = bucket.get(k);
+          if (!e) { e = { c: 0, r: 0, g: 0, b: 0 }; bucket.set(k, e); }
+          e.c++; e.r += d[i]; e.g += d[i + 1]; e.b += d[i + 2];
         }
-        s = Math.min(1, Math.max(0.25, s * 1.6)); // 提饱和,避免灰蒙
-        const ll = Math.min(0.7, Math.max(0.32, l)); // 限亮度,保证可读
-        const [cr, cg, cb] = hslToRgb(h, s, ll);
-        const acc = `${cr}, ${cg}, ${cb}`;
-        if (this._ui.accentRgb !== acc) {
-          this._ui.accentRgb = acc;
-          this.requestUpdate();
+        let best = null, bestScore = -1;
+        for (const e of bucket.values()) {
+          const ar = e.r / e.c / 255, ag = e.g / e.c / 255, ab = e.b / e.c / 255;
+          const mx = Math.max(ar, ag, ab), mn = Math.min(ar, ag, ab);
+          const sat = mx > 0 ? (mx - mn) / (mx + 1e-6) : 0;
+          const score = e.c * (1 + sat * 1.5);
+          if (score > bestScore) { bestScore = score; best = { ar, ag, ab }; }
+        }
+        if (best) {
+          const { ar, ag, ab } = best;
+          const mx = Math.max(ar, ag, ab), mn = Math.min(ar, ag, ab);
+          const dl = mx - mn;
+          const l = (mx + mn) / 2;
+          let h = 0, s = 0;
+          if (dl) {
+            s = l > 0.5 ? dl / (2 - mx - mn) : dl / (mx + mn);
+            if (mx === ar) h = ((ag - ab) / dl + (ag < ab ? 6 : 0)) * 60;
+            else if (mx === ag) h = ((ab - ar) / dl + 2) * 60;
+            else h = ((ar - ag) / dl + 4) * 60;
+          }
+          s = Math.min(1, Math.max(0.25, s * 1.6)); // 提饱和,避免灰蒙
+          const ll = Math.min(0.7, Math.max(0.32, l)); // 限亮度,保证可读
+          const [cr, cg, cb] = hslToRgb(h, s, ll);
+          const acc = `${cr}, ${cg}, ${cb}`;
+          if (this._ui.accentRgb !== acc) {
+            this._ui.accentRgb = acc;
+            this.requestUpdate();
+          }
         }
       }
     } catch (err2) {
