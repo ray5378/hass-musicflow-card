@@ -117,6 +117,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._pollTimer = null;
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
+    this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
     this._vsInflight = 0; // 全库滚动:同时在途的块请求数(上限 VS_CONCURRENCY)
@@ -331,6 +332,11 @@ class MusicFlowRemoteCard extends LitElement {
 
   _applyQueue(queue) {
     if (!queue) return;
+    // 队列已空(清空/播完)且当前还挂着歌曲 → 清掉"正在播放"展示,避免残留。
+    const emptyNow = (Array.isArray(queue.items) && queue.items.length === 0) || queue.total === 0;
+    if (emptyNow && !queue.isActive && this._ui.song) {
+      this._clearNowPlaying();
+    }
     const items = Array.isArray(queue.items) ? queue.items : null;
     const prev = this._ui.queue || {};
     const total = typeof queue.total === "number" ? queue.total : (items ? items.length : (prev.total || 0));
@@ -378,9 +384,22 @@ class MusicFlowRemoteCard extends LitElement {
     }
   }
 
+  // 播放状态判定(自愈,对齐 Web 端 player.ts:625-627):
+  // 1) 显式 state 为 PLAYING 变体 → 播放中;
+  // 2) 关键自愈:部分 DLNA 设备 GENA 事件缓存停留在旧值(如 STOPPED)并覆盖 SOAP
+  //    实时 PLAYING,此时以"position 真实前进"作为播放中的权威证据,
+  //    避免按钮卡在"未播放"而进度/封面正常(HA 卡片实时同步目标)。
   _applyStatus(status) {
     if (!status) return;
-    this._ui.isPlaying = status.state === "PLAYING";
+    // 停止/无媒体时清空"正在播放"展示(封面/歌词/进度),避免残留上一首(bug: 清队列后残留)。
+    if (status.state === "STOPPED" && !status.media && this._ui.song) {
+      this._clearNowPlaying();
+    }
+    const statePlaying = status.state === "PLAYING" || status.state === "playing" || status.state === "STARTED";
+    const advancing = status.duration > 0 && typeof status.position === "number" &&
+      this._lastPos >= 0 && status.position > this._lastPos && status.position < status.duration;
+    this._ui.isPlaying = statePlaying || advancing;
+    if (typeof status.position === "number") this._lastPos = status.position;
     if (typeof status.position === "number") this._ui.currentTime = status.position;
     if (typeof status.duration === "number" && status.duration > 0) this._ui.duration = status.duration;
     // 拖拽中忽略服务器回传的音量,避免外网代理延迟把滑块拽回旧值(跟手问题)。
@@ -391,8 +410,22 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
+  // 清空"正在播放"展示:停止/清空队列/媒体清空后调用,避免封面/歌词/进度残留。
+  // 后端清队列会清 media 缓存但可能只推 queue_changed;对齐 Web 端 castClearQueue 直接清空模式。
+  _clearNowPlaying() {
+    this._ui.song = null;
+    this._ui.lyrics = [];
+    this._ui.currentLyric = "";
+    this._ui.lyricIndex = -1;
+    this._ui.currentTime = 0;
+    this._ui.duration = 0;
+    this._ui.isPlaying = false;
+    this._lastPos = -1;
+    this.requestUpdate();
+  }
+
   _setMedia(media) {
-    if (!media) return;
+    if (!media) { this._clearNowPlaying(); return; }
     const song = {
       songId: media.songId,
       title: media.title || "未知",
@@ -454,6 +487,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.lyricIndex = -1;
     this._ui.currentTime = 0;
     this._ui.duration = 0;
+    this._lastPos = -1; // 切换设备后重置前进基线,避免沿用旧设备误判播放态
     this._refreshCurrentPeerView();
     this._startTracking();
     this.requestUpdate();
@@ -753,6 +787,8 @@ class MusicFlowRemoteCard extends LitElement {
   _clearQueue() {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
+    // 乐观清空本地展示(封面/歌词/进度/播放态),不等后端事件回传(对齐 Web castClearQueue)。
+    this._clearNowPlaying();
     this._client.clearQueue(pid).catch((e) => err("clearQueue failed", e));
   }
 
@@ -784,6 +820,9 @@ class MusicFlowRemoteCard extends LitElement {
     const pid = this._ui.currentPeerId;
     if (!pid || !song) return;
     const item = childToQueueItem(song);
+    // 乐观:起播指令已下发,按钮立即切到播放中(后端事件/轮询会纠正)。
+    this._ui.isPlaying = true;
+    this.requestUpdate();
     try {
       await this._client.enqueue(pid, [item]);
       const q = await this._client.getQueue(pid);
@@ -1551,6 +1590,9 @@ class MusicFlowRemoteCard extends LitElement {
     }
     if (!songs.length) { log("collection empty"); return; }
     const items = songs.map((s) => childToQueueItem(s));
+    // 乐观:起播指令已下发,按钮立即切到播放中(后端事件/轮询会纠正,避免 2s 空窗)。
+    this._ui.isPlaying = true;
+    this.requestUpdate();
     this._client.playQueue(pid, items, 0)
       .then(() => log("playing", this._collLabel(item), item.name, songs.length, "songs"))
       .catch((e) => err("playCollection failed", e));
