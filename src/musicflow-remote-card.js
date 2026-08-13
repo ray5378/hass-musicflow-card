@@ -2178,7 +2178,8 @@ class MusicFlowRemoteCard extends LitElement {
       .bsec { display: flex; align-items: baseline; gap: 8px; padding: 10px 6px 2px; font-size: 12px; font-weight: 600; color: var(--fg); }
       .bsec-sub { font-size: 10px; font-weight: 400; color: var(--fg-faint); }
       /* 首页推荐:每日推荐(红)/本地推荐(蓝)角标 */
-      .plbadge { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 9px; line-height: 14px; color: #fff; background: rgb(var(--acc)); vertical-align: 1px; }
+      /* 首页推荐:每日推荐(红)/本地推荐(蓝)角标。固定色,不依赖 --acc(默认白会导致白底白字隐形)。 */
+      .plbadge { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 9px; line-height: 14px; color: #fff; background: #ef4444; vertical-align: 1px; }
       .plbadge.local { background: #3b82f6; }
       /* 歌单页固定第一行「我喜欢的音乐」 */
       .bitem.pin-fav { border: 1px dashed var(--line); background: var(--panel-bg); margin-bottom: 4px; cursor: pointer; }
