@@ -59,6 +59,22 @@ const MF_ICONS = {
 function log(...args) { console.log("[MF card]", ...args); }
 function err(...args) { console.error("[MF card]", ...args); }
 
+// HSL → RGB,供封面取色(accent)用:返回 [r,g,b] 0-255。
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = ((h % 360) + 360) % 360 / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (hp < 1) { r = c; g = x; }
+  else if (hp < 2) { r = x; g = c; }
+  else if (hp < 3) { g = c; b = x; }
+  else if (hp < 4) { g = x; b = c; }
+  else if (hp < 5) { r = x; b = c; }
+  else { r = c; b = x; }
+  const m = l - c / 2;
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
 // 媒体库根层级分类图标映射(与主项目前端同款):歌单→List / 专辑→Disc3 / 音乐→Headphones
 // 艺术家→User / 风格→Library / 我喜欢的音乐→Heart(实心红)
 const CAT_ICONS = { playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library", starred: "heart2" };
@@ -106,6 +122,7 @@ class MusicFlowRemoteCard extends LitElement {
       currentLyric: "",
       lyricIndex: -1,
       liked: false,
+      accentRgb: null, // 封面提取的强调色 "r,g,b"(当前播放器立体样式 --acc;null=回落品牌红)
       wsState: "init", // init | open(WS 正常) | rest(WS 断,REST 兜底) | down(都不可达)
       showQueue: false,
       showBrowser: false,
@@ -491,6 +508,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.song = song;
     if (changed && song.songId) {
       this._lastPos = -1; // 换歌重置前进基线,避免沿用上一首进度误判播放态
+      this._ui.accentRgb = null; // 换歌重置强调色,新封面加载后自动更新
       this._ui.lyrics = [];
       this._ui.currentLyric = "";
       this._ui.lyricIndex = -1;
@@ -997,10 +1015,11 @@ class MusicFlowRemoteCard extends LitElement {
       const ctx = cv.getContext("2d");
       ctx.drawImage(img, 0, 0, 24, 24);
       const d = ctx.getImageData(0, 0, 24, 24).data;
-      let sum = 0, n = 0;
+      let sum = 0, n = 0, rSum = 0, gSum = 0, bSum = 0;
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2];
         sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        rSum += r; gSum += g; bSum += b;
         n++;
       }
       const avg = n ? sum / n : 0;
@@ -1010,9 +1029,33 @@ class MusicFlowRemoteCard extends LitElement {
         this._ui.coverLightText = lightText;
         this.requestUpdate();
       }
+      // 封面强调色:平均色提饱和 + 限亮度(保证在当前播放器立体样式上有对比度)。
+      // 与亮度判定共用同一次像素遍历,零额外成本。
+      if (n) {
+        const ar = rSum / n / 255, ag = gSum / n / 255, ab = bSum / n / 255;
+        const mx = Math.max(ar, ag, ab), mn = Math.min(ar, ag, ab);
+        const dl = mx - mn;
+        const l = (mx + mn) / 2;
+        let h = 0, s = 0;
+        if (dl) {
+          s = l > 0.5 ? dl / (2 - mx - mn) : dl / (mx + mn);
+          if (mx === ar) h = ((ag - ab) / dl + (ag < ab ? 6 : 0)) * 60;
+          else if (mx === ag) h = ((ab - ar) / dl + 2) * 60;
+          else h = ((ar - ag) / dl + 4) * 60;
+        }
+        s = Math.min(1, Math.max(0.25, s * 1.6)); // 提饱和,避免灰蒙
+        const ll = Math.min(0.7, Math.max(0.32, l)); // 限亮度,保证可读
+        const [cr, cg, cb] = hslToRgb(h, s, ll);
+        const acc = `${cr}, ${cg}, ${cb}`;
+        if (this._ui.accentRgb !== acc) {
+          this._ui.accentRgb = acc;
+          this.requestUpdate();
+        }
+      }
     } catch (err2) {
-      // tainted canvas(直连跨域无 CORS):无法分析,保持默认浅色文字。
+      // tainted canvas(直连跨域无 CORS):无法分析,保持默认浅色文字与品牌红强调色。
       if (this._ui.coverLightText !== true) { this._ui.coverLightText = true; this.requestUpdate(); }
+      if (this._ui.accentRgb !== null) { this._ui.accentRgb = null; this.requestUpdate(); }
     }
   }
 
@@ -1115,7 +1158,7 @@ class MusicFlowRemoteCard extends LitElement {
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
 
     return html`
-      <ha-card class="${u.coverLightText ? "light" : "dark"}">
+      <ha-card class="${u.coverLightText ? "light" : "dark"}" style="--acc: ${u.accentRgb || "246, 44, 85"}">
         ${song?.coverArt ? html`
           <div class="coverbg">
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
@@ -1819,8 +1862,20 @@ class MusicFlowRemoteCard extends LitElement {
          未选中仅悬停放大、移走恢复。 */
       .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 选中/未选中边框完全一致(不加高亮边框),只靠音箱图标颜色区分:选中=红 */
-      .out.active .ic { color: #f62c55; }
+      /* 当前播放器:立体突出(受光渐变 + 顶部高光 + 双层投影 + 左侧强调条),颜色跟随封面 accent(--acc) */
+      .out { position: relative; }
+      .out.active {
+        transform: scale(1.12) translateY(-1px);
+        background: linear-gradient(180deg, rgba(var(--acc), 0.32), rgba(var(--acc), 0.10));
+        border-color: rgba(var(--acc), 0.75);
+        color: rgb(var(--acc));
+        box-shadow: 0 2px 3px rgba(0, 0, 0, 0.45), 0 12px 24px rgba(var(--acc), 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      }
+      .out.active::before {
+        content: ""; position: absolute; left: -1px; top: 16%; height: 68%; width: 3px;
+        border-radius: 2px; background: rgb(var(--acc));
+      }
+      .out.active .ic { color: rgb(var(--acc)); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
