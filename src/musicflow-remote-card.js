@@ -1879,17 +1879,18 @@ class MusicFlowRemoteCard extends LitElement {
          未选中仅悬停放大、移走恢复。 */
       .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 当前播放器:立体突出(受光渐变 + 顶部高光 + 双层投影 + 霓虹光晕),颜色跟随封面 accent(--acc) */
+      /* 当前播放器:立体突出(放大上浮 + 受光渐变 + 底部投影),颜色跟随封面 accent(--acc);
+         去除霓虹光晕,仅用底部阴影营造立体感 */
       .out { position: relative; }
       .out.active {
         transform: scale(1.12) translateY(-1px);
         background: linear-gradient(180deg, rgba(var(--acc), 0.32), rgba(var(--acc), 0.10));
         border-color: rgba(var(--acc), 0.85);
         color: rgb(var(--acc));
-        text-shadow: 0 0 10px rgba(var(--acc), 0.95), 0 1px 2px rgba(0, 0, 0, 0.65);
-        box-shadow: 0 2px 3px rgba(0, 0, 0, 0.45), 0 12px 24px rgba(var(--acc), 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
       }
-      .out.active .ic { color: rgb(var(--acc)); filter: drop-shadow(0 0 5px rgba(var(--acc), 0.9)); }
+      .out.active .ic { color: rgb(var(--acc)); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
