@@ -106,6 +106,7 @@ class MusicFlowRemoteCard extends LitElement {
       currentLyric: "",
       lyricIndex: -1,
       liked: false,
+      wsState: "init", // init | open(WS 正常) | rest(WS 断,REST 兜底) | down(都不可达)
       showQueue: false,
       showBrowser: false,
       browserStack: [],
@@ -123,6 +124,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
     this._vsInflight = 0; // 全库滚动:同时在途的块请求数(上限 VS_CONCURRENCY)
     this._vsRaf = 0; // 滚动处理 rAF 句柄(节流)
+    this._visHandler = null; // 后台 tab 回前台刷新监听
   }
 
   // HA 前端可能 detach 再 attach 卡片(面板切换/资源重载/其他卡片报错触发重渲染):
@@ -145,6 +147,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._refreshTimer) { clearTimeout(this._refreshTimer); this._refreshTimer = null; }
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
+    if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
     if (this._client) this._client.disconnect();
     if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
     this._coverObserverRoot = null;
@@ -179,6 +182,13 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.connect();
     // WS 断开期间每 15s 用 REST 探测一次服务器可达性,作为"调暗"的判定依据。
     this._probeTimer = setInterval(() => { if (!this._ui.connected) this._probeServer(); }, 15000);
+    // 后台 tab 恢复前台时浏览器节流可能已暂停轮询/心跳,立即拉一次刷新状态。
+    this._visHandler = () => {
+      if (document.visibilityState === "visible" && this._client) {
+        this._refreshCurrentPeerView();
+      }
+    };
+    document.addEventListener("visibilitychange", this._visHandler);
   }
 
   // REST 探测服务器是否可达(只在 WS 断开时调用);成功=能和服务器通信,不变暗。
@@ -189,13 +199,17 @@ class MusicFlowRemoteCard extends LitElement {
     this._client.getPeers()
       .then((res) => {
         this._ui.serverOk = true;
+        this._ui.wsState = "rest"; // WS 断但 REST 通:兜底模式
         const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
         if (peers.length) {
           this._ui.peers = peers;
           this._ensurePeerSelected();
         }
       })
-      .catch(() => { this._ui.serverOk = false; })
+      .catch(() => {
+        this._ui.serverOk = false;
+        this._ui.wsState = "down"; // REST 也不可达
+      })
       .finally(() => this.requestUpdate());
   }
 
@@ -204,6 +218,7 @@ class MusicFlowRemoteCard extends LitElement {
     c.on("open", () => {
       this._ui.connected = true;
       this._ui.serverOk = true;
+      this._ui.wsState = "open";
       this._startHeartbeat();
       this.requestUpdate();
     });
@@ -475,6 +490,7 @@ class MusicFlowRemoteCard extends LitElement {
     const changed = song.songId !== this._ui.song?.songId;
     this._ui.song = song;
     if (changed && song.songId) {
+      this._lastPos = -1; // 换歌重置前进基线,避免沿用上一首进度误判播放态
       this._ui.lyrics = [];
       this._ui.currentLyric = "";
       this._ui.lyricIndex = -1;
@@ -1106,6 +1122,8 @@ class MusicFlowRemoteCard extends LitElement {
             <div class="coverbg-veil"></div>
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""}" @click=${this._onWrapClick}>
+          ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">连接恢复中…（REST 兜底）</div>` : ""}
+          ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">无法连接后端，自动重连中…</div>` : ""}
           ${this._renderOutputs()}
 
           <div class="now">
@@ -1787,6 +1805,8 @@ class MusicFlowRemoteCard extends LitElement {
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
       .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
+      .warnbar { padding: 5px 12px; font-size: 12px; color: #b8860b; background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid rgba(255, 180, 0, 0.25); }
+      .warnbar.bad { color: #f05672; background: rgba(240, 86, 114, 0.12); border-bottom-color: rgba(240, 86, 114, 0.25); }
       /* 切换播放器按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
          避免相邻按钮放大后贴在一起。 */
       .outputs { display: flex; flex-wrap: wrap; gap: 12px; }

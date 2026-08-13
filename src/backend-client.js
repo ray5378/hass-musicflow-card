@@ -21,6 +21,8 @@ const COVER_SIZE = 160;
 //                    proxy mode. "direct" / "proxy" force a specific mode.
 
 const RECONNECT_DELAY = 3000;
+const RECONNECT_MAX_DELAY = 30000; // 重连指数退避上限
+const HANDSHAKE_TIMEOUT_MS = 10000; // WS 握手看门狗:超时未 open 即主动断开走重连
 const PROBE_TIMEOUT = 4000;
 
 function log(...args) {
@@ -51,6 +53,10 @@ export class BackendClient {
     this._subPending = false;
     this._proxyFallbackTried = false;
     this._coverBlobCache = null; // 代理模式封面 blob URL 缓存: key=coverId@size -> url|promise
+    this._reconnectDelay = RECONNECT_DELAY; // 指数退避当前档位(成功复位)
+    this._wsHandshakeTimer = null; // WS 握手看门狗定时器
+    this._proxyRecheckTimer = null; // proxy 模式下直连恢复探测定时器
+    this._proxyOkStreak = 0; // 直连恢复连续成功次数(防抖动)
   }
 
   on(event, cb) {
@@ -244,6 +250,16 @@ export class BackendClient {
     }
     this.ws = ws;
     ws._mfOpened = false;
+    // 握手看门狗:部分网络黑洞/防火墙会静默丢弃握手(onopen/onclose/onerror 都不触发),
+    // 连接会永久卡 CONNECTING 且重连(只在 onclose 触发)永不执行 → 超时主动 close 走重连。
+    if (this._wsHandshakeTimer) clearTimeout(this._wsHandshakeTimer);
+    this._wsHandshakeTimer = setTimeout(() => {
+      this._wsHandshakeTimer = null;
+      if (this.ws && !this.ws._mfOpened && this.ws.readyState === WebSocket.CONNECTING) {
+        warn("WS handshake timeout, closing to trigger reconnect");
+        try { this.ws.close(); } catch {}
+      }
+    }, HANDSHAKE_TIMEOUT_MS);
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
@@ -251,12 +267,15 @@ export class BackendClient {
     };
     ws.onopen = () => {
       ws._mfOpened = true;
+      if (this._wsHandshakeTimer) { clearTimeout(this._wsHandshakeTimer); this._wsHandshakeTimer = null; }
+      this._reconnectDelay = RECONNECT_DELAY; // 重连成功后退避复位
       this._connected = true;
       log("WS open");
       this._emit("open");
       this._startWsKeepalive();
     };
     ws.onclose = () => {
+      if (this._wsHandshakeTimer) { clearTimeout(this._wsHandshakeTimer); this._wsHandshakeTimer = null; }
       this._connected = false;
       this._stopWsKeepalive();
       warn("WS close");
@@ -297,15 +316,19 @@ export class BackendClient {
   }
   _scheduleReconnect() {
     if (this._reconnectTimer) return;
+    const delay = this._reconnectDelay || RECONNECT_DELAY;
+    this._reconnectDelay = Math.min((this._reconnectDelay || RECONNECT_DELAY) * 2, RECONNECT_MAX_DELAY);
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
       this.connect();
-    }, RECONNECT_DELAY);
+    }, delay);
   }
   disconnect() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     this._stopWsKeepalive();
     this._closeProxy();
+    this._stopProxyRecheck();
+    if (this._wsHandshakeTimer) { clearTimeout(this._wsHandshakeTimer); this._wsHandshakeTimer = null; }
     this._subPending = false; // 防止 detach 时订阅中途残留,重连后 _connectProxy 被防重入挡住
     if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} this.ws = null; }
     this._connected = false;
@@ -327,6 +350,8 @@ export class BackendClient {
         this._subPending = false;
         this._unsub = unsub;
         this._connected = true;
+        this._reconnectDelay = RECONNECT_DELAY; // 订阅成功后退避复位
+        this._startProxyRecheck();
         log("proxy subscribed");
         this._emit("open");
       })
@@ -339,6 +364,34 @@ export class BackendClient {
   }
   _closeProxy() {
     if (this._unsub) { try { this._unsub(); } catch {} this._unsub = null; }
+  }
+
+  // proxy 模式下定期探测直连是否恢复:连续 2 次(约 2 分钟)稳定后自动切回 direct,
+  // 避免 proxy 通道长期锁定(直连恢复后优先低延迟直连)。
+  _startProxyRecheck() {
+    this._stopProxyRecheck();
+    this._proxyRecheckTimer = setInterval(async () => {
+      if (this.mode !== "proxy") return;
+      let ok = false;
+      try { ok = await this._probeDirect(); } catch {}
+      if (ok) {
+        this._proxyOkStreak = (this._proxyOkStreak || 0) + 1;
+        if (this._proxyOkStreak >= 2) {
+          log("direct reachable again -> switch back to direct");
+          this._proxyOkStreak = 0;
+          this._proxyFallbackTried = false;
+          this.mode = "direct";
+          this._stopProxyRecheck();
+          this._closeProxy();
+          this.connect();
+        }
+      } else {
+        this._proxyOkStreak = 0;
+      }
+    }, 60000);
+  }
+  _stopProxyRecheck() {
+    if (this._proxyRecheckTimer) { clearInterval(this._proxyRecheckTimer); this._proxyRecheckTimer = null; }
   }
 
   // ============ message dispatch ============
