@@ -263,7 +263,7 @@
         border-color: rgba(var(--acc), 0.85);
         color: rgb(var(--acc));
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 8px 22px rgba(0, 0, 0, 0.6);
       }
       .out.active .ic { color: rgb(var(--acc)); }
       .out.off { opacity: 0.45; }
