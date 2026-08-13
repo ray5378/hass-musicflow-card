@@ -115,6 +115,7 @@ class MusicFlowRemoteCard extends LitElement {
     };
     this._tickTimer = null;
     this._pollTimer = null;
+    this._refreshTimer = null; // 起播强制刷新信号去抖/重试定时器(见 _onPlayerRefresh)
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
@@ -132,6 +133,7 @@ class MusicFlowRemoteCard extends LitElement {
   _teardown() {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    if (this._refreshTimer) { clearTimeout(this._refreshTimer); this._refreshTimer = null; }
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._client) this._client.disconnect();
@@ -200,6 +202,7 @@ class MusicFlowRemoteCard extends LitElement {
     c.on("queue_changed", ({ deviceId, queue }) => this._applyDeviceQueue(deviceId, queue));
     c.on("state", ({ deviceId, state }) => this._applyDeviceState(deviceId, state));
     c.on("media", ({ deviceId, media }) => this._applyDeviceMedia(deviceId, media));
+    c.on("refresh", ({ deviceId }) => this._onPlayerRefresh(deviceId));
     c.on("group", () => this._refreshPeers());
     c.on("group_deleted", () => this._refreshPeers());
     // 后端实时发现 DLNA 设备上线/下线 -> 刷新设备列表(peer_registered/available
@@ -288,6 +291,23 @@ class MusicFlowRemoteCard extends LitElement {
     }
     const p = (this._ui.peers || []).find((x) => x.peerId === target);
     if (p && p.available !== false) this._selectPeer(target, true);
+  }
+
+  // 后端起播强制刷新信号(player_refresh):起播瞬间立即全量拉取该设备最新状态
+  // (getStatus 走实时 SOAP),不依赖 GENA 事件/轮询周期;300ms 去抖合并连发信号,
+  // 拉取失败后 1s 本地补一次重试,仍失败交给 2s 轮询兜底。
+  _onPlayerRefresh(deviceId) {
+    this._maybeFollowDevice(deviceId);
+    const pid = this._ui.currentPeerId;
+    if (!pid) return;
+    if (pid !== `dlna:${deviceId}` && pid !== `group:${deviceId}`) return;
+    if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(() => {
+      this._refreshTimer = null;
+      this._refreshCurrentPeerView().then((ok) => {
+        if (!ok) setTimeout(() => this._refreshCurrentPeerView(), 1000);
+      });
+    }, 300);
   }
 
   _upsertPeer(peer) {
@@ -461,7 +481,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   async _refreshCurrentPeerView() {
     const pid = this._ui.currentPeerId;
-    if (!pid) return;
+    if (!pid) return false;
     try {
       const [status, queue] = await Promise.all([
         this._client.getStatus(pid),
@@ -469,8 +489,10 @@ class MusicFlowRemoteCard extends LitElement {
       ]);
       this._applyStatus(status);
       this._applyQueue(queue);
+      return true;
     } catch (e) {
       err("refreshCurrentPeerView failed", e);
+      return false;
     }
   }
 

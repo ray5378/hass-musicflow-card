@@ -373,6 +373,11 @@ export class BackendClient {
       case "media_changed":
         this._emit("media", { deviceId: msg.device_id, media: msg.media });
         break;
+      case "player_refresh":
+        // 后端起播信号:提示卡片立即强制重新拉取该设备最新状态
+        // (不依赖事件内容/时序,getStatus 走实时 SOAP 必拿真值)。
+        this._emit("refresh", { deviceId: msg.device_id });
+        break;
       case "group_changed":
         this._emit("group", msg.group);
         break;
