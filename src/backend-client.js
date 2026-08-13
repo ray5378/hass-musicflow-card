@@ -583,6 +583,25 @@ export class BackendClient {
     const qs = `page=${page}&pageSize=${pageSize}` + (query ? `&query=${encodeURIComponent(query)}` : "");
     return this.rest(`/api/v1/genres?${qs}`);
   }
+  // 首页推荐:与 Web 首页共用同一批端点,能力驱动接收所有插件的推荐。
+  // - 全量歌单(含每日推荐/本地推荐/随机补齐池)
+  // - homeCount 配置(每日推荐插件,默认 8)
+  // - recommend 能力插件输出(各平台精选,如 go-music-dl /music/recommend)
+  async getPlaylistsV2({ page = 1, pageSize = 200 } = {}) {
+    return this.rest(`/api/v1/playlists?page=${page}&pageSize=${pageSize}`);
+  }
+  async getHomePlaylistCount() {
+    return this.rest("/api/v1/home/playlist-count");
+  }
+  async getRecommend() {
+    return this.rest("/api/v1/recommend");
+  }
+  async importRecommendPlaylist(providerId, payload) {
+    return this.rest(`/api/v1/online/${encodeURIComponent(providerId)}/recommend/import`, {
+      method: "POST",
+      body: payload,
+    });
+  }
 
   // ============ Media URLs ============
   // 封面统一返回可直接用于 <img src> 的 URL:

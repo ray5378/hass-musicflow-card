@@ -53,6 +53,7 @@ const MF_ICONS = {
   list: '<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>',
   library: '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
   heart2: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   speaker: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 6h.01"/><circle cx="12" cy="14" r="4"/><path d="M12 14h.01"/>',
 };
 
@@ -76,9 +77,9 @@ function hslToRgb(h, s, l) {
 }
 
 // 媒体库根层级分类图标映射(与主项目前端同款):歌单→List / 专辑→Disc3 / 音乐→Headphones
-// 艺术家→User / 风格→Library / 我喜欢的音乐→Heart(实心红)
-const CAT_ICONS = { playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library", starred: "heart2" };
-const CAT_HEART = new Set(["starred"]); // 心形分类:filled + 实心红
+// 艺术家→User / 风格→Library / 首页推荐→Home
+const CAT_ICONS = { home: "home", playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library" };
+const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分类使用)
 
 class MusicFlowRemoteCard extends LitElement {
   static get properties() {
@@ -1415,12 +1416,12 @@ class MusicFlowRemoteCard extends LitElement {
     u.browserStack = [{
       type: "root",
       items: [
+        { kind: "cat", cat: "home", name: "首页推荐" },
         { kind: "cat", cat: "playlists", name: "歌单" },
         { kind: "cat", cat: "albums", name: "专辑" },
         { kind: "cat", cat: "songs", name: "音乐" },
         { kind: "cat", cat: "artists", name: "艺术家" },
         { kind: "cat", cat: "genres", name: "风格" },
-        { kind: "cat", cat: "starred", name: "我喜欢的音乐" },
       ],
       query: "", loading: false,
     }];
@@ -1430,6 +1431,7 @@ class MusicFlowRemoteCard extends LitElement {
   _crumbName(lv) {
     switch (lv.type) {
       case "root": return "媒体库";
+      case "home": return "首页推荐";
       case "playlists": return "歌单";
       case "playlist": return lv.name || "歌单";
       case "albums": return "专辑";
@@ -1545,6 +1547,12 @@ class MusicFlowRemoteCard extends LitElement {
     const q = (level.query || "").trim();
     const page = Math.floor(offset / size) + 1; // V2 端点 1-based page
     switch (level.type) {
+      case "home": {
+        // 首页推荐:与 Web 首页同源、能力驱动(每日推荐/本地推荐/随机补齐 + 各平台精选)。
+        // 条目数 ≤ homeCount+平台歌单,一次拉齐,不做服务端分页。
+        const { items, total } = await this._fetchHomeItems();
+        return { items, total };
+      }
       case "songs": {
         const res = await this._client.getSongsV2({ page, pageSize: size, query: q });
         return { items: this._mapBrowseItems("songs", res?.items), total: res?.total };
@@ -1614,6 +1622,53 @@ class MusicFlowRemoteCard extends LitElement {
     return items || [];
   }
 
+  // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。
+  // - 顶部推荐区:每日推荐(红角标,>30 首) + 本地推荐(蓝角标,>30 首) + 随机补齐到 homeCount;
+  // - 各平台精选:recommend 能力插件输出(如 go-music-dl),每个 channel 一个分区。
+  async _fetchHomeItems() {
+    const [plRes, cntRes, recRes] = await Promise.all([
+      this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
+      this._client.getHomePlaylistCount().catch(() => null),
+      this._client.getRecommend().catch(() => null),
+    ]);
+    const pls = plRes?.items || [];
+    let homeCount = 8;
+    const n = parseInt(String(cntRes?.count), 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 24) homeCount = n;
+    // 固定两张:每日推荐 / 本地推荐(名匹配 + >30 首,与 Web 前端同一判定)。
+    const featured = pls.find((p) => p.name === "每日推荐" && (p.songCount || 0) > 30) || null;
+    const featuredLocal = pls.find((p) => p.name === "本地推荐" && (p.songCount || 0) > 30) || null;
+    const fixedIds = new Set();
+    if (featured) fixedIds.add(featured.id);
+    if (featuredLocal) fixedIds.add(featuredLocal.id);
+    const pool = pls.filter((p) => !fixedIds.has(p.id) && (p.songCount || 0) >= 30);
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
+    const items = [];
+    const pushPl = (p, badge) => items.push({
+      kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+      coverArt: p.coverArt, songCount: p.songCount || 0, badge,
+    });
+    if (featured) pushPl(featured, "每日推荐");
+    if (featuredLocal) pushPl(featuredLocal, "本地推荐");
+    side.forEach((p) => pushPl(p, ""));
+    // 各平台精选分区:channels → 分区头 + 远程歌单行(直接整播=先导入再播,与 Web playRemotePl 同流程)。
+    const channels = recRes?.channels || [];
+    const providerId = recRes?.providerId || "";
+    for (const ch of channels) {
+      const chPls = ch.playlists || [];
+      if (!chPls.length) continue;
+      items.push({ kind: "section", name: `${(ch.name || ch.source || "").replace(/音乐$/, "")}精选`, count: chPls.length });
+      chPls.forEach((pl) => items.push({
+        kind: "remote", id: String(pl.id), name: pl.name || "未命名歌单",
+        coverUrl: pl.cover || "", source: pl.source || ch.source || "",
+        trackCount: pl.trackCount || "", creator: pl.creator || "", link: pl.link || "",
+        providerId,
+      }));
+    }
+    return { items, total: items.length };
+  }
+
   _browserPush(level) {
     this._ui.browserStack.push(level);
     this._browserLoad(level);
@@ -1647,7 +1702,7 @@ class MusicFlowRemoteCard extends LitElement {
   _browserItemClick(item) {
     if (!item) return;
     if (item.kind === "cat") {
-      const map = { playlists: "playlists", albums: "albums", songs: "songs", artists: "artists", genres: "genres", starred: "starred" };
+      const map = { home: "home", playlists: "playlists", albums: "albums", songs: "songs", artists: "artists", genres: "genres" };
       this._browserPush({ type: map[item.cat], items: [], query: "", loading: false });
     } else if (item.kind === "playlist") {
       this._browserPush({ type: "playlist", id: item.id, name: item.name, items: [], query: "", loading: false });
@@ -1667,6 +1722,7 @@ class MusicFlowRemoteCard extends LitElement {
   _collLabel(it) {
     switch (it.kind) {
       case "playlist": return "歌单";
+      case "remote": return "歌单";
       case "album": return "专辑";
       case "artist": return "艺人";
       case "genre": return "风格";
@@ -1683,6 +1739,18 @@ class MusicFlowRemoteCard extends LitElement {
     try {
       if (item.kind === "playlist") {
         const res = await this._client.getPlaylistSongs(item.id);
+        songs = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
+      } else if (item.kind === "remote") {
+        // 首页推荐平台歌单:先导入为本地歌单(recommend/import),再拉歌曲整播(与 Web playRemotePl 同流程)。
+        if (!item.providerId) { err("remote playlist missing providerId"); return; }
+        const imp = await this._client.importRecommendPlaylist(item.providerId, {
+          source: item.source || "", id: item.id, name: item.name || "",
+          cover: item.coverUrl || "", creator: item.creator || "",
+          trackCount: item.trackCount || "", link: item.link || "",
+        }).catch((e) => { err("import remote playlist failed", e); return null; });
+        const plId = imp?.playlistId;
+        if (!plId) { err("import remote playlist returned no playlistId"); return; }
+        const res = await this._client.getPlaylistSongs(plId);
         songs = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
       } else if (item.kind === "album") {
         const res = await this._client.getAlbum(item.id);
@@ -1730,9 +1798,37 @@ class MusicFlowRemoteCard extends LitElement {
           <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>▶</button>
         </div>`;
     }
+    // 首页推荐分区头(各平台精选小标题)。
+    if (it.kind === "section") {
+      return html`
+        <div class="bsec">
+          <span class="bsec-name">${it.name}</span>
+          <span class="bsec-sub">${it.count || 0} 张</span>
+        </div>`;
+    }
+    // 首页推荐:远程平台歌单(go-music-dl 等 recommend 插件输出)。封面为远程 URL,
+    // 直接 <img src> 渲染(不走 getCoverArt);整播 = 先导入再播(与 Web playRemotePl 同流程)。
+    if (it.kind === "remote") {
+      const sub = it.trackCount ? `${it.trackCount} 首` : "歌单";
+      return html`
+        <div class="bitem">
+          <div class="bthumb" style="cursor:pointer" title="播放整个歌单" @click=${() => this._browserPlayCollection(it)}>
+            ${it.coverUrl ? html`<img class="bremote-img" src="${it.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : html`<span class="bnocover">♪</span>`}
+          </div>
+          <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserPlayCollection(it)}>
+            <div class="bt">${it.name}</div>
+            <div class="ba">${it.source ? `${it.source} · ` : ""}${sub}</div>
+          </div>
+          <button class="mini" title="播放整个歌单" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
+        </div>`;
+    }
     const sub = it.kind === "album" ? (it.artist || "")
       : it.kind === "genre" ? `${it.songCount || 0} 首`
       : it.kind === "playlist" ? `${it.songCount || 0} 首`
+      : "";
+    // 首页推荐:本地歌单(每日推荐/本地推荐/随机)带角标,样式与媒体库歌单行完全一致。
+    const badge = it.kind === "playlist" && it.badge
+      ? html`<span class="plbadge ${it.badge === "本地推荐" ? "local" : ""}">${it.badge}</span>`
       : "";
     return html`
       <div class="bitem">
@@ -1740,7 +1836,7 @@ class MusicFlowRemoteCard extends LitElement {
           ${this._coverImgTag(it.coverArt)}
         </div>
         <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserItemClick(it)}>
-          <div class="bt">${it.name}</div>
+          <div class="bt">${it.name}${badge}</div>
           <div class="ba">${sub}</div>
         </div>
         <button class="mini" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
@@ -1790,6 +1886,16 @@ class MusicFlowRemoteCard extends LitElement {
               `)}
             </div>
           ` : (level.loading && !level.total ? html`<div class="empty">加载中…</div>` : html`
+            ${level.type === "playlists" ? html`
+              <div class="bitem pin-fav" @click=${() => this._browserPush({ type: "starred", items: [], query: "", loading: false })}>
+                <div class="bthumb fav" title="进入查看">${this._icon("heart2", 20, true)}</div>
+                <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看">
+                  <div class="bt">我喜欢的音乐</div>
+                  <div class="ba">收藏的歌曲</div>
+                </div>
+                <button class="mini" title="进入查看" @click=${(e) => { e.stopPropagation(); this._browserPush({ type: "starred", items: [], query: "", loading: false }); }}>›</button>
+              </div>
+            ` : ""}
             ${!level.total && !level.loading ? html`<div class="empty">无内容</div>` : ""}
             <div class="vs-spacer" style="height:${(level.total || 0) * ROW_STEP}px">
               ${win.map((i) => this._vsRow(level, i))}
@@ -2068,6 +2174,15 @@ class MusicFlowRemoteCard extends LitElement {
       .bmeta { min-width: 0; }
       .bt { font-size: 13px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ba { font-size: 11px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* 首页推荐:平台精选分区头(小标题 + 张数) */
+      .bsec { display: flex; align-items: baseline; gap: 8px; padding: 10px 6px 2px; font-size: 12px; font-weight: 600; color: var(--fg); }
+      .bsec-sub { font-size: 10px; font-weight: 400; color: var(--fg-faint); }
+      /* 首页推荐:每日推荐(红)/本地推荐(蓝)角标 */
+      .plbadge { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 9px; line-height: 14px; color: #fff; background: rgb(var(--acc)); vertical-align: 1px; }
+      .plbadge.local { background: #3b82f6; }
+      /* 歌单页固定第一行「我喜欢的音乐」 */
+      .bitem.pin-fav { border: 1px dashed var(--line); background: var(--panel-bg); margin-bottom: 4px; cursor: pointer; }
+      .bitem.pin-fav .bthumb.fav { background: rgba(var(--acc), 0.16); color: rgb(var(--acc)); }
     `;
   }
 }
