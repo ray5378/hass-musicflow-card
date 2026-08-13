@@ -239,6 +239,9 @@ class MusicFlowRemoteCard extends LitElement {
     } else {
       this._refreshCurrentPeerView();
     }
+    // 兜底:snapshot 列表为空(设备尚未注册完)时本次可能未选中,后续
+    // 设备经 _upsertPeer 上线时会由 _ensurePeerSelected 补选,这里也再保一次。
+    this._ensurePeerSelected();
     this.requestUpdate();
   }
 
@@ -252,6 +255,40 @@ class MusicFlowRemoteCard extends LitElement {
     if (st) this._applyStatus(st);
   }
 
+  // 保证至少有一台可用播放器被选中(并因此启动 2s 轮询)。
+  // 修复:auto-select 原本只发生在 _applyPeerSnapshot(初始 peer_snapshot);
+  // _upsertPeer 收到设备注册/恢复事件只更新列表、从不选中 → 设备短暂离线后
+  // 恢复上线会永远停在"设备可见但未选中"→ 轮询不跑、设备事件被丢弃,卡片
+  // 冻结直到手动刷新。所有 peers 列表变更路径都应经过这里兜底。
+  _ensurePeerSelected() {
+    const pid = this._ui.currentPeerId;
+    if (pid) {
+      const cur = (this._ui.peers || []).find((p) => p.peerId === pid);
+      if (cur && cur.available !== false) return; // 已选中且在线,无需动作
+      // 选中设备已离线:解除选中,交给下方重新选一台
+      this._ui.currentPeerId = null;
+      this._stopTracking();
+    }
+    const list = (this._ui.peers || []).filter((p) => p.available !== false);
+    const first = list[0];
+    if (first) this._selectPeer(first.peerId, true);
+  }
+
+  // 事件保底唤醒:某台 DLNA 设备有 state/media/queue 事件而当前未选中它时,
+  // 若卡片正处于"未选中"或"选中了离线设备"的冻结态,自动选中它并启动轮询,
+  // 让音流等外部控制器起播后卡片立即跟随显示。用户手动选中了别的在线设备则不抢。
+  _maybeFollowDevice(deviceId) {
+    const target = `dlna:${deviceId}`;
+    const pid = this._ui.currentPeerId;
+    if (pid === target) return;
+    if (pid) {
+      const cur = (this._ui.peers || []).find((p) => p.peerId === pid);
+      if (cur && cur.available !== false) return; // 正在看别的在线设备,不打扰
+    }
+    const p = (this._ui.peers || []).find((x) => x.peerId === target);
+    if (p && p.available !== false) this._selectPeer(target, true);
+  }
+
   _upsertPeer(peer) {
     if (!peer || !this._isDlnaPeer(peer)) return;
     // 设备离线:从列表移除(不再置灰显示);若正是当前播放设备,自动切到下一个可用。
@@ -261,7 +298,7 @@ class MusicFlowRemoteCard extends LitElement {
       if (this._ui.currentPeerId === peer.peerId) {
         const next = this._ui.peers.find((x) => x.available);
         if (next) this._selectPeer(next.peerId, true);
-        else this._ui.currentPeerId = null;
+        else { this._ui.currentPeerId = null; this._stopTracking(); }
       }
       if (before !== this._ui.peers.length) this.requestUpdate();
       return;
@@ -269,6 +306,8 @@ class MusicFlowRemoteCard extends LitElement {
     const idx = this._ui.peers.findIndex((p) => p.peerId === peer.peerId);
     if (idx >= 0) this._ui.peers[idx] = { ...this._ui.peers[idx], ...peer };
     else this._ui.peers.push(peer);
+    // 设备注册/恢复上线也必须确保被选中,否则卡片停在"可见但未选中"冻结态
+    this._ensurePeerSelected();
     this.requestUpdate();
   }
 
@@ -280,6 +319,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applyDeviceQueue(deviceId, queue) {
+    this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
       this._applyQueue(queue);
@@ -321,6 +361,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applyDeviceState(deviceId, state) {
+    this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
     if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
@@ -329,6 +370,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applyDeviceMedia(deviceId, media) {
+    this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
     if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
@@ -376,7 +418,11 @@ class MusicFlowRemoteCard extends LitElement {
   _refreshPeers() {
     this._client.getPeers().then((res) => {
       const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
-      if (peers.length) { this._ui.peers = peers; this.requestUpdate(); }
+      if (peers.length) {
+        this._ui.peers = peers;
+        this._ensurePeerSelected();
+        this.requestUpdate();
+      }
     }).catch((e) => err("getPeers failed", e));
   }
 
@@ -909,6 +955,22 @@ class MusicFlowRemoteCard extends LitElement {
     });
   }
 
+  // 队列封面懒加载:与媒体库同一套 IntersectionObserver(绑定 .qlist 滚动容器),
+  // 虚拟滚动窗口内的封面随视口加载;已加载节点(loadedId===id)自动跳过。
+  _observeQueueCovers() {
+    if (!this._ui.showQueue || !this._client) return;
+    const root = this.shadowRoot?.querySelector(".qlist");
+    if (!root) return;
+    this._ensureCoverObserver(root);
+    root.querySelectorAll("img.bcover-lazy").forEach((img) => {
+      const id = img.getAttribute("data-cover-id");
+      if (img.dataset.loadedId !== id) {
+        img.removeAttribute("src"); // 清掉旧封面,避免显示错误的残留图直到新图加载
+        this._coverObserver.observe(img);
+      }
+    });
+  }
+
   _fmtTime(s) {
     if (!s || s < 0) return "0:00";
     const m = Math.floor(s / 60);
@@ -937,6 +999,7 @@ class MusicFlowRemoteCard extends LitElement {
     }
     if (this._ui.showQueue) {
       this.updateComplete.then(() => this._qEnsureLoaded()).catch(() => {});
+      this.updateComplete.then(() => this._observeQueueCovers()).catch(() => {});
     }
     // 播放器清晰封面 + 背景融合封面都走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
     const pc = this.shadowRoot?.querySelector(".nowcover");
@@ -1072,6 +1135,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 队列虚拟滚动行:缓存未到渲染骨架占位;当前行高亮用绝对下标(WS 直接给,无需等数据)。
+  // 封面与媒体库同一套 _coverImgTag 占位 + IntersectionObserver 懒加载(_observeQueueCovers)。
   _qRow(i, cur) {
     const it = this._ui.qCache.get(i);
     return html`
@@ -1082,6 +1146,7 @@ class MusicFlowRemoteCard extends LitElement {
             @dragstart=${(e) => { e.dataTransfer.setData("text/plain", String(i)); }}
             @dragover=${(e) => e.preventDefault()}
             @drop=${(e) => { e.preventDefault(); const from = Number(e.dataTransfer.getData("text/plain")); this._qReorder(from, i); }}>
+            <span class="qcov">${this._coverImgTag(it.coverArt || (it.albumId ? `al-${it.albumId}` : null))}</span>
             <span class="idx">${i + 1}</span>
             <span class="qt">${it.title}</span>
             <span class="qa">${it.artist || ""}</span>
@@ -1765,6 +1830,9 @@ class MusicFlowRemoteCard extends LitElement {
       .qitem.vs-skel { background: var(--panel-bg); }
       .qitem:hover, .sitem:hover { background: rgba(255, 255, 255, 0.06); }
       .qitem.cur { background: rgba(246, 44, 85, 0.16); }
+      .qitem .qcov { width: 34px; height: 34px; border-radius: 6px; overflow: hidden; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); }
+      .qitem .qcov img.bcover-lazy { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; }
       .qitem .idx { width: 18px; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
       .qitem .qt, .sitem .st { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--fg); }
       .qitem .qa, .sitem .sa { width: 90px; color: var(--fg-faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
