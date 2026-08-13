@@ -306,6 +306,7 @@ export class BackendClient {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     this._stopWsKeepalive();
     this._closeProxy();
+    this._subPending = false; // 防止 detach 时订阅中途残留,重连后 _connectProxy 被防重入挡住
     if (this.ws) { this.ws.onclose = null; try { this.ws.close(); } catch {} this.ws = null; }
     this._connected = false;
   }

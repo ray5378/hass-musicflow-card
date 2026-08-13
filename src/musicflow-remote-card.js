@@ -125,6 +125,15 @@ class MusicFlowRemoteCard extends LitElement {
     this._vsRaf = 0; // 滚动处理 rAF 句柄(节流)
   }
 
+  // HA 前端可能 detach 再 attach 卡片(面板切换/资源重载/其他卡片报错触发重渲染):
+  // _teardown() 已断开 client,重新挂载时必须恢复连接,否则卡片永久断开直到刷新页面。
+  connectedCallback() {
+    super.connectedCallback();
+    if (this._ready && this._client && !this._client.connected) {
+      this._client.connect();
+    }
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     this._teardown();
@@ -173,10 +182,19 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // REST 探测服务器是否可达(只在 WS 断开时调用);成功=能和服务器通信,不变暗。
+  // WS 断开期间 REST 兜底:探测成功即把设备写进列表,否则卡片会一直显示
+  // "无可用播放器"(探测拿到了设备数据却不用)。
   _probeServer() {
     if (this._ui.connected || !this._client) return;
     this._client.getPeers()
-      .then(() => { this._ui.serverOk = true; })
+      .then((res) => {
+        this._ui.serverOk = true;
+        const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
+        if (peers.length) {
+          this._ui.peers = peers;
+          this._ensurePeerSelected();
+        }
+      })
       .catch(() => { this._ui.serverOk = false; })
       .finally(() => this.requestUpdate());
   }
