@@ -1867,15 +1867,12 @@ class MusicFlowRemoteCard extends LitElement {
       .out.active {
         transform: scale(1.12) translateY(-1px);
         background: linear-gradient(180deg, rgba(var(--acc), 0.32), rgba(var(--acc), 0.10));
-        border-color: rgba(var(--acc), 0.75);
+        border-color: rgba(var(--acc), 0.85);
         color: rgb(var(--acc));
+        text-shadow: 0 0 10px rgba(var(--acc), 0.95), 0 1px 2px rgba(0, 0, 0, 0.65);
         box-shadow: 0 2px 3px rgba(0, 0, 0, 0.45), 0 12px 24px rgba(var(--acc), 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.4);
       }
-      .out.active::before {
-        content: ""; position: absolute; left: -1px; top: 16%; height: 68%; width: 3px;
-        border-radius: 2px; background: rgb(var(--acc));
-      }
-      .out.active .ic { color: rgb(var(--acc)); }
+      .out.active .ic { color: rgb(var(--acc)); filter: drop-shadow(0 0 5px rgba(var(--acc), 0.9)); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
