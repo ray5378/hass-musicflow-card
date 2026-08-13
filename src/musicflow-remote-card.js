@@ -122,7 +122,7 @@ class MusicFlowRemoteCard extends LitElement {
       currentLyric: "",
       lyricIndex: -1,
       liked: false,
-      accentRgb: null, // 封面提取的强调色 "r,g,b"(当前播放器立体样式 --acc;null=回落品牌红)
+      accentRgb: null, // 封面提取的强调色 "r,g,b"(当前播放器立体样式 --acc;null=回落中性白,不落品牌红)
       wsState: "init", // init | open(WS 正常) | rest(WS 断,REST 兜底) | down(都不可达)
       showQueue: false,
       showBrowser: false,
@@ -1158,7 +1158,7 @@ class MusicFlowRemoteCard extends LitElement {
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
 
     return html`
-      <ha-card class="${u.coverLightText ? "light" : "dark"}" style="--acc: ${u.accentRgb || "246, 44, 85"}">
+      <ha-card class="${u.coverLightText ? "light" : "dark"}" style="--acc: ${u.accentRgb || "255, 255, 255"}">
         ${song?.coverArt ? html`
           <div class="coverbg">
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
@@ -1862,7 +1862,7 @@ class MusicFlowRemoteCard extends LitElement {
          未选中仅悬停放大、移走恢复。 */
       .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 当前播放器:立体突出(受光渐变 + 顶部高光 + 双层投影 + 左侧强调条),颜色跟随封面 accent(--acc) */
+      /* 当前播放器:立体突出(受光渐变 + 顶部高光 + 双层投影 + 霓虹光晕),颜色跟随封面 accent(--acc) */
       .out { position: relative; }
       .out.active {
         transform: scale(1.12) translateY(-1px);
