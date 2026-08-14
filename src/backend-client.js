@@ -593,6 +593,10 @@ export class BackendClient {
   async getHomePlaylistCount() {
     return this.rest("/api/v1/home/playlist-count");
   }
+  /** 首页固定推荐卡:各推荐插件配置(showOnHome + homePosition)聚合,按位次排序。 */
+  async getHomeCards() {
+    return this.rest("/api/v1/recommend/home-cards");
+  }
   async getRecommend() {
     return this.rest("/api/v1/recommend");
   }

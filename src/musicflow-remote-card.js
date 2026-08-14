@@ -1624,32 +1624,38 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。
-  // - 顶部推荐区:今日漫游(红角标,>30 首,每日推荐×本地推荐组合) + 随机补齐到 homeCount;
+  // - 顶部推荐区:各推荐插件配置(showOnHome + homePosition)聚合的固定卡,>30 首才展示,
+  //   今日漫游(combo)卡带刷新;随机补齐到 homeCount;
   // - 各平台精选:recommend 能力插件输出(如 go-music-dl),每个 channel 一个分区。
   async _fetchHomeItems() {
-    const [plRes, cntRes, recRes] = await Promise.all([
+    const [plRes, cntRes, cardRes, recRes] = await Promise.all([
       this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
       this._client.getHomePlaylistCount().catch(() => null),
+      this._client.getHomeCards().catch(() => null),
       this._client.getRecommend().catch(() => null),
     ]);
     const pls = plRes?.items || [];
     let homeCount = 8;
     const n = parseInt(String(cntRes?.count), 10);
     if (Number.isFinite(n) && n >= 1 && n <= 24) homeCount = n;
-    // 固定一张:今日漫游(名匹配 + >30 首,与 Web 前端同一判定)。
-    const featured = pls.find((p) => p.name === "今日漫游" && (p.songCount || 0) > 30) || null;
-    const fixedIds = new Set();
-    if (featured) fixedIds.add(featured.id);
+    // 固定卡:后端已按位次排序;前端保持 >30 首门槛,只展示有内容的卡。
+    // 旧版后端无 home-cards 端点时回落「今日漫游」名匹配(兼容 v1.7.21 及更早)。
+    let cards = (cardRes?.cards || []).filter((c) => (c.songCount || 0) > 30);
+    if (!cardRes || !Array.isArray(cardRes.cards)) {
+      const legacy = pls.find((p) => p.name === "今日漫游" && (p.songCount || 0) > 30) || null;
+      if (legacy) cards = [{ playlistId: legacy.id, playlistName: legacy.name, coverArt: legacy.coverArt, songCount: legacy.songCount, isCombo: true }];
+    }
+    const fixedIds = new Set(cards.map((c) => c.playlistId));
     const pool = pls.filter((p) => !fixedIds.has(p.id) && (p.songCount || 0) >= 30);
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
     const items = [];
-    const pushPl = (p, badge) => items.push({
-      kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
-      coverArt: p.coverArt, songCount: p.songCount || 0, badge,
+    const pushPl = (id, name, coverArt, songCount, badge) => items.push({
+      kind: "playlist", id: String(id), name: name || "未命名歌单",
+      coverArt, songCount: songCount || 0, badge,
     });
-    if (featured) pushPl(featured, "今日漫游");
-    side.forEach((p) => pushPl(p, ""));
+    cards.forEach((c) => pushPl(c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? "今日漫游" : (c.playlistName || c.name)));
+    side.forEach((p) => pushPl(p.id, p.name, p.coverArt, p.songCount, ""));
     // 各平台精选分区:channels → 分区头 + 远程歌单行(直接整播=先导入再播,与 Web playRemotePl 同流程)。
     const channels = recRes?.channels || [];
     const providerId = recRes?.providerId || "";
