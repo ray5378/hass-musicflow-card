@@ -596,6 +596,13 @@ export class BackendClient {
   async getRecommend() {
     return this.rest("/api/v1/recommend");
   }
+  /** 手动刷新推荐:每日推荐/本地推荐重新随机生成并重组今日漫游(Web 首页刷新同源)。 */
+  async refreshRecommend() {
+    return this.rest("/api/v1/recommend/refresh", {
+      method: "POST",
+      body: {},
+    });
+  }
   async importRecommendPlaylist(providerId, payload) {
     return this.rest(`/api/v1/online/${encodeURIComponent(providerId)}/recommend/import`, {
       method: "POST",

@@ -128,6 +128,7 @@ class MusicFlowRemoteCard extends LitElement {
       showQueue: false,
       showBrowser: false,
       browserStack: [],
+      homeRefreshing: false, // 首页推荐手动刷新中(禁用重复点击)
       showVolume: false,
       coverLightText: true, // 封面背景融合:true=浅色文字(暗背景),false=深色文字(亮背景)
       volAnchor: null,
@@ -1623,7 +1624,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。
-  // - 顶部推荐区:每日推荐(红角标,>30 首) + 本地推荐(蓝角标,>30 首) + 随机补齐到 homeCount;
+  // - 顶部推荐区:今日漫游(红角标,>30 首,每日推荐×本地推荐组合) + 随机补齐到 homeCount;
   // - 各平台精选:recommend 能力插件输出(如 go-music-dl),每个 channel 一个分区。
   async _fetchHomeItems() {
     const [plRes, cntRes, recRes] = await Promise.all([
@@ -1635,12 +1636,10 @@ class MusicFlowRemoteCard extends LitElement {
     let homeCount = 8;
     const n = parseInt(String(cntRes?.count), 10);
     if (Number.isFinite(n) && n >= 1 && n <= 24) homeCount = n;
-    // 固定两张:每日推荐 / 本地推荐(名匹配 + >30 首,与 Web 前端同一判定)。
-    const featured = pls.find((p) => p.name === "每日推荐" && (p.songCount || 0) > 30) || null;
-    const featuredLocal = pls.find((p) => p.name === "本地推荐" && (p.songCount || 0) > 30) || null;
+    // 固定一张:今日漫游(名匹配 + >30 首,与 Web 前端同一判定)。
+    const featured = pls.find((p) => p.name === "今日漫游" && (p.songCount || 0) > 30) || null;
     const fixedIds = new Set();
     if (featured) fixedIds.add(featured.id);
-    if (featuredLocal) fixedIds.add(featuredLocal.id);
     const pool = pls.filter((p) => !fixedIds.has(p.id) && (p.songCount || 0) >= 30);
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
@@ -1649,8 +1648,7 @@ class MusicFlowRemoteCard extends LitElement {
       kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
       coverArt: p.coverArt, songCount: p.songCount || 0, badge,
     });
-    if (featured) pushPl(featured, "每日推荐");
-    if (featuredLocal) pushPl(featuredLocal, "本地推荐");
+    if (featured) pushPl(featured, "今日漫游");
     side.forEach((p) => pushPl(p, ""));
     // 各平台精选分区:channels → 分区头 + 远程歌单行(直接整播=先导入再播,与 Web playRemotePl 同流程)。
     const channels = recRes?.channels || [];
@@ -1672,6 +1670,25 @@ class MusicFlowRemoteCard extends LitElement {
   _browserPush(level) {
     this._ui.browserStack.push(level);
     this._browserLoad(level);
+  }
+
+  // 首页推荐手动刷新:先触发后端重新随机生成(每日推荐/本地推荐/今日漫游),
+  // 再重置虚拟滚动缓存重新拉取。
+  async _browserRefreshHome() {
+    const level = this._ui.browserStack[this._ui.browserStack.length - 1];
+    if (!level || level.type !== "home" || this._ui.homeRefreshing) return;
+    this._ui.homeRefreshing = true;
+    this.requestUpdate();
+    try {
+      await this._client.refreshRecommend().catch((e) => { err("refresh recommend failed", e); });
+      this._vsReset(level); // 清 vCache/vLoaded,total=0 → 重新按块拉取
+      await this._vsFetchChunk(level, 0).catch((e) => err("refresh home failed", e));
+      this._vsEnsureLoaded(level);
+      this.requestUpdate();
+    } finally {
+      this._ui.homeRefreshing = false;
+      this.requestUpdate();
+    }
   }
 
   _browserPopTo(index) {
@@ -1826,9 +1843,9 @@ class MusicFlowRemoteCard extends LitElement {
       : it.kind === "genre" ? `${it.songCount || 0} 首`
       : it.kind === "playlist" ? `${it.songCount || 0} 首`
       : "";
-    // 首页推荐:本地歌单(每日推荐/本地推荐/随机)带角标,样式与媒体库歌单行完全一致。
+    // 首页推荐:今日漫游(红角标)带角标,样式与媒体库歌单行完全一致。
     const badge = it.kind === "playlist" && it.badge
-      ? html`<span class="plbadge ${it.badge === "本地推荐" ? "local" : ""}">${it.badge}</span>`
+      ? html`<span class="plbadge">${it.badge}</span>`
       : "";
     return html`
       <div class="bitem">
@@ -1865,6 +1882,10 @@ class MusicFlowRemoteCard extends LitElement {
             <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
             ${i < stack.length - 1 ? html`<span class="crumb-sep">›</span>` : ""}
           `)}
+          ${level.type === "home" ? html`
+            <button class="br-refresh" title="刷新今日漫游(重新随机生成)" ?disabled=${this._ui.homeRefreshing}
+              @click=${() => this._browserRefreshHome()}>⟳</button>
+          ` : ""}
         </div>
         ${showSearch ? html`
           <div class="br-search">
@@ -2134,6 +2155,10 @@ class MusicFlowRemoteCard extends LitElement {
       .crumb.cur { color: #ffd400; font-weight: 600; }
       ha-card.dark .crumb.cur { color: #a3690a; }
       .crumb-sep { color: rgba(255, 255, 255, 0.3); }
+      .br-refresh { margin-left: auto; background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.8);
+        border: none; border-radius: 6px; padding: 2px 9px; font-size: 15px; line-height: 1.4; cursor: pointer; }
+      .br-refresh:hover { background: rgba(255, 255, 255, 0.22); }
+      .br-refresh:disabled { opacity: 0.5; cursor: default; }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
       .br-list { overflow-y: auto; flex: 1; min-height: 0; min-width: 0; max-width: 100%;
         display: flex; flex-direction: column; scrollbar-width: thin; }
