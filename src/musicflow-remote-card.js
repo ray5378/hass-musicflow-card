@@ -1463,6 +1463,9 @@ class MusicFlowRemoteCard extends LitElement {
   async _browserLoad(level, { reset = true } = {}) {
     if (level.loading) return;
     if (level.type === "root") return;
+    // 搜索来源默认「本地」;可搜索的库类型预取已启用插件列表(本地/插件切换器数据源)
+    if (level.srcMode === undefined) level.srcMode = "local";
+    this._loadLevelProviders(level);
     if (reset) this._vsReset(level);
     level.loading = true;
     this.requestUpdate();
@@ -1547,6 +1550,11 @@ class MusicFlowRemoteCard extends LitElement {
   async _fetchBrowseRange(level, offset, size) {
     const q = (level.query || "").trim();
     const page = Math.floor(offset / size) + 1; // V2 端点 1-based page
+    // 「插件」搜索模式:走远程搜索端点(一次拉全,内存切片);本地模式走原有分支
+    const srcMode = level.srcMode || "local";
+    if (srcMode !== "local") {
+      return this._fetchRemoteRange(level, offset, size, srcMode);
+    }
     switch (level.type) {
       case "home": {
         // 首页推荐:与 Web 首页同源、能力驱动(每日推荐/本地推荐/随机补齐 + 各平台精选)。
@@ -1579,10 +1587,13 @@ class MusicFlowRemoteCard extends LitElement {
         return { items: (res?.starred2?.song || []).map((s) => this._toSongItem(s)), total: res?.starred2?.songTotal };
       }
       case "album": {
+        // 远程专辑详情(搜索结果进入):只拉不导入,歌曲带 _remote 可播放/加入库
+        if (level._remote) return this._fetchRemoteLevelSongs(level, "album", offset, size);
         const res = await this._client.getAlbum(level.id, { offset, size });
         return { items: (res?.album?.song || []).map((s) => this._toSongItem(s)), total: res?.album?.songTotal };
       }
       case "playlist": {
+        if (level._remote) return this._fetchRemoteLevelSongs(level, "playlist", offset, size);
         const res = await this._client.getPlaylistSongs(level.id, { offset, size });
         return { items: (res?.playlist?.entry || []).map((s) => this._toSongItem(s)), total: res?.playlist?.songTotal };
       }
@@ -1595,6 +1606,7 @@ class MusicFlowRemoteCard extends LitElement {
         };
       }
       case "artist": { // 艺术家内 = 其全部专辑(单艺术家专辑数有限,一次取回后内存切片)
+        if (level._remote) return this._fetchRemoteLevelSongs(level, "artist", offset, size);
         const res = await this._client.getArtist(level.id);
         const albums = res?.artist?.album || [];
         const slice = albums.slice(offset, offset + size).map((a) => ({
@@ -1728,19 +1740,212 @@ class MusicFlowRemoteCard extends LitElement {
       const map = { home: "home", playlists: "playlists", albums: "albums", songs: "songs", artists: "artists", genres: "genres" };
       this._browserPush({ type: map[item.cat], items: [], query: "", loading: false });
     } else if (item.kind === "playlist") {
-      this._browserPush({ type: "playlist", id: item.id, name: item.name, items: [], query: "", loading: false });
+      this._browserPush({ type: "playlist", id: item.id, name: item.name, _remote: item._remote, _provider: item._provider, source: item.source, items: [], query: "", loading: false });
     } else if (item.kind === "album") {
-      this._browserPush({ type: "album", id: item.id, name: item.name, items: [], query: "", loading: false });
+      this._browserPush({ type: "album", id: item.id, name: item.name, _remote: item._remote, _provider: item._provider, source: item.source, items: [], query: "", loading: false });
     } else if (item.kind === "artist") {
-      this._browserPush({ type: "artist", id: item.id, name: item.name, items: [], query: "", loading: false });
+      this._browserPush({ type: "artist", id: item.id, name: item.name, _remote: item._remote, _provider: item._provider, source: item.source, items: [], query: "", loading: false });
     } else if (item.kind === "genre") {
       this._browserPush({ type: "genre", id: item.id, name: item.name, items: [], query: "", loading: false });
     } else if (item.kind === "song") {
-      this._appendAndPlay(item);
+      // 远程歌曲走 _browserPlaySong(先导入拿 DB songId 再播);本地歌直接追加
+      this._browserPlaySong(item);
     }
   }
 
-  _browserPlaySong(song) { this._appendAndPlay(song); }
+  _browserPlaySong(song) {
+    // 远程(未入库)歌曲:先「加入库」拿真实 DB songId,再入队播放(DLNA peer 需要 DB id)。
+    if (song && song._remote) { this._remotePlaySong(song); return; }
+    this._appendAndPlay(song);
+  }
+
+  // ============ 远程搜索(媒体库「本地/插件」切换) ============
+  _levelKind(type) {
+    if (type === "playlists") return "playlist";
+    if (type === "albums") return "album";
+    if (type === "artists") return "artist";
+    if (type === "songs") return "song";
+    return "";
+  }
+
+  // 搜索来源切换器只对可远程搜索的库类型显示
+  _levelSearchable(type) { return !!this._levelKind(type); }
+
+  async _loadLevelProviders(level) {
+    const kind = this._levelKind(level.type);
+    if (!kind || level.providersLoaded) return;
+    level.providersLoaded = true;
+    try {
+      const res = await this._client.getSearchProviders(kind);
+      level.providers = (res && res.providers) || [];
+      this.requestUpdate();
+    } catch (e) {
+      err("load search providers failed", e);
+    }
+  }
+
+  // 切换「本地/插件」:重置远程缓存并重搜(本地模式走原服务端搜索)
+  _onSrcModeChange(level, mode) {
+    if ((level.srcMode || "local") === mode) return;
+    level.srcMode = mode;
+    level._remoteAll = undefined;
+    this._browserSearch();
+  }
+
+  // 远程搜索结果 → 本地浏览项(带 _remote/_raw/_provider 标记;封面为远程 URL)
+  _mapRemoteItem(kind, it, providerId) {
+    const base = {
+      _remote: true, _raw: it, _provider: providerId,
+      source: it.source || "", platformLabel: it.platformLabel || "",
+    };
+    if (kind === "song") {
+      return { ...base, kind: "song", id: String(it.id), title: it.name || "未知",
+        artist: it.artist || "", album: it.album || "", duration: it.duration || 0, coverArt: it.cover || "" };
+    }
+    if (kind === "album") {
+      return { ...base, kind: "album", id: String(it.id), name: it.name || "未知专辑",
+        artist: it.artist || "", coverArt: it.cover || "", songCount: it.trackCount || 0 };
+    }
+    if (kind === "artist") {
+      return { ...base, kind: "artist", id: String(it.id), name: it.name || "未知艺术家",
+        coverArt: it.avatar || it.cover || "", albumCount: it.albumCount, songCount: it.songCount };
+    }
+    return { ...base, kind: "playlist", id: String(it.id), name: it.name || "未命名歌单",
+      coverArt: it.cover || "", songCount: it.trackCount || 0, creator: it.creator || "" };
+  }
+
+  // 远程搜索取数(一次拉全,内存切片交给虚拟滚动);query 变化自动重拉
+  async _fetchRemoteRange(level, offset, size, providerId) {
+    const kind = this._levelKind(level.type);
+    const q = (level.query || "").trim();
+    if (!kind || !q) return { items: [], total: 0 };
+    if (!level._remoteAll || level._remoteQuery !== q) {
+      const res = await this._client.remoteSearch(kind, providerId, q);
+      level._remoteAll = ((res && res.items) || []).map((it) => this._mapRemoteItem(kind, it, providerId));
+      level._remoteQuery = q;
+    }
+    const all = level._remoteAll;
+    return { items: all.slice(offset, offset + size), total: all.length };
+  }
+
+  // 远程集合详情层取数(专辑/歌单/艺术家内歌曲,只拉不导入)
+  async _fetchRemoteLevelSongs(level, kind, offset, size) {
+    if (!level._remoteAll || level._remoteSeq !== (level.vSeq || 0)) {
+      const res = await this._client.remoteItems(kind, level._provider, {
+        source: level.source || "", id: level.id || "", name: level.name || "",
+      });
+      level._remoteAll = ((res && res.items) || []).map((it) => this._mapRemoteItem("song", it, level._provider));
+      level._remoteSeq = level.vSeq || 0;
+    }
+    const all = level._remoteAll;
+    return { items: all.slice(offset, offset + size), total: all.length };
+  }
+
+  // 远程歌曲播放:先导入拿 DB songId,再入队跳播(与首页 remote 歌单「先导入再整播」同思路)
+  async _remotePlaySong(item) {
+    const pid = this._ui.currentPeerId;
+    if (!pid || !item) return;
+    if (this._ui.remoteBusy) return;
+    this._ui.remoteBusy = item.id;
+    this.requestUpdate();
+    try {
+      const imp = await this._client.importRemoteSongs(item._provider, [item._raw]);
+      const task = await this._client.waitTask(imp.taskId);
+      const ids = (task && task.ids) || [];
+      if (!ids.length) { err("remote song import returned no ids"); return; }
+      await this._appendAndPlay({
+        id: ids[0], title: item.title || item.name || "未知",
+        artist: item.artist || "", album: item.album || "",
+        duration: item.duration || 0, coverArt: "", suffix: "mp3",
+      });
+      item._imported = true;
+    } catch (e) {
+      err("remote play song failed", e);
+    } finally {
+      this._ui.remoteBusy = null;
+      this.requestUpdate();
+    }
+  }
+
+  // 远程集合整播:专辑/歌单 → 导入为本地歌单拿 playlistId → 拉歌整播;
+  // 艺术家 → 远程拉歌 → 批量入库拿 DB songId → 整播。
+  async _playRemoteCollection(item) {
+    const pid = this._ui.currentPeerId;
+    if (!pid || !item) return;
+    if (this._ui.remoteBusy) return;
+    this._ui.remoteBusy = item.id;
+    this.requestUpdate();
+    let queueItems = [];
+    try {
+      const kind = item.kind; // album | playlist | artist
+      if (kind === "album" || kind === "playlist") {
+        const imp = await this._client.importRemoteCollection(kind, item._provider, {
+          source: item.source || "", id: item.id, name: item.name || "", cover: item.coverArt || "",
+        });
+        const task = await this._client.waitTask(imp.taskId);
+        const plId = task && task.playlistId;
+        if (!plId) { err("remote collection import returned no playlistId"); return; }
+        const res = await this._client.getPlaylistSongs(plId);
+        queueItems = ((res && res.playlist && res.playlist.entry) || [])
+          .map((s) => this._toSongItem(s)).map((s) => childToQueueItem(s));
+      } else if (kind === "artist") {
+        const res = await this._client.remoteItems("artist", item._provider, {
+          source: item.source || "", name: item.name || "",
+        });
+        const songs = ((res && res.items) || []).map((it) => this._mapRemoteItem("song", it, item._provider));
+        if (!songs.length) { log("remote artist has no songs"); return; }
+        const imp = await this._client.importRemoteSongs(item._provider, songs.map((s) => s._raw));
+        const task = await this._client.waitTask(imp.taskId);
+        const ids = (task && task.ids) || [];
+        queueItems = songs.map((s, i) => childToQueueItem({
+          id: ids[i] || s.id, title: s.title, artist: s.artist, album: s.album,
+          duration: s.duration || 0, coverArt: "", suffix: "mp3",
+        }));
+      }
+    } catch (e) {
+      err("play remote collection failed", e);
+      return;
+    } finally {
+      this._ui.remoteBusy = null;
+      this.requestUpdate();
+    }
+    if (!queueItems.length) { log("remote collection empty"); return; }
+    this._ui.isPlaying = true;
+    this.requestUpdate();
+    this._client.playQueue(pid, queueItems, 0)
+      .then(() => log("playing remote", this._collLabel(item), item.name, queueItems.length, "songs"))
+      .catch((e) => err("play remote collection failed", e));
+  }
+
+  // 「加入库」按钮:歌曲批量入库 / 专辑·歌单整库导入(异步任务轮询);艺术家无导入
+  async _browserImportRemote(item) {
+    if (!item || item._importing || !item._remote) return;
+    if (item.kind === "artist") return;
+    item._importing = true;
+    this.requestUpdate();
+    try {
+      if (item.kind === "song") {
+        const imp = await this._client.importRemoteSongs(item._provider, [item._raw]);
+        await this._client.waitTask(imp.taskId);
+      } else {
+        const imp = await this._client.importRemoteCollection(item.kind, item._provider, {
+          source: item.source || "", id: item.id, name: item.name || "", cover: item.coverArt || "",
+        });
+        await this._client.waitTask(imp.taskId);
+      }
+      item._imported = true;
+      // 若当前处于本地列表层(歌单/专辑/音乐),刷新以显示新入库内容
+      const top = this._ui.browserStack[this._ui.browserStack.length - 1];
+      if (top && !(top.srcMode !== "local") && ["playlists", "albums", "songs"].includes(top.type)) {
+        this._browserSearch();
+      }
+    } catch (e) {
+      err("remote import failed", e);
+    } finally {
+      item._importing = false;
+      this.requestUpdate();
+    }
+  }
 
   _collLabel(it) {
     switch (it.kind) {
@@ -1758,6 +1963,11 @@ class MusicFlowRemoteCard extends LitElement {
   async _browserPlayCollection(item) {
     const pid = this._ui.currentPeerId;
     if (!pid || !item) return;
+    // 远程搜索结果集合(专辑/歌单/艺术家):先导入再整播(未入库,DLNA 需要 DB songId)
+    if (item._remote) {
+      this._playRemoteCollection(item);
+      return;
+    }
     let songs = [];
     try {
       if (item.kind === "playlist") {
@@ -1812,13 +2022,14 @@ class MusicFlowRemoteCard extends LitElement {
       return html`
         <div class="bitem">
           <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>
-            ${this._coverImgTag(it.coverArt)}
+            ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
-            <div class="bt">${it.title}</div>
+            <div class="bt">${it.title}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
             <div class="ba">${it.artist || ""}</div>
           </div>
           <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>▶</button>
+          ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
         </div>`;
     }
     // 首页推荐分区头(各平台精选小标题)。
@@ -1856,13 +2067,14 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="bitem">
         <div class="bthumb" style="cursor:pointer" title="播放整个${this._collLabel(it)}" @click=${() => this._browserPlayCollection(it)}>
-          ${this._coverImgTag(it.coverArt)}
+          ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
         </div>
         <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserItemClick(it)}>
-          <div class="bt">${it.name}${badge}</div>
+          <div class="bt">${it.name}${badge}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
           <div class="ba">${sub}</div>
         </div>
         <button class="mini" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
+        ${it._remote && it.kind !== "artist" ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
       </div>`;
   }
 
@@ -1895,6 +2107,12 @@ class MusicFlowRemoteCard extends LitElement {
         </div>
         ${showSearch ? html`
           <div class="br-search">
+            ${this._levelSearchable(level.type) ? html`
+              <select class="br-src" .value=${level.srcMode || "local"} title="搜索来源:本地库或插件" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
+                <option value="local">本地</option>
+                ${(level.providers || []).map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+              </select>
+            ` : ""}
             <input class="search-input" placeholder="搜索…" .value=${level.query}
               @input=${(e) => { level.query = e.target.value; this._browserSearchInput(); }}
               @compositionstart=${(e) => { this._searchComposing = true; }}
@@ -2166,6 +2384,19 @@ class MusicFlowRemoteCard extends LitElement {
       .br-refresh:hover { background: rgba(255, 255, 255, 0.22); }
       .br-refresh:disabled { opacity: 0.5; cursor: default; }
       .br-search { display: flex; gap: 6px; margin-bottom: 8px; }
+      /* 「本地/插件」搜索来源切换器:紧凑下拉,与搜索框同高同风格 */
+      .br-src { flex: 0 0 auto; max-width: 118px; border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px; padding: 7px 6px; background: rgba(0, 0, 0, 0.3); color: #fff;
+        outline: none; font-size: 12px; cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; }
+      .br-src:focus { border-color: rgb(var(--acc)); box-shadow: 0 0 0 1px rgb(var(--acc)); }
+      .br-src option { background: #1b1b1f; color: #fff; }
+      /* 远程结果「加入库」小按钮(与 .mini 播放按钮区分:更紧凑、主色描边) */
+      .mini.imp { border-color: rgba(var(--acc), 0.55); color: rgb(var(--acc)); padding: 3px 6px; font-size: 11px; }
+      .mini.imp:disabled { opacity: 0.5; cursor: default; }
+      /* 远程结果平台标签(歌名后小徽标) */
+      .rtag { display: inline-block; vertical-align: middle; margin-left: 6px; padding: 0 6px;
+        border-radius: 6px; font-size: 10px; font-weight: 500; line-height: 1.7;
+        background: rgba(0, 0, 0, 0.45); color: rgba(255, 255, 255, 0.85); }
       .br-list { overflow-y: auto; flex: 1; min-height: 0; min-width: 0; max-width: 100%;
         display: flex; flex-direction: column; scrollbar-width: thin; }
       /* 虚拟滚动:总高占位(level.total x ROW_STEP)+ 绝对定位窗口行;骨架行避免空白闪烁 */

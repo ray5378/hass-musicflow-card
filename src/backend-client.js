@@ -614,6 +614,57 @@ export class BackendClient {
     });
   }
 
+  // ============ 远程搜索(媒体库「本地/插件」切换,与 Web 前端同源端点) ============
+  // kind: song | artist | album | playlist(映射 {kind}-search 端点)
+  async getSearchProviders(kind) {
+    return this.rest(`/api/v1/${kind}-search/providers`);
+  }
+  async remoteSearch(kind, providerId, q) {
+    return this.rest(`/api/v1/${kind}-search/${encodeURIComponent(providerId)}/search`, {
+      method: "POST",
+      body: { q },
+    });
+  }
+  // 远程集合详情(专辑/歌单/艺术家)只拉不导入:返回歌曲列表
+  async remoteItems(kind, providerId, { source = "", id = "", name = "" } = {}) {
+    const qs = [];
+    if (source) qs.push(`source=${encodeURIComponent(source)}`);
+    if (id) qs.push(`id=${encodeURIComponent(id)}`);
+    if (name) qs.push(`name=${encodeURIComponent(name)}`);
+    return this.rest(`/api/v1/${kind}-search/${encodeURIComponent(providerId)}/items${qs.length ? "?" + qs.join("&") : ""}`);
+  }
+  // 远程歌曲批量入库(返回 taskId;完成后的 result.ids 为真实 DB songId,供入队播放)
+  async importRemoteSongs(providerId, songs) {
+    return this.rest(`/api/v1/song-search/${encodeURIComponent(providerId)}/import`, {
+      method: "POST",
+      body: { songs },
+    });
+  }
+  // 远程专辑/歌单整库导入(返回 taskId;完成后的 result.playlistId 为本地歌单 id)
+  async importRemoteCollection(kind, providerId, payload) {
+    return this.rest(`/api/v1/${kind}-search/${encodeURIComponent(providerId)}/import`, {
+      method: "POST",
+      body: payload,
+    });
+  }
+  async getTask(taskId) {
+    return this.rest(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
+  }
+  // 轮询异步任务直到 ok/error,返回 result(导入类端点触发即返回 taskId)
+  async waitTask(taskId, { intervalMs = 800, maxMs = 120000 } = {}) {
+    const deadline = Date.now() + maxMs;
+    for (;;) {
+      const res = await this.getTask(taskId).catch(() => null);
+      const t = res && res.task;
+      if (t) {
+        if (t.status === "ok") return t.result;
+        if (t.status === "error") throw new Error(t.error || "task failed");
+      }
+      if (Date.now() > deadline) throw new Error("task timeout");
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+
   // ============ Media URLs ============
   // 封面统一返回可直接用于 <img src> 的 URL:
   // - 直连:带 token 的后端 /getCoverArt 直链(浏览器原生缓存 + 懒加载)。
