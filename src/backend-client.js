@@ -620,10 +620,14 @@ export class BackendClient {
     return this.rest(`/api/v1/${kind}-search/providers`);
   }
   async remoteSearch(kind, providerId, q) {
-    return this.rest(`/api/v1/${kind}-search/${encodeURIComponent(providerId)}/search`, {
+    const res = await this.rest(`/api/v1/${kind}-search/${encodeURIComponent(providerId)}/search`, {
       method: "POST",
       body: { q },
     });
+    // 后端 song/album/artist 搜索返回 { items },playlist 搜索返回 { playlists }:
+    // 归一化为 { items },卡片调用方统一消费 res.items。
+    const items = (res && (res.items || res.playlists)) || [];
+    return { items };
   }
   // 远程集合详情(专辑/歌单/艺术家)只拉不导入:返回歌曲列表
   async remoteItems(kind, providerId, { source = "", id = "", name = "" } = {}) {
