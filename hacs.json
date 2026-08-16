@@ -1,5 +1,6 @@
 {
   "name": "MusicFlow Card",
+  "render_readme": true,
   "filename": "hass-musicflow-card.js",
   "content_in_root": false,
   "country": ["CN", "ALL"],

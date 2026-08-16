@@ -1,89 +1,83 @@
-# MusicFlow Card
+# MusicFlow Remote Card
 
-A Lovelace card that acts as a **full external controller** for a
-[MusicFlow](https://github.com/ray5378/MusicFlow) server.
+一个 Lovelace 卡片，作为 [MusicFlow](https://github.com/ray5378/MusicFlow)
+服务端的**完整外部控制器**。
 
-The card connects **directly** to the MusicFlow backend's real-time WebSocket
-(`/ws`) and REST API. It is an equal peer to the Web UI and the mobile App:
-every action taken on the card is pushed to all other clients through the same
-channel, and any change made elsewhere is reflected on the card immediately.
+卡片**直连** MusicFlow 后端的实时 WebSocket（`/ws`）与 REST API，与 Web 界面、
+移动 App 平级：卡片上的任何操作都会通过同一条通道推送给所有其他客户端，
+其他客户端的变化也会立刻反映到卡片上。
 
-> Chinese docs: [README.zh-CN.md](README.zh-CN.md)
->
-> **Note:** The MusicFlow server is now the plugin-based architecture.
+> 英文文档见 [README.en.md](README.en.md).
 
-## Features
+## 功能
 
-- **Output switcher** - switch between players and groups (peers) in real time.
-- **Playback controls** - play/pause, previous/next, stop, shuffle/loop modes.
-- **Progress bar** - smooth, with live position interpolation and seek.
-- **Lyrics** - synced lyrics that scroll and highlight with the current line.
-- **Queue** - view, jump, remove, and drag-to-reorder the play queue.
-- **Search** - search the library and play or enqueue results.
-- **Add to playlist** - add the current or any searched song to a playlist.
-- **Like / favorite** - star or unstar the current song.
-- **Media library** - browse playlists / albums / artists / genres / favorites,
-  with server-side pagination for large libraries.
+- **输出切换** - 实时切换播放器 / 播放组（peer）。
+- **播放控制** - 播放/暂停、上一首/下一首、停止、随机/循环模式。
+- **进度条** - 平滑插值显示实时进度，支持拖动跳转。
+- **歌词** - 同步歌词滚动高亮，固定 3 行窗口、当前行居中（黄色）。
+- **队列** - 查看、跳转、删除、拖拽重排。
+- **搜索** - 搜索曲库并播放或入队。
+- **加入歌单** - 把当前歌曲或搜索结果加入指定歌单。
+- **喜欢** - 收藏 / 取消收藏当前歌曲。
+- **媒体库** - 浏览歌单 / 专辑 / 艺术家 / 流派 / 我喜欢的音乐，大曲库走服务端分页。
 
-## Requirements
+## 版本要求
 
-- Home Assistant **2024.12.0** or newer.
-- The [MusicFlow integration](https://github.com/ray5378/hass-musicflow)
-  configured (it supplies the backend URL and API key to the card).
-- **Tested with**: MusicFlow server **v1.7.x** + integration **v1.3.6** +
-  card **v1.6.11**. Keep these three in sync; upgrading the server should be
-  followed by updating the integration and the card in HACS.
+| 组件 | 最低版本（推荐配套） |
+|---|---|
+| [hass-musicflow](https://github.com/ray5378/hass-musicflow) 集成 | 1.3.0 及以上（**建议 1.3.6**，与下方配套） |
+| MusicFlow 服务端 | 1.1.7 及以上（**建议 1.1.19**） |
+| Home Assistant | 2024.12 及以上 |
 
-## Hybrid transport (LAN direct + WAN proxy)
+> **稳定配套（测试组合）**：服务端 **v1.1.19** + 集成 **v1.3.6** + 卡片 **v1.6.11**。
+> 三者需对齐：升级服务端后，请在 HACS 同步更新集成与卡片到对应版本。
 
-The card normally connects **directly** to the MusicFlow backend (WebSocket +
-REST), which gives the lowest latency on your LAN. When the browser cannot
-reach the backend directly - outside your LAN, or when a Public Network Access
-/ mixed-content / private-IP restriction blocks the connection - the card
-automatically falls back to routing everything through Home Assistant:
+## 混合传输（局域网直连 + 外网代理）
 
-- REST calls go through the integration's proxy view.
-- Real-time events are forwarded by the integration over a WebSocket
-  subscription.
-- Cover art is fetched through Home Assistant (the card uses the integration's
-  authenticated fetch and renders the image as a blob, so artwork shows even
-  from outside your LAN).
+卡片默认**直连** MusicFlow 后端（WebSocket + REST），局域网内延迟最低。
+当浏览器无法直连后端时（外网访问、或受 Private Network Access / 混合内容 /
+私有 IP 不可路由拦截），卡片会自动切换为**经 Home Assistant 中转**：
 
-This requires the MusicFlow integration **1.3.0 or newer** (current stable:
-**1.3.6**). The backend API key stays inside Home Assistant and is never sent
-to the browser in proxy mode.
+- REST 请求走集成提供的代理视图；
+- 实时事件由集成通过 WebSocket 订阅转发；
+- 封面经 HA **带鉴权拉取**后以 blob 渲染（所以外网也能正常显示封面）。
 
-In direct mode the backend must still allow your Home Assistant frontend origin
-in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
-directly from the browser.
+这需要集成 **1.3.0 及以上**（当前稳定 **1.3.6**）。代理模式下后端 API Key
+只保存在 HA 侧，不会下发到浏览器。
 
-## Cover art performance (with server v1.7.x+)
+直连模式下，后端仍需在 `CORS_ORIGINS` 中放行 HA 前端来源（或设 `CORS_ORIGINS=*`）。
 
-- **Direct mode**: the card requests covers at the thumbnail size (~160px) with
-  a cacheable URL; the server resizes on the fly (sharp) and returns `webp`
-  when the client supports it, plus `Cache-Control`/`ETag` so the browser reuses
-  covers across pages and refreshes (304).
-- **Proxy mode**: covers are pulled through Home Assistant with the
-  integration's credentials and cached per `(coverId, size)` in the card, so no
-  raw unauthenticated `<img>` request hits the protected HA endpoint.
+## 封面性能（服务端 v1.1.19+）
 
-## Installation
+- **直连模式**：卡片以缩略图尺寸（约 160px）请求封面，使用可缓存直链；
+  服务端按需缩放（sharp），客户端支持时返回 `webp`，并带 `Cache-Control`/`ETag`，
+  浏览器跨翻页、跨刷新可复用（304），外网不再重复下载原图。
+- **代理模式**：封面经 HA 用集成凭据拉取，卡片内按 `(coverId, size)` 缓存，
+  不会用裸 `<img src>` 去打受保护的 HA 端点（那会被 401）。
 
-1. In HACS, add the custom repository
-   `https://github.com/ray5378/hass-musicflow-card` (category: Dashboard).
-2. Install **MusicFlow Card**.
-3. Restart Home Assistant if needed.
+## 安装
 
-## Configuration
+### HACS（推荐）
 
-Add a manual card with type `custom:hass-musicflow-card`:
+1. HACS 右上角 ⋮ → **自定义存储库**；
+2. 添加 `https://github.com/ray5378/hass-musicflow-card`，类别选 **Dashboard**
+   （HACS UI 下拉里没有 "Lovelace"，前端卡片的类别就是 Dashboard）；
+3. 进入 **HACS → 前端**，在 **MusicFlow Card** 条目上点**下载**，刷新仪表盘（或重启 HA）。
+
+### 手动
+
+1. 把 `dist/hass-musicflow-card.js` 复制到你的 `config/www/` 目录；
+2. **设置 → 仪表盘 → ⋮ → 资源**里添加：`/local/hass-musicflow-card.js`，类型 **JavaScript 模块**。
+
+## 配置
+
+手动添加卡片，类型 `custom:hass-musicflow-card`：
 
 ```yaml
 type: custom:hass-musicflow-card
 ```
 
-The card fetches the backend URL and API key automatically from the MusicFlow
-integration. If you prefer to hard-code them, provide them explicitly:
+卡片会自动从 MusicFlow 集成获取后端地址与 API Key。也可以显式指定：
 
 ```yaml
 type: custom:hass-musicflow-card
@@ -91,44 +85,47 @@ url: http://musicflow.local:46400
 api_key: YOUR_LONG_LIVED_API_KEY
 ```
 
-### Pin to a specific player
+### 固定到指定播放器
 
-If you want a card dedicated to one player (for example the HiVi H5MKII in the
-living room), set `entity` to the MusicFlow `media_player` entity. The card reads
-the entity's `peer_id` attribute and selects that output by default, so the card
-always opens on that player. You can still switch outputs with the chips.
+设置 `entity` 为 MusicFlow 的 `media_player` 实体，卡片读取该实体的
+`peer_id` 属性并默认选中对应输出：
 
 ```yaml
 type: custom:hass-musicflow-card
 entity: media_player.hivi_h5mkii_2
 ```
 
-Only MusicFlow-created `media_player` entities carry the `peer_id` attribute. For
-a generic media_player (not managed by MusicFlow) the `entity` option has no
-effect and the card falls back to the first available output.
+只有 MusicFlow 创建的实体带 `peer_id` 属性；非 MusicFlow 的 media_player
+该配置无效，卡片回退到第一个可用输出。
 
-### Transport mode
+### 传输模式
 
-By default the card auto-detects the best transport (`auto`): it probes a direct
-connection first and switches to the Home Assistant proxy when direct access
-fails. You can force a mode with the `transport` option:
+默认 `auto`：先探测直连，失败且集成支持时自动切换 HA 代理。也可强制指定：
 
 ```yaml
 type: custom:hass-musicflow-card
-transport: direct   # always connect straight to the backend
-# transport: proxy  # always route through Home Assistant (needs integration 1.3.0+)
+transport: direct   # 始终直连后端
+# transport: proxy  # 始终经 HA 中转（需要集成 1.3.0+）
 ```
 
-## How it works
+## 构建
 
-The card obtains the backend connection details from the integration via the
-`musicflow/backend_config` WebSocket command. In **direct** mode it opens a live
-`/ws` connection using the user's API key; all playback, queue, lyrics, search,
-playlist, and favorite actions are sent straight to the backend REST API, so
-the card and every other MusicFlow client stay perfectly in sync.
+```bash
+npm install
+npm run build        # rollup: src/musicflow-remote-card.js -> dist/hass-musicflow-card.js
+```
 
-In **proxy** mode (used automatically when direct access fails) the card talks
-only to Home Assistant: REST through `/api/musicflow/rest/*`, real-time events
-through the `musicflow/subscribe` WebSocket command, and covers through the same
-proxy (authenticated fetch -> blob). The integration forwards everything to the
-backend with its own API key.
+产物在 `dist/hass-musicflow-card.js`，需要一并提交（`.github/workflows/validate.yml`
+会校验产物与源码一致）。
+
+## 相关仓库
+
+| 仓库 | 说明 |
+|---|---|
+| [MusicFlow](https://github.com/ray5378/MusicFlow) | 服务端：曲库、DLNA 播放、播放组 |
+| [hass-musicflow](https://github.com/ray5378/hass-musicflow) | HACS 集成（媒体播放器实体 + 卡片代理） |
+| [hassio-addons](https://github.com/ray5378/hassio-addons) | 服务端的 HA 加载项封装 |
+
+## 许可证
+
+MIT

@@ -25,22 +25,24 @@ jobs:
             echo "dist/hass-musicflow-card.js is stale or missing - run 'npm run build' and commit it.";
             exit 1;
           }
-      - name: README must be pure ASCII (HACS decodes docs as ASCII and drops everything else)
+      - name: README must be valid UTF-8 (no BOM, decodes cleanly)
+        # HACS 2.x renders README.md directly. A valid UTF-8 file with Chinese
+        # displays fine (see banto6/haier). The real failure mode is a corrupted
+        # encoding (non-UTF-8 bytes / stray BOM), which we reject here.
         run: |
           python3 - <<'EOF'
           import sys
-          bad = []
           with open("README.md", "rb") as f:
-              for i, line in enumerate(f, 1):
-                  for ch in line.decode("utf-8"):
-                      if ord(ch) > 127:
-                          bad.append((i, ch))
-          if bad:
-              print("README.md contains non-ASCII characters - HACS strips them and the doc renders empty:")
-              for i, ch in bad[:10]:
-                  print(f"  line {i}: {ch!r}")
+              data = f.read()
+          if data[:3] == b"\xef\xbb\xbf":
+              print("README.md starts with a UTF-8 BOM - HACS/GitHub render it as a stray character. Remove the BOM.")
               sys.exit(1)
-          print("README.md is pure ASCII")
+          try:
+              data.decode("utf-8")
+          except UnicodeDecodeError as e:
+              print("README.md is not valid UTF-8 (HACS renders garbage / breaks parsing):", e)
+              sys.exit(1)
+          print("README.md is valid UTF-8")
           EOF
       - name: JSON files are valid
         run: |
