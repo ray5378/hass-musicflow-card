@@ -9,6 +9,8 @@ every action taken on the card is pushed to all other clients through the same
 channel, and any change made elsewhere is reflected on the card immediately.
 
 > Chinese docs: [README.zh-CN.md](README.zh-CN.md)
+>
+> **Note:** MusicFlow 主仓库现已托管 **V2**；V1 MVP 已归档至 `V1-backup` 分支。
 
 ## Features
 
@@ -28,7 +30,7 @@ channel, and any change made elsewhere is reflected on the card immediately.
 - Home Assistant **2024.12.0** or newer.
 - The [MusicFlow integration](https://github.com/ray5378/hass-musicflow)
   configured (it supplies the backend URL and API key to the card).
-- **Tested with**: MusicFlow server **v1.1.19** + integration **v1.3.6** +
+- **Tested with**: MusicFlow server **v1.7.x (V2)** + integration **v1.3.6** +
   card **v1.6.11**. Keep these three in sync; upgrading the server should be
   followed by updating the integration and the card in HACS.
 
@@ -55,7 +57,7 @@ In direct mode the backend must still allow your Home Assistant frontend origin
 in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
 directly from the browser.
 
-## Cover art performance (with server v1.1.19+)
+## Cover art performance (with server v1.7.x+ (V2))
 
 - **Direct mode**: the card requests covers at the thumbnail size (~160px) with
   a cacheable URL; the server resizes on the fly (sharp) and returns `webp`
