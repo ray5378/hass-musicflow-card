@@ -10,7 +10,7 @@ channel, and any change made elsewhere is reflected on the card immediately.
 
 > Chinese docs: [README.zh-CN.md](README.zh-CN.md)
 >
-> **Note:** MusicFlow 主仓库现已是插件化架构版。
+> **Note:** The MusicFlow server is now the plugin-based architecture.
 
 ## Features
 
