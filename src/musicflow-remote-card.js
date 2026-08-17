@@ -1856,7 +1856,7 @@ class MusicFlowRemoteCard extends LitElement {
       await this._appendAndPlay({
         id: ids[0], title: item.title || item.name || "未知",
         artist: item.artist || "", album: item.album || "",
-        duration: item.duration || 0, coverArt: "", suffix: "mp3",
+        duration: item.duration || 0, coverArt: item.coverArt || "", suffix: "mp3",
       });
       item._imported = true;
     } catch (e) {
