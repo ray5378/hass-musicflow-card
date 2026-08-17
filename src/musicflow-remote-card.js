@@ -55,6 +55,7 @@ const MF_ICONS = {
   heart2: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   speaker: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 6h.01"/><circle cx="12" cy="14" r="4"/><path d="M12 14h.01"/>',
+  airplay: '<path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/><path d="m12 15 5 6H7l5-6"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -219,7 +220,7 @@ class MusicFlowRemoteCard extends LitElement {
       .then((res) => {
         this._ui.serverOk = true;
         this._ui.wsState = "rest"; // WS 断但 REST 通:兜底模式
-        const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
+        const peers = this._filterRemote(res?.peers || []).filter((p) => p.available !== false);
         if (peers.length) {
           this._ui.peers = peers;
           this._ensurePeerSelected();
@@ -273,19 +274,22 @@ class MusicFlowRemoteCard extends LitElement {
     return null;
   }
 
-  // 本卡片只控制 DLNA 设备,非 DLNA(local/group)不显示。
-  _isDlnaPeer(p) {
+  // 本卡片控制 DLNA / AirPlay 等远程播放器(local/group 不显示)。
+  // AirPlay 没有 DLNA 那种 per-device 推送事件:它的队列走 peer_queue_changed
+  // (peer_queue),状态/媒体走 getStatus/getQueue 轮询(见 _startTracking /
+  // _refreshCurrentPeerView),所以只要把它放进 peer 列表即可像 DLNA 一样选播。
+  _isRemotePeer(p) {
     if (!p) return false;
-    if (typeof p.peerId === "string") return p.peerId.startsWith("dlna:");
-    return (p.kind || "") === "dlna";
+    if (typeof p.peerId === "string") return p.peerId.startsWith("dlna:") || p.peerId.startsWith("airplay:");
+    return (p.kind || "") === "dlna" || (p.kind || "") === "airplay";
   }
-  _filterDlna(peers) {
-    return (peers || []).filter((p) => this._isDlnaPeer(p));
+  _filterRemote(peers) {
+    return (peers || []).filter((p) => this._isRemotePeer(p));
   }
 
   _applyPeerSnapshot(peers) {
     // 只显示在线 DLNA 设备(离线设备由 _upsertPeer 移除,此处过滤兜底)。
-    const list = this._filterDlna(peers).filter((p) => p.available !== false);
+    const list = this._filterRemote(peers).filter((p) => p.available !== false);
     this._ui.peers = list;
     const pinned = this._resolveDefaultPeerId(list);
     if (!this._ui.currentPeerId || pinned) {
@@ -363,7 +367,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _upsertPeer(peer) {
-    if (!peer || !this._isDlnaPeer(peer)) return;
+    if (!peer || !this._isRemotePeer(peer)) return;
     // 设备离线:从列表移除(不再置灰显示);若正是当前播放设备,自动切到下一个可用。
     if (peer.available === false) {
       const before = this._ui.peers.length;
@@ -524,7 +528,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _refreshPeers() {
     this._client.getPeers().then((res) => {
-      const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
+      const peers = this._filterRemote(res?.peers || []).filter((p) => p.available !== false);
       if (peers.length) {
         this._ui.peers = peers;
         this._ensurePeerSelected();
@@ -1240,7 +1244,7 @@ class MusicFlowRemoteCard extends LitElement {
           <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"}"
             title="${p.kind || ""}"
             @click=${() => this._selectPeer(p.peerId)}>
-            ${this._icon("speaker", 16)} ${p.name || p.peerId}
+            ${this._icon(p.kind === "airplay" ? "airplay" : "speaker", 16)} ${p.name || p.peerId}
           </button>
         `)}
       </div>
