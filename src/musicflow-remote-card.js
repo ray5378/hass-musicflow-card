@@ -273,11 +273,15 @@ class MusicFlowRemoteCard extends LitElement {
     return null;
   }
 
-  // 本卡片只控制 DLNA 设备,非 DLNA(local/group)不显示。
+  // 本卡片控制后端驱动的播放器(dlna 设备、AirPlay 设备),非受控 peer
+  // (local / group)不显示。
   _isDlnaPeer(p) {
     if (!p) return false;
-    if (typeof p.peerId === "string") return p.peerId.startsWith("dlna:");
-    return (p.kind || "") === "dlna";
+    if (typeof p.peerId === "string") {
+      return p.peerId.startsWith("dlna:") || p.peerId.startsWith("airplay:");
+    }
+    const k = p.kind || "";
+    return k === "dlna" || k === "airplay";
   }
   _filterDlna(peers) {
     return (peers || []).filter((p) => this._isDlnaPeer(p));
@@ -302,7 +306,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applySnapshot(devices) {
-    // devices: { <deviceId>: DeviceStatus+media+name }
+    // devices: { <deviceId>: DeviceStatus+media+name } (DLNA EventManager 快照)
     // If current peer is dlna:<deviceId>, seed initial state from the snapshot.
     const pid = this._ui.currentPeerId;
     if (!pid || !pid.startsWith("dlna:")) return;
@@ -334,15 +338,18 @@ class MusicFlowRemoteCard extends LitElement {
   // 若卡片正处于"未选中"或"选中了离线设备"的冻结态,自动选中它并启动轮询,
   // 让音流等外部控制器起播后卡片立即跟随显示。用户手动选中了别的在线设备则不抢。
   _maybeFollowDevice(deviceId) {
-    const target = `dlna:${deviceId}`;
     const pid = this._ui.currentPeerId;
-    if (pid === target) return;
     if (pid) {
       const cur = (this._ui.peers || []).find((p) => p.peerId === pid);
       if (cur && cur.available !== false) return; // 正在看别的在线设备,不打扰
     }
-    const p = (this._ui.peers || []).find((x) => x.peerId === target);
-    if (p && p.available !== false) this._selectPeer(target, true);
+    for (const target of [`dlna:${deviceId}`, `airplay:${deviceId}`]) {
+      const p = (this._ui.peers || []).find((x) => x.peerId === target);
+      if (p && p.available !== false) {
+        this._selectPeer(target, true);
+        return;
+      }
+    }
   }
 
   // 后端起播强制刷新信号(player_refresh):起播瞬间立即全量拉取该设备最新状态
@@ -352,7 +359,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    if (pid !== `dlna:${deviceId}` && pid !== `group:${deviceId}`) return;
+    if (pid !== `dlna:${deviceId}` && pid !== `airplay:${deviceId}` && pid !== `group:${deviceId}`) return;
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
     this._refreshTimer = setTimeout(() => {
       this._refreshTimer = null;
@@ -394,10 +401,12 @@ class MusicFlowRemoteCard extends LitElement {
   _applyDeviceQueue(deviceId, queue) {
     this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
-    if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
+    if (pid === `dlna:${deviceId}` || pid === `airplay:${deviceId}` || pid === `group:${deviceId}`) {
       this._applyQueue(queue);
     }
-    const idx = this._ui.peers.findIndex((p) => p.peerId === `dlna:${deviceId}` || p.peerId === `group:${deviceId}`);
+    const idx = this._ui.peers.findIndex(
+      (p) => p.peerId === `dlna:${deviceId}` || p.peerId === `airplay:${deviceId}` || p.peerId === `group:${deviceId}`
+    );
     if (idx >= 0) this._ui.peers[idx] = { ...this._ui.peers[idx], queue };
     this.requestUpdate();
   }
@@ -442,7 +451,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
+    if (pid === `dlna:${deviceId}` || pid === `airplay:${deviceId}` || pid === `group:${deviceId}`) {
       this._applyStatus(state);
     }
   }
@@ -451,7 +460,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    if (pid === `dlna:${deviceId}` || pid === `group:${deviceId}`) {
+    if (pid === `dlna:${deviceId}` || pid === `airplay:${deviceId}` || pid === `group:${deviceId}`) {
       this._setMedia(media);
     }
   }
