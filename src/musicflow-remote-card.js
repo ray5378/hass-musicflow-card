@@ -1521,6 +1521,8 @@ class MusicFlowRemoteCard extends LitElement {
   // 保证 [窗口±overscan] 覆盖的块都已加载(在途并发 ≤ VS_CONCURRENCY,块到达后继续)。
   _vsEnsureLoaded(level) {
     if (!level || level.type === "root" || !level.vLoaded) return;
+    // 每次同步窗口后先做一次剪枝,保证 vCache / vLoaded 严格上界(不随浏览量增长)。
+    this._vsPrune(level);
     const start = Math.max(0, (level.vWinStart || 0) - VS_OVERSCAN);
     const end = Math.max(0, (level.vWinEnd || 0) + VS_OVERSCAN);
     const firstChunk = Math.floor(start / CHUNK);
@@ -1536,6 +1538,28 @@ class MusicFlowRemoteCard extends LitElement {
         this.requestUpdate();
         this._vsEnsureLoaded(level);
       });
+    }
+  }
+
+  // 剪枝:把数据缓存收窄到 [窗口 ±(overscan+1 块)] 内,窗口外的整块行与「已加载」标记一并删除。
+  // 作用:内存占用恒为「当前窗口 + 上下各 1 块」量级,不随滚动浏览过的条目数增长(回退到已剪掉的
+  // 区域时按块重新拉一次,开销可忽略);回退到保留区(±1 块 ≈ 3~4 屏)内时直接复用缓存,避免抖拉。
+  // 注意:vCache 与 vLoaded 按块(ci = idx / CHUNK)对齐剪;在途的 vLoading 块不在此打断,块到达后
+  // 由下一次 _vsEnsureLoaded 的自然剪枝收敛,避免「边拉边删」导致整块残留在缓存里不释放。
+  _vsPrune(level) {
+    const ws = level.vWinStart || 0, we = level.vWinEnd || 0;
+    const firstKeepChunk = Math.floor(Math.max(0, ws - (VS_OVERSCAN + CHUNK)) / CHUNK);
+    const lastKeepChunk = Math.floor((we + (VS_OVERSCAN + CHUNK)) / CHUNK);
+    if (level.vCache && level.vCache.size) {
+      for (const absIdx of level.vCache.keys()) {
+        const ci = Math.floor(absIdx / CHUNK);
+        if (ci < firstKeepChunk || ci > lastKeepChunk) level.vCache.delete(absIdx);
+      }
+    }
+    if (level.vLoaded && level.vLoaded.size) {
+      for (const ci of level.vLoaded) {
+        if (ci < firstKeepChunk || ci > lastKeepChunk) level.vLoaded.delete(ci);
+      }
     }
   }
 
