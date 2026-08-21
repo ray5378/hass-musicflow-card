@@ -1893,10 +1893,16 @@ class MusicFlowRemoteCard extends LitElement {
         localList = this._mapBrowseItems(type, res?.items);
       }
       // 远程:query 非空才并发搜全部已启用插件的全网结果。
+      // 歌单聚合端点返回 playlists,实体(song/album/artist)聚合端点返回 items——必须按类走对方法,否则取空。
       let remoteList = [];
       if (q) {
-        const agg = await this._client.aggregateEntitySearch(kind, q).catch(() => ({ items: [] }));
-        remoteList = ((agg && agg.items) || []).map((it) => this._mapRemoteItem(kind, it, it.providerId || ""));
+        if (kind === "playlist") {
+          const agg = await this._client.aggregatePlaylistSearch(q).catch(() => ({ playlists: [] }));
+          remoteList = ((agg && agg.playlists) || []).map((it) => this._mapRemoteItem("playlist", it, it.providerId || ""));
+        } else {
+          const agg = await this._client.aggregateEntitySearch(kind, q).catch(() => ({ items: [] }));
+          remoteList = ((agg && agg.items) || []).map((it) => this._mapRemoteItem(kind, it, it.providerId || ""));
+        }
       }
       level._aggregateAll = [...localList, ...remoteList];
       level._aggregateQuery = q;
