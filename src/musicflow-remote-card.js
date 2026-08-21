@@ -1472,8 +1472,9 @@ class MusicFlowRemoteCard extends LitElement {
   async _browserLoad(level, { reset = true } = {}) {
     if (level.loading) return;
     if (level.type === "root") return;
-    // 搜索来源默认「本地」;可搜索的库类型预取已启用插件列表(本地/插件切换器数据源)
-    if (level.srcMode === undefined) level.srcMode = "local";
+    // 搜索来源默认:歌单分类默认「聚合」(同时搜本地库与全部已启用插件的全网歌单),
+    // 其余分类默认「本地」;所有可搜索的库类型都预取已启用插件列表(来源切换器数据源)。
+    if (level.srcMode === undefined) level.srcMode = level.type === "playlists" ? "aggregate" : "local";
     this._loadLevelProviders(level);
     if (reset) this._vsReset(level);
     level.loading = true;
@@ -1585,6 +1586,10 @@ class MusicFlowRemoteCard extends LitElement {
     const page = Math.floor(offset / size) + 1; // V2 端点 1-based page
     // 「插件」搜索模式:走远程搜索端点(一次拉全,内存切片);本地模式走原有分支
     const srcMode = level.srcMode || "local";
+    // 「聚合」模式(仅歌单):本地按 query 过滤 + 全部已启用插件全网歌单合并成一股
+    if (srcMode === "aggregate") {
+      return this._fetchAggregateRange(level, offset, size);
+    }
     if (srcMode !== "local") {
       return this._fetchRemoteRange(level, offset, size, srcMode);
     }
@@ -1822,6 +1827,7 @@ class MusicFlowRemoteCard extends LitElement {
     if ((level.srcMode || "local") === mode) return;
     level.srcMode = mode;
     level._remoteAll = undefined;
+    level._aggregateAll = undefined; // 来源变化:丢弃聚合缓存,交给 _browserSearch 按新来源重搜
     this._browserSearch();
   }
 
@@ -1858,6 +1864,31 @@ class MusicFlowRemoteCard extends LitElement {
       level._remoteQuery = q;
     }
     const all = level._remoteAll;
+    return { items: all.slice(offset, offset + size), total: all.length };
+  }
+
+  // 聚合取数(仅歌单):本地(按 query 过滤)置前,再接入全部已启用插件的全网歌单(query 为空跳过远程)。
+  // 一次拉全后内存切片(聚合结果量级小,虚拟滚动只渲染窗口,内存恒定)。
+  async _fetchAggregateRange(level, offset, size) {
+    const q = (level.query || "").trim();
+    if (!level._aggregateAll || level._aggregateQuery !== q) {
+      // 本地歌单:query 命中本地库(subsonic getPlaylists 服务端过滤,一次取回)。
+      const localRes = await this._client.getPlaylists({ offset: 0, size: 500, query: q }).catch(() => null);
+      const localRaw = localRes?.playlists?.playlist || localRes?.playlists || [];
+      const localList = localRaw.map((p) => ({
+        kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+        coverArt: p.coverArt, songCount: p.songCount,
+      }));
+      let remoteList = [];
+      if (q) {
+        const agg = await this._client.aggregatePlaylistSearch(q).catch(() => ({ playlists: [] }));
+        remoteList = ((agg && agg.playlists) || []).map((it) =>
+          this._mapRemoteItem("playlist", it, it.providerId || ""));
+      }
+      level._aggregateAll = [...localList, ...remoteList];
+      level._aggregateQuery = q;
+    }
+    const all = level._aggregateAll;
     return { items: all.slice(offset, offset + size), total: all.length };
   }
 
@@ -2141,7 +2172,8 @@ class MusicFlowRemoteCard extends LitElement {
         ${showSearch ? html`
           <div class="br-search">
             ${this._levelSearchable(level.type) ? html`
-              <select class="br-src" .value=${level.srcMode || "local"} title="搜索来源:本地库或插件" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
+              <select class="br-src" .value=${level.srcMode || "local"} title="搜索来源:聚合/本地库或插件" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
+                ${this._levelKind(level.type) === "playlist" ? html`<option value="aggregate">聚合</option>` : ""}
                 <option value="local">本地</option>
                 ${(level.providers || []).map((p) => html`<option value=${p.id}>${p.name}</option>`)}
               </select>
