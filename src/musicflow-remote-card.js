@@ -1472,9 +1472,9 @@ class MusicFlowRemoteCard extends LitElement {
   async _browserLoad(level, { reset = true } = {}) {
     if (level.loading) return;
     if (level.type === "root") return;
-    // 搜索来源默认:歌单分类默认「聚合」(同时搜本地库与全部已启用插件的全网歌单),
-    // 其余分类默认「本地」;所有可搜索的库类型都预取已启用插件列表(来源切换器数据源)。
-    if (level.srcMode === undefined) level.srcMode = level.type === "playlists" ? "aggregate" : "local";
+    // 搜索来源默认:所有可搜索库类型(歌单/音乐/艺术家/专辑)默认「聚合」(同时搜本地库
+    // 与全部已启用插件的全网结果),其余分类默认「本地」;所有可搜索类型都预取插件列表。
+    if (level.srcMode === undefined) level.srcMode = this._levelSearchable(level.type) ? "aggregate" : "local";
     this._loadLevelProviders(level);
     if (reset) this._vsReset(level);
     level.loading = true;
@@ -1867,23 +1867,36 @@ class MusicFlowRemoteCard extends LitElement {
     return { items: all.slice(offset, offset + size), total: all.length };
   }
 
-  // 聚合取数(仅歌单):本地(按 query 过滤)置前,再接入全部已启用插件的全网歌单(query 为空跳过远程)。
-  // 一次拉全后内存切片(聚合结果量级小,虚拟滚动只渲染窗口,内存恒定)。
+  // 聚合取数(歌单/音乐/艺术家/专辑):本地(按 query 过滤)置前,再接入全部已启用插件的
+  // 全网结果(query 为空跳过远程)。一次拉全后内存切片(聚合结果量级小,内存恒定)。
   async _fetchAggregateRange(level, offset, size) {
+    const kind = this._levelKind(level.type);
     const q = (level.query || "").trim();
+    if (!kind) return { items: [], total: 0 };
     if (!level._aggregateAll || level._aggregateQuery !== q) {
-      // 本地歌单:query 命中本地库(subsonic getPlaylists 服务端过滤,一次取回)。
-      const localRes = await this._client.getPlaylists({ offset: 0, size: 500, query: q }).catch(() => null);
-      const localRaw = localRes?.playlists?.playlist || localRes?.playlists || [];
-      const localList = localRaw.map((p) => ({
-        kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
-        coverArt: p.coverArt, songCount: p.songCount,
-      }));
+      // 本地结果:query 命中本地库(subsonic/V2 服务端过滤,一次取回;q 为空取前 500)。
+      let localList = [];
+      if (kind === "playlist") {
+        const localRes = await this._client.getPlaylists({ offset: 0, size: 500, query: q }).catch(() => null);
+        const localRaw = localRes?.playlists?.playlist || localRes?.playlists || [];
+        localList = localRaw.map((p) => ({
+          kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+          coverArt: p.coverArt, songCount: p.songCount,
+        }));
+      } else {
+        const type = kind === "song" ? "songs" : kind === "album" ? "albums" : "artists";
+        const res = kind === "song"
+          ? await this._client.getSongsV2({ page: 1, pageSize: 500, query: q }).catch(() => null)
+          : kind === "album"
+            ? await this._client.getAlbumsV2({ page: 1, pageSize: 500, query: q }).catch(() => null)
+            : await this._client.getArtistsV2({ page: 1, pageSize: 500, query: q }).catch(() => null);
+        localList = this._mapBrowseItems(type, res?.items);
+      }
+      // 远程:query 非空才并发搜全部已启用插件的全网结果。
       let remoteList = [];
       if (q) {
-        const agg = await this._client.aggregatePlaylistSearch(q).catch(() => ({ playlists: [] }));
-        remoteList = ((agg && agg.playlists) || []).map((it) =>
-          this._mapRemoteItem("playlist", it, it.providerId || ""));
+        const agg = await this._client.aggregateEntitySearch(kind, q).catch(() => ({ items: [] }));
+        remoteList = ((agg && agg.items) || []).map((it) => this._mapRemoteItem(kind, it, it.providerId || ""));
       }
       level._aggregateAll = [...localList, ...remoteList];
       level._aggregateQuery = q;
@@ -2173,7 +2186,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="br-search">
             ${this._levelSearchable(level.type) ? html`
               <select class="br-src" .value=${level.srcMode || "local"} title="搜索来源:聚合/本地库或插件" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
-                ${this._levelKind(level.type) === "playlist" ? html`<option value="aggregate">聚合</option>` : ""}
+                ${this._levelSearchable(level.type) ? html`<option value="aggregate">聚合</option>` : ""}
                 <option value="local">本地</option>
                 ${(level.providers || []).map((p) => html`<option value=${p.id}>${p.name}</option>`)}
               </select>

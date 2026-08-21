@@ -639,6 +639,16 @@ export class BackendClient {
     });
     return { playlists: (res && res.playlists) || [], providers: (res && res.providers) || [] };
   }
+  // 聚合搜索(音乐/专辑/艺术家):一次并发搜索全部已启用插件的全网结果,返回 { items, providers }。
+  // 与 Web 前端「聚合」默认模式同源端点(POST /v1/{song|album|artist}-search/aggregate/search);
+  // 卡片本地结果另由各 getSongsV2/getAlbumsV2/getArtistsV2 提供,两者在调用方合并展示。
+  async aggregateEntitySearch(kind, q) {
+    const res = await this.rest(`/api/v1/${kind}-search/aggregate/search`, {
+      method: "POST",
+      body: { q },
+    });
+    return { items: (res && res.items) || [], providers: (res && res.providers) || [] };
+  }
   // 远程集合详情(专辑/歌单/艺术家)只拉不导入:返回歌曲列表
   async remoteItems(kind, providerId, { source = "", id = "", name = "" } = {}) {
     const qs = [];
