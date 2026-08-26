@@ -1678,11 +1678,12 @@ class MusicFlowRemoteCard extends LitElement {
   //   今日漫游(combo)卡带刷新;随机补齐到 homeCount;
   // - 各平台精选:recommend 能力插件输出(如 go-music-dl),每个 channel 一个分区。
   async _fetchHomeItems() {
-    const [plRes, cntRes, cardRes, recRes] = await Promise.all([
+    const [plRes, cntRes, cardRes, recRes, lcRes] = await Promise.all([
       this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
       this._client.getHomePlaylistCount().catch(() => null),
       this._client.getHomeCards().catch(() => null),
       this._client.getRecommend().catch(() => null),
+      this._client.getLocalRecommend().catch(() => null),
     ]);
     const pls = plRes?.items || [];
     let homeCount = 8;
@@ -1719,6 +1720,15 @@ class MusicFlowRemoteCard extends LitElement {
         trackCount: pl.trackCount || "", creator: pl.creator || "", link: pl.link || "",
         providerId,
       }));
+    }
+    // 本地随机(按平台):后端 /v1/local-recommend 提供,本地库已入库歌单按平台分组随机,
+    // 每次刷新不同。与 Web 前端「本地随机」一致:kind=playlist 直接打开本地歌单,无需导入。
+    const lcChannels = lcRes?.channels || [];
+    for (const ch of lcChannels) {
+      const chPls = ch.playlists || [];
+      if (!chPls.length) continue;
+      items.push({ kind: "section", name: `${(ch.name || ch.source || "").replace(/音乐$/, "")}·本地随机`, count: chPls.length });
+      chPls.forEach((pl) => pushPl(pl.id, pl.name, pl.coverArt, pl.songCount, ""));
     }
     return { items, total: items.length };
   }

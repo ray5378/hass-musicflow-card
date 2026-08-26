@@ -600,6 +600,10 @@ export class BackendClient {
   async getRecommend() {
     return this.rest("/api/v1/recommend");
   }
+  /** 首页「本地随机(按平台)」:后端 /v1/local-recommend,本地库按平台随机挑已入库歌单。 */
+  async getLocalRecommend() {
+    return this.rest("/api/v1/local-recommend");
+  }
   /** 手动刷新推荐:每日推荐/本地推荐重新随机生成并重组今日漫游(Web 首页刷新同源)。 */
   async refreshRecommend() {
     return this.rest("/api/v1/recommend/refresh", {
