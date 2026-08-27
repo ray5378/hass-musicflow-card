@@ -1727,7 +1727,15 @@ class MusicFlowRemoteCard extends LitElement {
     for (const ch of lcChannels) {
       const chPls = ch.playlists || [];
       if (!chPls.length) continue;
-      items.push({ kind: "section", name: `${(ch.name || ch.source || "").replace(/音乐$/, "")}·本地随机`, count: chPls.length });
+      // 分区标题优先用后端透传的 subtag(如「每日更新」),缺省回落「本地随机」;
+      // 副标题用 tagline(说明性文案),缺省显示歌单数量「N 张」(与「精选」分区一致)。
+      const base = (ch.name || ch.source || "").replace(/音乐$/, "");
+      items.push({
+        kind: "section",
+        name: `${base}·${ch.subtag || "本地随机"}`,
+        tagline: typeof ch.tagline === "string" && ch.tagline ? ch.tagline : null,
+        count: chPls.length,
+      });
       chPls.forEach((pl) => pushPl(pl.id, pl.name, pl.coverArt, pl.songCount, ""));
     }
     return { items, total: items.length };
@@ -2125,12 +2133,13 @@ class MusicFlowRemoteCard extends LitElement {
           ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
         </div>`;
     }
-    // 首页推荐分区头(各平台精选小标题)。
+    // 首页推荐分区头(各平台精选小标题)。有 tagline(说明文案)时作为副标题展示,
+    // 否则回落歌单数量「N 张」。
     if (it.kind === "section") {
       return html`
         <div class="bsec">
           <span class="bsec-name">${it.name}</span>
-          <span class="bsec-sub">${it.count || 0} 张</span>
+          <span class="bsec-sub">${it.tagline || `${it.count || 0} 张`}</span>
         </div>`;
     }
     // 首页推荐:远程平台歌单(go-music-dl 等 recommend 插件输出)。封面为远程 URL,
