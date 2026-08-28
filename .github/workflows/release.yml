@@ -40,22 +40,25 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.86 — 极简模式两处修正
+            ## v1.6.87 — 极简模式间距 + 暂停去抖延长
 
             ### 修复
-            1. **切歌不再退出极简模式**:v1.6.85 的修法在切歌瞬间(isPlaying 短暂 false 几十~几百毫秒)
-               仍然被判成"暂停"而退出。加 **500ms 去抖**:短暂 false 让 mini 保持,
-               持续 false 才是真暂停才退出。同时切歌恢复时(isPlaying false→true)撤销去抖。
-            2. **回退歌词居中 + 标题封面下移**:
-               - 上一版把歌词 `text-align: center` 让标题(左对齐)和歌词(居中)错位,
-                 视觉"剧中了"。回退为左对齐,保持标题和歌词基线对齐。
-               - 加 `padding-top: 24px`(原 14px),把标题和封面下移一点,不再贴顶。
-               - 歌词盒高度 198 → 188px 适配新间距。
+            1. **歌词/标题整体右移 6px**:极简模式 `.wrap` 左侧 padding 14→20px,
+               标题与歌词起点右移 6px(封面仍在右缘,位置不变),避免贴左。
+            2. **暂停去抖 500ms → 20s**:切歌/短暂暂停(几秒内恢复)极简保持;
+               只有真正暂停持续 20 秒才回退完整模式。覆盖各种播放器的切歌空白窗口。
+
+            ### 极简模式最终行为
+            - 空闲 3s(可配 `auto_hide_delay`)自动隐藏切换器/控件/进度条,只留 曲名+封面+歌词
+            - 歌词 188px 视口,当前行随时间从顶部滑到中段后停住
+            - 鼠标移入 / 点击 / 触屏点按 / 键盘焦点 → 立即恢复完整模式
+            - 切歌:极简保持,不闪完整模式
+            - 暂停:极简保持 20s,持续 20s 才回退完整模式
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.86`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.87`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
