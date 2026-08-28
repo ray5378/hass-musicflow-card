@@ -40,25 +40,23 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.84 — 极简歌词模式版式重做
+            ## v1.6.85 — 极简模式三处微调
 
-            收到实测反馈后重做极简模式版式:之前用 `visibility:hidden` 让切换器/控件占位,
-            导致歌词只能从卡片中部开始、顶部空一大块(看起来"整体下移 + 偏左")。
-
-            本次改为真正移除占位,歌词接管整卡高度,并**按你的要求去掉极简模式的进度条**。
-
-            ### 新版极简模式
-            - 切换器(.outputs)、播放控件行(.controls)、进度条(.progress-row)在极简模式下
-              `display:none` 完全移除,不再占位
-            - 歌词视口 100px → **198px**(约 9~10 行),从标题下沿一路铺到卡底,当前行中段居中
-            - 保留:曲名 + 封面;移除:进度条(极简模式不再显示时间/进度)
-            - 卡片高度靠 `min-height` 与完整模式保持恒等(250px)
-            - 唤出:鼠标移入 / 点击 / 触屏点按 / 键盘焦点进入,立即恢复完整模式
+            ### 修复
+            1. **歌词从顶部开始,高亮随时间下滑到中段**:之前 `curSlot` 固定为 4,歌曲开头第一句
+               也被放在中间(第 5 槽),前 4 行空着。改为 `curSlot = min(lyricIndex, 4)`,开头
+               从顶部铺,高亮自然从 y=0 一路滑到 y=80 后停住。
+            2. **极简模式歌词居中**:宽卡片里左对齐歌词视觉重心偏左。极简模式下歌词
+               `text-align: center`(标题仍左对齐与封面呼应)。
+            3. **切歌不退出极简模式**:之前 `_resetIdleTimer` 在 `canMini()=false` 时强制退出
+               mini,切歌瞬间 `isPlaying` 短暂 false 就会让整卡闪回完整模式。改为
+               `_resetIdleTimer` 不再强制退出,只在 `_updatedMiniWatch` 里显式处理
+               "暂停"和"打开队列/媒体库"两种真该退出的场景。切歌时 mini 状态保持。
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.84`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.85`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

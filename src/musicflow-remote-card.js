@@ -31,7 +31,7 @@ const LYRIC_CUR_SLOT = 1;
 // 极简歌词模式(auto-hide):歌词视口扩到 198px(≈9.9 行,标题下沿到卡底),当前行落在第 5 槽(中段)。
 const LYRIC_CUR_SLOT_MINI = 4;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.84";
+const CARD_VERSION = "1.6.85";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -740,15 +740,15 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
-  // 重置空闲计时:满足条件则 delay 后自动进入极简;不满足时若已在极简则强制恢复完整模式。
+  // 重置空闲计时:满足条件则 delay 后自动进入极简。
+  // 不在这里强制退出 mini —— 切歌瞬间 isPlaying 短暂 false 也会让 canMini()=false,
+  // 强制退出会让切歌时整卡闪一下完整模式。"暂停"和"打开面板"两种真该退出的场景
+  // 由 _updatedMiniWatch 显式处理。
   _resetIdleTimer() {
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (!(this._config.auto_hide ?? true)) return;
     if (this._focusInside) { if (this._ui.mini) this._setMini(false); return; } // 焦点在内:保持完整,不重开计时
-    if (!this._canMini()) {
-      if (this._ui.mini) this._setMini(false);
-      return;
-    }
+    if (!this._canMini()) return; // 条件不满足:不重开计时,也不强制退出
     const delay = Math.max(500, Number(this._config.auto_hide_delay ?? 3000));
     this._miniTimer = setTimeout(() => {
       this._miniTimer = null;
@@ -778,17 +778,45 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 仅当极简相关状态真正变化时才重置计时(进度 tick 每秒触发 requestUpdate,不能每次都重置)。
+  // 显式处理两种真该退出 mini 的场景:暂停、开面板。切歌(songId 变化)不退出,
+  // 让 mini 在切歌时保持,避免整卡闪一下完整模式。
   _updatedMiniWatch() {
     const u = this._ui;
     const w = this._miniWatch;
     const lyricCount = u.lyrics ? u.lyrics.length : 0;
     const songId = u.song ? u.song.songId : null;
-    if (w.isPlaying === u.isPlaying && w.lyricCount === lyricCount &&
-        w.showVolume === u.showVolume && w.showQueue === u.showQueue &&
-        w.showBrowser === u.showBrowser && w.songId === songId) return;
+
+    const isPlayingChanged = w.isPlaying !== u.isPlaying;
+    const songIdChanged = w.songId !== songId;
+    const queueChanged = w.showQueue !== u.showQueue;
+    const browserChanged = w.showBrowser !== u.showBrowser;
+    const volumeChanged = w.showVolume !== u.showVolume;
+    const lyricCountChanged = w.lyricCount !== lyricCount;
+
+    if (!isPlayingChanged && !songIdChanged && !queueChanged && !browserChanged &&
+        !volumeChanged && !lyricCountChanged) return;
+
+    const wasPlaying = w.isPlaying;
+    const wasQueue = w.showQueue;
+    const wasBrowser = w.showBrowser;
+
     w.isPlaying = u.isPlaying; w.lyricCount = lyricCount;
     w.showVolume = u.showVolume; w.showQueue = u.showQueue;
     w.showBrowser = u.showBrowser; w.songId = songId;
+
+    // 暂停(isPlaying true→false 且非切歌)→ 退出 mini
+    if (isPlayingChanged && wasPlaying && !u.isPlaying) {
+      if (this._ui.mini) this._setMini(false);
+      this._resetIdleTimer();
+      return;
+    }
+    // 打开队列/媒体库面板 → 退出 mini
+    if ((!wasQueue && u.showQueue) || (!wasBrowser && u.showBrowser)) {
+      if (this._ui.mini) this._setMini(false);
+      this._resetIdleTimer();
+      return;
+    }
+    // 切歌/歌词加载/音量切换:仅重置计时(mini 状态保持)
     this._resetIdleTimer();
   }
 
@@ -1345,8 +1373,11 @@ class MusicFlowRemoteCard extends LitElement {
     const lines = this._ui.lyrics || [];
     if (!lines.length) return html`<div class="lyricbox"></div>`;
     const idx = this._ui.lyricIndex;
-    // 极简模式大视口下当前行居中(槽位 4),完整模式紧贴标题(槽位 1)。
-    const curSlot = this._ui.mini ? LYRIC_CUR_SLOT_MINI : LYRIC_CUR_SLOT;
+    // 极简模式:开头几行从顶部开始(高亮随时间下滑到中段),避免顶部留白;
+    // 完整模式:当前行固定在第 2 槽(紧贴标题)。
+    const curSlot = this._ui.mini
+      ? Math.min(Math.max(0, idx), LYRIC_CUR_SLOT_MINI)
+      : LYRIC_CUR_SLOT;
     const shift = (idx - curSlot) * LYRIC_LINE_H;
     return html`
       <div class="lyricbox">
@@ -2466,6 +2497,8 @@ class MusicFlowRemoteCard extends LitElement {
       .wrap.mini > .lower > .controls,
       .wrap.mini > .lower > .progress-row { display: none; }
       .wrap.mini .lyricbox { height: 198px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
+      /* 极简模式:歌词居中,避免宽卡片里左对齐视觉重心偏左(标题保持左对齐,与封面呼应) */
+      .wrap.mini .lyricbox-line { text-align: center; }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
       /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。
          动效偏好:reduced-motion → 直切。 */
