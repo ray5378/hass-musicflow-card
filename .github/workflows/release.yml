@@ -40,23 +40,22 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.85 — 极简模式三处微调
+            ## v1.6.86 — 极简模式两处修正
 
             ### 修复
-            1. **歌词从顶部开始,高亮随时间下滑到中段**:之前 `curSlot` 固定为 4,歌曲开头第一句
-               也被放在中间(第 5 槽),前 4 行空着。改为 `curSlot = min(lyricIndex, 4)`,开头
-               从顶部铺,高亮自然从 y=0 一路滑到 y=80 后停住。
-            2. **极简模式歌词居中**:宽卡片里左对齐歌词视觉重心偏左。极简模式下歌词
-               `text-align: center`(标题仍左对齐与封面呼应)。
-            3. **切歌不退出极简模式**:之前 `_resetIdleTimer` 在 `canMini()=false` 时强制退出
-               mini,切歌瞬间 `isPlaying` 短暂 false 就会让整卡闪回完整模式。改为
-               `_resetIdleTimer` 不再强制退出,只在 `_updatedMiniWatch` 里显式处理
-               "暂停"和"打开队列/媒体库"两种真该退出的场景。切歌时 mini 状态保持。
+            1. **切歌不再退出极简模式**:v1.6.85 的修法在切歌瞬间(isPlaying 短暂 false 几十~几百毫秒)
+               仍然被判成"暂停"而退出。加 **500ms 去抖**:短暂 false 让 mini 保持,
+               持续 false 才是真暂停才退出。同时切歌恢复时(isPlaying false→true)撤销去抖。
+            2. **回退歌词居中 + 标题封面下移**:
+               - 上一版把歌词 `text-align: center` 让标题(左对齐)和歌词(居中)错位,
+                 视觉"剧中了"。回退为左对齐,保持标题和歌词基线对齐。
+               - 加 `padding-top: 24px`(原 14px),把标题和封面下移一点,不再贴顶。
+               - 歌词盒高度 198 → 188px 适配新间距。
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.85`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.86`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

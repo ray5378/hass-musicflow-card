@@ -31,7 +31,7 @@ const LYRIC_CUR_SLOT = 1;
 // 极简歌词模式(auto-hide):歌词视口扩到 198px(≈9.9 行,标题下沿到卡底),当前行落在第 5 槽(中段)。
 const LYRIC_CUR_SLOT_MINI = 4;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.85";
+const CARD_VERSION = "1.6.86";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -144,6 +144,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
     this._miniTimer = null; // 极简歌词模式:空闲隐藏计时器
+    this._pauseTimer = null; // 极简歌词模式:暂停去抖计时器(切歌瞬间 isPlaying 短暂 false 也会触发,需去抖)
     // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
     this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, songId: null };
     this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
@@ -178,6 +179,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
+    if (this._pauseTimer) { clearTimeout(this._pauseTimer); this._pauseTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
     if (this._client) this._client.disconnect();
     if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
@@ -804,11 +806,22 @@ class MusicFlowRemoteCard extends LitElement {
     w.showVolume = u.showVolume; w.showQueue = u.showQueue;
     w.showBrowser = u.showBrowser; w.songId = songId;
 
-    // 暂停(isPlaying true→false 且非切歌)→ 退出 mini
+    // 暂停(isPlaying true→false)→ 去抖 500ms:切歌瞬间 isPlaying 会有短暂 false
+    // (~几十~几百毫秒),持续 false 才是真暂停,短暂 false 让 mini 保持不闪。
     if (isPlayingChanged && wasPlaying && !u.isPlaying) {
-      if (this._ui.mini) this._setMini(false);
-      this._resetIdleTimer();
+      if (this._pauseTimer) clearTimeout(this._pauseTimer);
+      this._pauseTimer = setTimeout(() => {
+        this._pauseTimer = null;
+        if (this._ui.isPlaying) return; // 已经恢复播放,不退出
+        if (this._ui.mini) this._setMini(false);
+        this._resetIdleTimer();
+      }, 500);
       return;
+    }
+    // 切歌时 isPlaying 短暂 false 后变 true:撤销去抖
+    if (isPlayingChanged && !wasPlaying && u.isPlaying && this._pauseTimer) {
+      clearTimeout(this._pauseTimer);
+      this._pauseTimer = null;
     }
     // 打开队列/媒体库面板 → 退出 mini
     if ((!wasQueue && u.showQueue) || (!wasBrowser && u.showBrowser)) {
@@ -2492,13 +2505,11 @@ class MusicFlowRemoteCard extends LitElement {
          进度条(.progress-row)全部隐藏(display:none,不占位),歌词视口接管整卡高度:
          标题下沿 → 卡底(100px → 198px,约 9~10 行)。卡片靠 min-height 保持与完整模式同高。
          进入:歌词 420ms easeOutQuint 扩展;恢复:300ms 收缩。enter/move/click/touch 唤出。 */
-      .wrap.mini { min-height: 250px; }
+      .wrap.mini { min-height: 250px; padding-top: 24px; }
       .wrap.mini > .outputs,
       .wrap.mini > .lower > .controls,
       .wrap.mini > .lower > .progress-row { display: none; }
-      .wrap.mini .lyricbox { height: 198px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
-      /* 极简模式:歌词居中,避免宽卡片里左对齐视觉重心偏左(标题保持左对齐,与封面呼应) */
-      .wrap.mini .lyricbox-line { text-align: center; }
+      .wrap.mini .lyricbox { height: 188px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
       /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。
          动效偏好:reduced-motion → 直切。 */
