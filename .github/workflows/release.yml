@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build card & create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build card
+        run: npm run build
+
+      - name: Verify dist is committed and up to date
+        run: |
+          git diff --exit-code dist/hass-musicflow-card.js || {
+            echo "dist/hass-musicflow-card.js is stale - run 'npm run build' and commit it before tagging.";
+            exit 1;
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            ## v1.6.81 — 极简歌词模式(auto-hide)
+
+            播放中空闲时自动隐藏播放控件与「切换播放器」按钮,整卡只显示 歌词 + 封面 + 进度,
+            歌词视口扩展至约 9 行、当前行居中高亮;鼠标移入 / 点击任意位置立即恢复完整控件。
+            卡片总高不变(控件占位隐藏、零跳变),进出切换带平滑动效。
+
+            ### 新增
+            - 播放中空闲 3 秒(可配置)自动进入极简模式,隐藏播放控件行与切换播放器按钮
+            - 歌词视口 100px → 192px(约 9 行),当前行居中
+            - 恢复触发:鼠标移入 / 点击卡片 / 触屏点按
+            - 暂停、打开队列/媒体库/音量面板、无歌词时不会隐藏
+            - 键盘焦点在卡片内强制完整模式(:focus-within)
+            - 系统「减弱动态效果」时直接切换,无动画
+            - 极简模式下进度条默认隐藏滑块圆点,悬停显现
+
+            ### 新增配置项
+            - `auto_hide`: 总开关(true / false,默认 true)
+            - `auto_hide_delay`: 空闲隐藏延迟毫秒数(默认 3000)
+
+            ### 升级步骤
+            1. HACS 中更新本卡片
+            2. 仪表盘「编辑 → ⋮ → 重新加载资源」或直接刷新页面,使新 JS 生效
+          files: dist/hass-musicflow-card.js
+          draft: false
+          prerelease: false
