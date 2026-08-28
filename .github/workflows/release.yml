@@ -40,16 +40,17 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.88 — 极简模式封面左移 6px
+            ## v1.6.89 — 极简模式歌词底部多显示一行
 
             ### 修复
-            - 极简模式下封面左移 6px(`margin-right: 6px`):右缘距卡边 14→20px,
-              与左侧 20px 内边距(标题/歌词)左右对称。
+            - 极简模式歌词视口 188px → **208px**,底部多显示一行(约 10 行可视)
+            - 同步把上下渐隐从 16% 收窄到 10%,多出的那一行保持可读
+              (当前行仍在第 5 槽,位置不变,只是底部多预览一行)
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.88`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.89`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

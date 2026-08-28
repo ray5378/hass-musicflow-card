@@ -34,7 +34,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.88";
+const CARD_VERSION = "1.6.89";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -2514,7 +2514,13 @@ class MusicFlowRemoteCard extends LitElement {
       .wrap.mini > .outputs,
       .wrap.mini > .lower > .controls,
       .wrap.mini > .lower > .progress-row { display: none; }
-      .wrap.mini .lyricbox { height: 188px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
+      .wrap.mini .lyricbox {
+        height: 208px;
+        transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s;
+        /* 视口加高一档后,把上下渐隐收窄(16%→10%),让多出的这一行保持可读 */
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 90%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0%, #000 10%, #000 90%, transparent 100%);
+      }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
       /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。
          动效偏好:reduced-motion → 直切。 */
