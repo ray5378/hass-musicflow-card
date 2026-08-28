@@ -40,23 +40,16 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.90 — 极简模式卡片尺寸与完整模式严格一致
+            ## v1.6.91 — 极简模式歌词底部减少一行
 
             ### 修复
-            - **极简模式卡片变高 38px 的根因**:HA 卡片用 shadow DOM,不吃 HA 全局的
-              `box-sizing: border-box`,`.wrap` 默认 content-box —— `min-height:250px` 只作用
-              于内容盒,再加 `padding-top:24 + padding-bottom:14` 叠到 288px(完整模式 250px)。
-            - **修法(双保险)**:
-              1. `.wrap` 加 `box-sizing: border-box`(min-height 含 padding)
-              2. JS 在完整模式下实测 `.wrap` 高度(offsetHeight),进极简时通过
-                 `--mini-h` 变量精确套用 —— 即使完整模式不是标准 250px(如切换器换行),
-                 极简也跟到完全一致,卡片尺寸切换前后零变化
-            - `.wrap.mini` 加 `overflow: hidden`,兜底裁掉歌词盒越出卡底的部分(渐隐尾段)
+            - 极简模式歌词视口 208px → **188px**,底部减少一行(约 9 行可视)
+            - 渐隐恢复默认 16%(移除 v1.6.89 的 10% 覆盖),回到 v1.6.88 的观感
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.90`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.91`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
