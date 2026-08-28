@@ -28,11 +28,10 @@ const LYRIC_LINE_H = 20;
 // 视口显示行数,以及「当前行」落在第几槽(0 基)。完整模式 = 5 行视口、当前行固定在第 2 行。
 const LYRIC_VIEW_LINES = 5;
 const LYRIC_CUR_SLOT = 1;
-// 极简歌词模式(auto-hide):歌词视口扩到 146px(7.3 行,250px 卡片内可装下的最大尺寸——再大会
-// 越过进度条导致溢出),当前行落在第 4 槽(中段)。
-const LYRIC_CUR_SLOT_MINI = 3;
+// 极简歌词模式(auto-hide):歌词视口扩到 198px(≈9.9 行,标题下沿到卡底),当前行落在第 5 槽(中段)。
+const LYRIC_CUR_SLOT_MINI = 4;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.83";
+const CARD_VERSION = "1.6.84";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -2458,33 +2457,19 @@ class MusicFlowRemoteCard extends LitElement {
       /* 浅色封面(整卡切深色文字)时金色对比不足,换成深琥珀 */
       ha-card.dark .lyricbox-line.cur { color: #a3690a; }
       /* === 极简歌词模式(auto-hide) ===
-         播放中空闲 auto_hide_delay(默认 3s)后:切换器(.outputs)与播放控件行(.controls)
-         淡出隐藏,歌词视口 100px→146px(约 7 行;250px 卡片内能装下的最大尺寸——再高会
-         越过进度条造成溢出)。两者 visibility 占位 → 卡片总高恒等 250px,零跳变。
-         进入:控件 220ms 淡出+上移 → 错峰 180ms → 歌词 420ms 扩展(easeOutQuint)。
-         恢复:歌词 300ms 收缩 → 控件 220ms 淡入;enter/move/click/touch 均可触发。 */
+         播放中空闲 auto_hide_delay(默认 3s)后:切换器(.outputs)、播放控件行(.controls)、
+         进度条(.progress-row)全部隐藏(display:none,不占位),歌词视口接管整卡高度:
+         标题下沿 → 卡底(100px → 198px,约 9~10 行)。卡片靠 min-height 保持与完整模式同高。
+         进入:歌词 420ms easeOutQuint 扩展;恢复:300ms 收缩。enter/move/click/touch 唤出。 */
+      .wrap.mini { min-height: 250px; }
       .wrap.mini > .outputs,
-      .wrap.mini > .lower > .controls {
-        visibility: hidden; opacity: 0; transform: translateY(-6px);
-        transition: opacity 0.22s ease, transform 0.22s ease, visibility 0s 0.22s;
-      }
-      .wrap:not(.mini) > .outputs,
-      .wrap:not(.mini) > .lower > .controls {
-        opacity: 1; transform: none;
-        transition: opacity 0.22s ease 0.15s, transform 0.22s ease 0.15s;
-      }
-      .wrap.mini .lyricbox { height: 146px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
+      .wrap.mini > .lower > .controls,
+      .wrap.mini > .lower > .progress-row { display: none; }
+      .wrap.mini .lyricbox { height: 198px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
-      /* 极简模式进度条:滑块圆点默认隐藏,悬停轨道时显现,保持干净 */
-      .wrap.mini .seek::-webkit-slider-thumb { opacity: 0; transition: opacity 0.15s; }
-      .wrap.mini .seek:hover::-webkit-slider-thumb { opacity: 1; }
-      .wrap.mini .seek::-moz-range-thumb { opacity: 0; transition: opacity 0.15s; }
-      .wrap.mini .seek:hover::-moz-range-thumb { opacity: 1; }
-      /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏,
-         不再用 CSS :focus-within 强制 —— 它会顶掉音量面板的 volmode 隐身规则。 */
-      /* 动效偏好:reduced-motion → 直切 */
+      /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。
+         动效偏好:reduced-motion → 直切。 */
       @media (prefers-reduced-motion: reduce) {
-        .wrap.mini > .outputs, .wrap.mini > .lower > .controls,
         .wrap.mini .lyricbox, .wrap:not(.mini) .lyricbox { transition: none !important; }
       }
       .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }

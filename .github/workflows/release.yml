@@ -40,29 +40,25 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.83 — 极简歌词模式修复(音量面板 + 版本核对)
+            ## v1.6.84 — 极简歌词模式版式重做
 
-            v1.6.82 修复后仍有问题:音量面板打开时控件仍不隐身。真凶是 CSS `:focus-within`
-            (visibility:visible !important)——点音量按钮后按钮获得焦点,该规则把音量面板的
-            `volmode` 隐身规则顶掉了。
+            收到实测反馈后重做极简模式版式:之前用 `visibility:hidden` 让切换器/控件占位,
+            导致歌词只能从卡片中部开始、顶部空一大块(看起来"整体下移 + 偏左")。
 
-            本次改为 JS `focusin/focusout` 处理键盘可达性(焦点在卡片内时恢复完整模式并暂停
-            空闲隐藏),不再用 CSS 强制 visibility,音量面板恢复原行为。
+            本次改为真正移除占位,歌词接管整卡高度,并**按你的要求去掉极简模式的进度条**。
 
-            ### 修复
-            - 移除 CSS `:focus-within` 强制规则,改为 JS focusin/focusout(不干扰 volmode)
-            - 焦点在卡片内(如 Tab 到进度条)时保持完整模式,不进入极简;焦点离开后恢复空闲隐藏
-            - 新增控制台版本标记:打开浏览器开发者工具(F12)→ Console,可看到
-              `[musicflow-remote-card] v1.6.83`,用于核对实际加载的版本
-
-            ### 排查"更新了但没变化"的缓存问题
-            1. HACS 更新本卡片后,在浏览器按 **Ctrl+Shift+R** 强制刷新
-            2. 或 Lovelace 仪表盘「编辑 → ⋮ → 重新加载资源」
-            3. 打开 F12 Console,确认看到 `[musicflow-remote-card] v1.6.83`(旧版本号=还在用缓存)
+            ### 新版极简模式
+            - 切换器(.outputs)、播放控件行(.controls)、进度条(.progress-row)在极简模式下
+              `display:none` 完全移除,不再占位
+            - 歌词视口 100px → **198px**(约 9~10 行),从标题下沿一路铺到卡底,当前行中段居中
+            - 保留:曲名 + 封面;移除:进度条(极简模式不再显示时间/进度)
+            - 卡片高度靠 `min-height` 与完整模式保持恒等(250px)
+            - 唤出:鼠标移入 / 点击 / 触屏点按 / 键盘焦点进入,立即恢复完整模式
 
             ### 升级步骤
             1. HACS 中更新本卡片
-            2. 按上述缓存步骤重载,确认 Console 版本号为 v1.6.83
+            2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.84`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
