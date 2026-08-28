@@ -34,7 +34,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.89";
+const CARD_VERSION = "1.6.90";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -151,6 +151,7 @@ class MusicFlowRemoteCard extends LitElement {
     // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
     this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, songId: null };
     this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
+    this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
@@ -1297,6 +1298,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (pc) this._loadCoverInto(pc);
     const bg = this.shadowRoot?.querySelector(".coverbg-img");
     if (bg && this._ui.song?.coverArt) this._loadCoverInto(bg);
+    // 极简模式:非 mini 时实测 .wrap 完整高度,进 mini 用 --mini-h 套用,保证卡片尺寸不变
+    if (!this._ui.mini) {
+      const w = this.shadowRoot?.querySelector(".wrap");
+      if (w) this._miniFullH = w.offsetHeight;
+    }
     // 极简歌词模式:相关状态变化时重置空闲计时;条件不满足(暂停/开面板/无歌词)时强制恢复完整模式。
     this._updatedMiniWatch();
   }
@@ -1319,7 +1325,7 @@ class MusicFlowRemoteCard extends LitElement {
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">连接恢复中…（REST 兜底）</div>` : ""}
           ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">无法连接后端，自动重连中…</div>` : ""}
           ${this._renderOutputs()}
@@ -2438,6 +2444,7 @@ class MusicFlowRemoteCard extends LitElement {
         --line-soft: rgba(0, 0, 0, 0.10);
       }
       .wrap { position: relative; z-index: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px;
+        box-sizing: border-box; /* shadow DOM 不吃 HA 全局 reset:content-box 会让 min-height+padding 叠加,极简模式卡片变高 */
         transition: opacity 0.3s ease, filter 0.3s ease; }
       /* 封面融合背景层:当前封面放大+模糊+拉伸铺满整卡;veil 统一压暗保证文字可读 */
       .coverbg { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
@@ -2508,7 +2515,9 @@ class MusicFlowRemoteCard extends LitElement {
          进度条(.progress-row)全部隐藏(display:none,不占位),歌词视口接管整卡高度:
          标题下沿 → 卡底(100px → 198px,约 9~10 行)。卡片靠 min-height 保持与完整模式同高。
          进入:歌词 420ms easeOutQuint 扩展;恢复:300ms 收缩。enter/move/click/touch 唤出。 */
-      .wrap.mini { min-height: 250px; padding-top: 24px; padding-left: 20px; }
+      /* 极简模式高度 = 完整模式实测高度(--mini-h,由 JS updated() 在非 mini 时测量),
+         保证卡片尺寸切换前后完全一致,零跳变。overflow:hidden 兜底裁掉歌词盒越出卡底的部分。 */
+      .wrap.mini { min-height: var(--mini-h, 250px); overflow: hidden; padding-top: 24px; padding-left: 20px; }
       /* 极简模式:封面左移 6px —— 右缘距卡边从 14px 变 20px,与左侧 20px 内边距对称 */
       .wrap.mini .cover { margin-right: 6px; }
       .wrap.mini > .outputs,
