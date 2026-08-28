@@ -28,8 +28,9 @@ const LYRIC_LINE_H = 20;
 // 视口显示行数,以及「当前行」落在第几槽(0 基)。完整模式 = 5 行视口、当前行固定在第 2 行。
 const LYRIC_VIEW_LINES = 5;
 const LYRIC_CUR_SLOT = 1;
-// 极简歌词模式(auto-hide):歌词视口扩到 192px(≈9.6 行),当前行居中落在第 5 槽(中段)。
-const LYRIC_CUR_SLOT_MINI = 4;
+// 极简歌词模式(auto-hide):歌词视口扩到 146px(7.3 行,250px 卡片内可装下的最大尺寸——再大会
+// 越过进度条导致溢出),当前行落在第 4 槽(中段)。
+const LYRIC_CUR_SLOT_MINI = 3;
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -2436,7 +2437,8 @@ class MusicFlowRemoteCard extends LitElement {
       ha-card.dark .lyricbox-line.cur { color: #a3690a; }
       /* === 极简歌词模式(auto-hide) ===
          播放中空闲 auto_hide_delay(默认 3s)后:切换器(.outputs)与播放控件行(.controls)
-         淡出隐藏,歌词视口 100px→192px 接管释放的高度;两者 visibility 占位 → 卡片总高零跳变。
+         淡出隐藏,歌词视口 100px→146px(约 7 行;250px 卡片内能装下的最大尺寸——再高会
+         越过进度条造成溢出)。两者 visibility 占位 → 卡片总高恒等 250px,零跳变。
          进入:控件 220ms 淡出+上移 → 错峰 180ms → 歌词 420ms 扩展(easeOutQuint)。
          恢复:歌词 300ms 收缩 → 控件 220ms 淡入;enter/move/click/touch 均可触发。 */
       .wrap.mini > .outputs,
@@ -2446,10 +2448,10 @@ class MusicFlowRemoteCard extends LitElement {
       }
       .wrap:not(.mini) > .outputs,
       .wrap:not(.mini) > .lower > .controls {
-        visibility: visible; opacity: 1; transform: none;
-        transition: opacity 0.22s ease 0.15s, transform 0.22s ease 0.15s, visibility 0s 0.15s;
+        opacity: 1; transform: none;
+        transition: opacity 0.22s ease 0.15s, transform 0.22s ease 0.15s;
       }
-      .wrap.mini .lyricbox { height: 192px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
+      .wrap.mini .lyricbox { height: 146px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
       /* 极简模式进度条:滑块圆点默认隐藏,悬停轨道时显现,保持干净 */
       .wrap.mini .seek::-webkit-slider-thumb { opacity: 0; transition: opacity 0.15s; }
