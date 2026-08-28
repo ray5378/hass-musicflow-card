@@ -34,7 +34,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.87";
+const CARD_VERSION = "1.6.88";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -2509,6 +2509,8 @@ class MusicFlowRemoteCard extends LitElement {
          标题下沿 → 卡底(100px → 198px,约 9~10 行)。卡片靠 min-height 保持与完整模式同高。
          进入:歌词 420ms easeOutQuint 扩展;恢复:300ms 收缩。enter/move/click/touch 唤出。 */
       .wrap.mini { min-height: 250px; padding-top: 24px; padding-left: 20px; }
+      /* 极简模式:封面左移 6px —— 右缘距卡边从 14px 变 20px,与左侧 20px 内边距对称 */
+      .wrap.mini .cover { margin-right: 6px; }
       .wrap.mini > .outputs,
       .wrap.mini > .lower > .controls,
       .wrap.mini > .lower > .progress-row { display: none; }
