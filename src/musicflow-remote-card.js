@@ -25,9 +25,11 @@ const VS_CONCURRENCY = 2;
 // 歌词滚动:单行高度(px)。必须与 CSS .lyricbox-line 的 height/line-height 一致,
 // 因为轨道位移是按「行数 x 行高」算的。视口高 = LYRIC_VIEW_LINES x 该值(见 CSS .lyricbox)。
 const LYRIC_LINE_H = 20;
-// 视口显示行数,以及「当前行」落在第几槽(0 基)。当前 = 5 行视口、当前行固定在第 2 行。
+// 视口显示行数,以及「当前行」落在第几槽(0 基)。完整模式 = 5 行视口、当前行固定在第 2 行。
 const LYRIC_VIEW_LINES = 5;
 const LYRIC_CUR_SLOT = 1;
+// 极简歌词模式(auto-hide):歌词视口扩到 192px(≈9.6 行),当前行居中落在第 5 槽(中段)。
+const LYRIC_CUR_SLOT_MINI = 4;
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -130,6 +132,7 @@ class MusicFlowRemoteCard extends LitElement {
       browserStack: [],
       homeRefreshing: false, // 首页推荐手动刷新中(禁用重复点击)
       showVolume: false,
+      mini: false, // 极简歌词模式:播放控件/切换器隐藏,歌词视口扩展(空闲自动进入)
       coverLightText: true, // 封面背景融合:true=浅色文字(暗背景),false=深色文字(亮背景)
       volAnchor: null,
     };
@@ -138,6 +141,9 @@ class MusicFlowRemoteCard extends LitElement {
     this._refreshTimer = null; // 起播强制刷新信号去抖/重试定时器(见 _onPlayerRefresh)
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
+    this._miniTimer = null; // 极简歌词模式:空闲隐藏计时器
+    // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
+    this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, songId: null };
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
@@ -166,6 +172,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._refreshTimer) { clearTimeout(this._refreshTimer); this._refreshTimer = null; }
     if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
+    if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
     if (this._client) this._client.disconnect();
     if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
@@ -687,6 +694,8 @@ class MusicFlowRemoteCard extends LitElement {
 
   // 点击音量控件本体以外的任意位置 = 关闭并保存(音量拖动时已实时下发,无需确认按钮)
   _onWrapClick(e) {
+    // 极简歌词模式:任意点击都先恢复完整模式并重置空闲计时(点击歌词/卡片即唤出控件)
+    this._onCardPointer();
     const path = e.composedPath ? e.composedPath() : [];
     if (this._ui.showVolume) {
       for (const n of path) {
@@ -709,6 +718,56 @@ class MusicFlowRemoteCard extends LitElement {
       this.requestUpdate();
       return;
     }
+  }
+
+  // ============ 极简歌词模式(auto-hide) ============
+  // 允许进入极简的条件:播放中、无面板打开、有歌词。触屏同样生效(点按恢复)。
+  _canMini() {
+    const u = this._ui;
+    return !!(u.isPlaying && !u.showVolume && !u.showQueue && !u.showBrowser && u.lyrics && u.lyrics.length);
+  }
+
+  _setMini(on) {
+    if (this._ui.mini === on) return;
+    if (on && !this._canMini()) return; // 条件不满足时拒入,等可进入时机(如切歌后)
+    this._ui.mini = on;
+    this.requestUpdate();
+  }
+
+  // 重置空闲计时:满足条件则 delay 后自动进入极简;不满足时若已在极简则强制恢复完整模式。
+  _resetIdleTimer() {
+    if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
+    if (!(this._config.auto_hide ?? true)) return;
+    if (!this._canMini()) {
+      if (this._ui.mini) this._setMini(false);
+      return;
+    }
+    const delay = Math.max(500, Number(this._config.auto_hide_delay ?? 3000));
+    this._miniTimer = setTimeout(() => {
+      this._miniTimer = null;
+      this._setMini(true);
+    }, delay);
+  }
+
+  // pointerenter / pointermove / click / touch 统一入口:恢复完整模式并重新开始计时。
+  _onCardPointer() {
+    if (this._ui.mini) this._setMini(false);
+    this._resetIdleTimer();
+  }
+
+  // 仅当极简相关状态真正变化时才重置计时(进度 tick 每秒触发 requestUpdate,不能每次都重置)。
+  _updatedMiniWatch() {
+    const u = this._ui;
+    const w = this._miniWatch;
+    const lyricCount = u.lyrics ? u.lyrics.length : 0;
+    const songId = u.song ? u.song.songId : null;
+    if (w.isPlaying === u.isPlaying && w.lyricCount === lyricCount &&
+        w.showVolume === u.showVolume && w.showQueue === u.showQueue &&
+        w.showBrowser === u.showBrowser && w.songId === songId) return;
+    w.isPlaying = u.isPlaying; w.lyricCount = lyricCount;
+    w.showVolume = u.showVolume; w.showQueue = u.showQueue;
+    w.showBrowser = u.showBrowser; w.songId = songId;
+    this._resetIdleTimer();
   }
 
   // 音量面板:本层完全透明(无底色/无模糊),「遮挡」靠 .lower.volmode 把控件行、
@@ -1172,6 +1231,8 @@ class MusicFlowRemoteCard extends LitElement {
     if (pc) this._loadCoverInto(pc);
     const bg = this.shadowRoot?.querySelector(".coverbg-img");
     if (bg && this._ui.song?.coverArt) this._loadCoverInto(bg);
+    // 极简歌词模式:相关状态变化时重置空闲计时;条件不满足(暂停/开面板/无歌词)时强制恢复完整模式。
+    this._updatedMiniWatch();
   }
 
   render() {
@@ -1192,7 +1253,7 @@ class MusicFlowRemoteCard extends LitElement {
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""}" @click=${this._onWrapClick}>
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">连接恢复中…（REST 兜底）</div>` : ""}
           ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">无法连接后端，自动重连中…</div>` : ""}
           ${this._renderOutputs()}
@@ -1262,8 +1323,9 @@ class MusicFlowRemoteCard extends LitElement {
     const lines = this._ui.lyrics || [];
     if (!lines.length) return html`<div class="lyricbox"></div>`;
     const idx = this._ui.lyricIndex;
-    // 当前行落到第二槽 => 轨道上移 (idx - LYRIC_CUR_SLOT) 行高;idx 更小时为负,轨道下沉、上方留空行。
-    const shift = (idx - LYRIC_CUR_SLOT) * LYRIC_LINE_H;
+    // 极简模式大视口下当前行居中(槽位 4),完整模式紧贴标题(槽位 1)。
+    const curSlot = this._ui.mini ? LYRIC_CUR_SLOT_MINI : LYRIC_CUR_SLOT;
+    const shift = (idx - curSlot) * LYRIC_LINE_H;
     return html`
       <div class="lyricbox">
         <div class="lyricbox-track" style="transform: translateY(${-shift}px)">
@@ -2372,6 +2434,37 @@ class MusicFlowRemoteCard extends LitElement {
       .lyricbox-line.cur { color: #ffd400; opacity: 1; }
       /* 浅色封面(整卡切深色文字)时金色对比不足,换成深琥珀 */
       ha-card.dark .lyricbox-line.cur { color: #a3690a; }
+      /* === 极简歌词模式(auto-hide) ===
+         播放中空闲 auto_hide_delay(默认 3s)后:切换器(.outputs)与播放控件行(.controls)
+         淡出隐藏,歌词视口 100px→192px 接管释放的高度;两者 visibility 占位 → 卡片总高零跳变。
+         进入:控件 220ms 淡出+上移 → 错峰 180ms → 歌词 420ms 扩展(easeOutQuint)。
+         恢复:歌词 300ms 收缩 → 控件 220ms 淡入;enter/move/click/touch 均可触发。 */
+      .wrap.mini > .outputs,
+      .wrap.mini > .lower > .controls {
+        visibility: hidden; opacity: 0; transform: translateY(-6px);
+        transition: opacity 0.22s ease, transform 0.22s ease, visibility 0s 0.22s;
+      }
+      .wrap:not(.mini) > .outputs,
+      .wrap:not(.mini) > .lower > .controls {
+        visibility: visible; opacity: 1; transform: none;
+        transition: opacity 0.22s ease 0.15s, transform 0.22s ease 0.15s, visibility 0s 0.15s;
+      }
+      .wrap.mini .lyricbox { height: 192px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
+      .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
+      /* 极简模式进度条:滑块圆点默认隐藏,悬停轨道时显现,保持干净 */
+      .wrap.mini .seek::-webkit-slider-thumb { opacity: 0; transition: opacity 0.15s; }
+      .wrap.mini .seek:hover::-webkit-slider-thumb { opacity: 1; }
+      .wrap.mini .seek::-moz-range-thumb { opacity: 0; transition: opacity 0.15s; }
+      .wrap.mini .seek:hover::-moz-range-thumb { opacity: 1; }
+      /* 键盘焦点在卡片内 → 强制完整模式(无障碍) */
+      .wrap:focus-within > .outputs,
+      .wrap:focus-within > .lower > .controls { visibility: visible !important; opacity: 1 !important; transform: none !important; }
+      .wrap:focus-within .lyricbox { height: 100px !important; transition: none !important; }
+      /* 动效偏好:reduced-motion → 直切 */
+      @media (prefers-reduced-motion: reduce) {
+        .wrap.mini > .outputs, .wrap.mini > .lower > .controls,
+        .wrap.mini .lyricbox, .wrap:not(.mini) .lyricbox { transition: none !important; }
+      }
       .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }
       .progress-row { display: flex; align-items: center; gap: 8px; }
       .progress-row .t { font-size: 11px; color: var(--fg-faint); width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
