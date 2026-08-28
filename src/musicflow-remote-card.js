@@ -31,6 +31,8 @@ const LYRIC_CUR_SLOT = 1;
 // 极简歌词模式(auto-hide):歌词视口扩到 146px(7.3 行,250px 卡片内可装下的最大尺寸——再大会
 // 越过进度条导致溢出),当前行落在第 4 槽(中段)。
 const LYRIC_CUR_SLOT_MINI = 3;
+// 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
+const CARD_VERSION = "1.6.83";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -145,6 +147,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._miniTimer = null; // 极简歌词模式:空闲隐藏计时器
     // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
     this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, songId: null };
+    this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
@@ -157,6 +160,8 @@ class MusicFlowRemoteCard extends LitElement {
   // _teardown() 已断开 client,重新挂载时必须恢复连接,否则卡片永久断开直到刷新页面。
   connectedCallback() {
     super.connectedCallback();
+    // 控制台版本标记:核对实际加载的 JS 版本(排查 HACS/浏览器缓存导致的"更新了但没变化")
+    if (typeof console !== "undefined") console.info(`[musicflow-remote-card] v${CARD_VERSION}`);
     if (this._ready && this._client && !this._client.connected) {
       this._client.connect();
     }
@@ -730,6 +735,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _setMini(on) {
     if (this._ui.mini === on) return;
+    if (on && this._focusInside) return; // 键盘焦点在卡片内:不进入极简,控件保持可达
     if (on && !this._canMini()) return; // 条件不满足时拒入,等可进入时机(如切歌后)
     this._ui.mini = on;
     this.requestUpdate();
@@ -739,6 +745,7 @@ class MusicFlowRemoteCard extends LitElement {
   _resetIdleTimer() {
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (!(this._config.auto_hide ?? true)) return;
+    if (this._focusInside) { if (this._ui.mini) this._setMini(false); return; } // 焦点在内:保持完整,不重开计时
     if (!this._canMini()) {
       if (this._ui.mini) this._setMini(false);
       return;
@@ -753,6 +760,21 @@ class MusicFlowRemoteCard extends LitElement {
   // pointerenter / pointermove / click / touch 统一入口:恢复完整模式并重新开始计时。
   _onCardPointer() {
     if (this._ui.mini) this._setMini(false);
+    this._resetIdleTimer();
+  }
+
+  // 键盘焦点进入卡片(如 Tab 到进度条/控件):恢复完整模式,保证控件可达;
+  // 用 JS 而非 CSS :focus-within —— 后者 visibility:visible !important 会顶掉音量面板的
+  // volmode 隐身规则(点音量按钮即获得焦点),导致音量面板打开时控件不消失。
+  _onWrapFocusIn() {
+    this._focusInside = true;
+    if (this._ui.mini) this._setMini(false);
+    this._resetIdleTimer();
+  }
+
+  // 焦点离开卡片:重新允许空闲隐藏。
+  _onWrapFocusOut() {
+    this._focusInside = false;
     this._resetIdleTimer();
   }
 
@@ -1254,7 +1276,7 @@ class MusicFlowRemoteCard extends LitElement {
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer}>
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">连接恢复中…（REST 兜底）</div>` : ""}
           ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">无法连接后端，自动重连中…</div>` : ""}
           ${this._renderOutputs()}
@@ -2458,10 +2480,8 @@ class MusicFlowRemoteCard extends LitElement {
       .wrap.mini .seek:hover::-webkit-slider-thumb { opacity: 1; }
       .wrap.mini .seek::-moz-range-thumb { opacity: 0; transition: opacity 0.15s; }
       .wrap.mini .seek:hover::-moz-range-thumb { opacity: 1; }
-      /* 键盘焦点在卡片内 → 强制完整模式(无障碍) */
-      .wrap:focus-within > .outputs,
-      .wrap:focus-within > .lower > .controls { visibility: visible !important; opacity: 1 !important; transform: none !important; }
-      .wrap:focus-within .lyricbox { height: 100px !important; transition: none !important; }
+      /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏,
+         不再用 CSS :focus-within 强制 —— 它会顶掉音量面板的 volmode 隐身规则。 */
       /* 动效偏好:reduced-motion → 直切 */
       @media (prefers-reduced-motion: reduce) {
         .wrap.mini > .outputs, .wrap.mini > .lower > .controls,
