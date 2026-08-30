@@ -34,7 +34,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.6.91";
+const CARD_VERSION = "1.6.92";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -1872,6 +1872,7 @@ class MusicFlowRemoteCard extends LitElement {
         name: `${base}·${ch.subtag || "本地随机"}`,
         tagline: typeof ch.tagline === "string" && ch.tagline ? ch.tagline : null,
         count: chPls.length,
+        _local: true,
       });
       chPls.forEach((pl) => pushPl(pl.id, pl.name, pl.coverArt, pl.songCount, ""));
     }
@@ -2270,13 +2271,16 @@ class MusicFlowRemoteCard extends LitElement {
           ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
         </div>`;
     }
-    // 首页推荐分区头(各平台精选小标题)。有 tagline(说明文案)时作为副标题展示,
-    // 否则回落歌单数量「N 张」。
+    // 首页推荐分区头(各平台精选小标题)。有 tagline(说明文案)时作为副标题展示;
+    // 精选分区缺省回落歌单数量「N 张」;本地随机分区(无 tagline)不显示副标题。
     if (it.kind === "section") {
+      const sub = it.tagline
+        ? html`<span class="bsec-sub">${it.tagline}</span>`
+        : (it._local ? "" : html`<span class="bsec-sub">${it.count || 0} 张</span>`);
       return html`
         <div class="bsec">
           <span class="bsec-name">${it.name}</span>
-          <span class="bsec-sub">${it.tagline || `${it.count || 0} 张`}</span>
+          ${sub}
         </div>`;
     }
     // 首页推荐:远程平台歌单(go-music-dl 等 recommend 插件输出)。封面为远程 URL,

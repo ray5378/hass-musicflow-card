@@ -40,16 +40,17 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.91 — 极简模式歌词底部减少一行
+            ## v1.6.92 — 首页本地随机分区去掉 tagline 小字注释
 
             ### 修复
-            - 极简模式歌词视口 208px → **188px**,底部减少一行(约 9 行可视)
-            - 渐隐恢复默认 16%(移除 v1.6.89 的 10% 覆盖),回到 v1.6.88 的观感
+            - 本地随机分区(QQ音乐/酷狗/网易云榜单)副标题仅在有 tagline 时显示
+            - 三个榜单插件不再输出说明性 tagline,首页分区只保留「X榜单·每日更新」,不再显示小字注释
+            - 精选分区保持「N 张」副标题不变
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.91`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.6.92`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
