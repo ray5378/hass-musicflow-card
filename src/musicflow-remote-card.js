@@ -1598,7 +1598,28 @@ class MusicFlowRemoteCard extends LitElement {
       kind: "song", id: String(s.id), title: s.title || "未知",
       artist: s.artist || "", album: s.album || "",
       coverArt: s.coverArt, duration: s.duration || 0, suffix: s.suffix,
+      // 同曲多源组:透传后端 groupId + sources(成员行含自身、local>webdav>web
+      // 排序、封面已由后端 resolveSongCover 回退)。渲染/播放层据此合并展示
+      // 与优选主源(与 Web 前端 displayRows 语义一致)。
+      groupId: s.groupId || undefined,
+      sources: Array.isArray(s.sources) && s.sources.length > 1 ? s.sources : undefined,
     };
+  }
+
+  // 同曲多源组播放优选源:sources[0] = 核心曲库(local)优先,与 Web 前端主行一致。
+  // 无多源组时返回原行(零行为变化)。
+  _playbackSource(it) {
+    const s = it && it.sources;
+    return (s && s.length > 1) ? s[0] : it;
+  }
+
+  // 多源组主行徽标:「本地 +N」(主源类型 + 备选源数)。
+  _groupBadge(it) {
+    const s = it.sources;
+    if (!s || s.length < 2) return "";
+    const t = s[0].type;
+    const label = t === "local" ? "本地" : t === "webdav" ? "WebDAV" : "在线";
+    return html`<span class="rtag">${label} +${s.length - 1}</span>`;
   }
 
   // ============ 全库统一滚动:虚拟滚动 + 窗口化预取 ============
@@ -1950,7 +1971,9 @@ class MusicFlowRemoteCard extends LitElement {
   _browserPlaySong(song) {
     // 远程(未入库)歌曲:先「加入库」拿真实 DB songId,再入队播放(DLNA peer 需要 DB id)。
     if (song && song._remote) { this._remotePlaySong(song); return; }
-    this._appendAndPlay(song);
+    // 同曲多源组播放优选:组内主源 = sources[0](local 优先,与 Web 前端一致),
+    // 避免把 web 备选源当主源播。
+    this._appendAndPlay(this._playbackSource(song));
   }
 
   // ============ 远程搜索(媒体库「本地/插件」切换) ============
@@ -2258,16 +2281,19 @@ class MusicFlowRemoteCard extends LitElement {
 
   _renderBrowserItem(it) {
     if (it.kind === "song") {
+      // 同曲多源组:主行 = sources[0](local 优先),来源徽标「本地 +N」;
+      // 行内所有交互(播放/点封面)都作用于主源。
+      const main = this._playbackSource(it);
       return html`
         <div class="bitem">
-          <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>
-            ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
+          <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(main)}>
+            ${main._remote && main.coverArt ? html`<img class="bremote-img" src="${main.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(main.coverArt)}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
-            <div class="bt">${it.title}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
-            <div class="ba">${it.artist || ""}</div>
+            <div class="bt">${main.title}${this._groupBadge(it)}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
+            <div class="ba">${main.artist || ""}</div>
           </div>
-          <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>▶</button>
+          <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(main)}>▶</button>
           ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
         </div>`;
     }
@@ -2335,6 +2361,21 @@ class MusicFlowRemoteCard extends LitElement {
       const e = Math.min(level.total - 1, level.vWinEnd ?? s);
       for (let i = s; i <= e; i++) win.push(i);
     }
+    // 同曲多源组折叠:窗口内「组内非首个成员」的 idx 集合(绝对定位下跳过渲染
+    // = 视觉直接合并;滚动/窗口计算零副作用)。未加载槽位按未出现处理,同组
+    // 行通常同页(后端排序稳定),跨未加载槽的组暂显示重复(可接受)。
+    const foldSet = new Set();
+    {
+      const seenGroups = new Set();
+      for (let i = 0; i <= (level.vWinEnd || 0) && i < (level.total || 0); i++) {
+        const it = level.vCache.get(i);
+        if (!it || it.kind !== "song") continue;
+        const gid = it.groupId;
+        if (!gid) continue;
+        if (seenGroups.has(gid)) foldSet.add(i);
+        else seenGroups.add(gid);
+      }
+    }
     return html`
       <div class="panel browser">
         <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showBrowser = false; this._ui.showQueue = false; this.requestUpdate(); }}>✕</button>
@@ -2387,7 +2428,7 @@ class MusicFlowRemoteCard extends LitElement {
             ` : ""}
             ${!level.total && !level.loading ? html`<div class="empty">无内容</div>` : ""}
             <div class="vs-spacer" style="height:${(level.total || 0) * ROW_STEP}px">
-              ${win.map((i) => this._vsRow(level, i))}
+              ${win.map((i) => this._vsRow(level, i, foldSet))}
             </div>
             ${this._vsMoreHint(level)}
           `)}
@@ -2396,8 +2437,11 @@ class MusicFlowRemoteCard extends LitElement {
     `;
   }
 
-  // 虚拟滚动行:缓存未到的位置渲染骨架占位行(不白屏闪烁)。
-  _vsRow(level, i) {
+  // 虚拟滚动行:缓存未到的位置渲染骨架占位行(不白屏闪烁);
+  // 同曲多源组折叠行(foldSet 命中)跳过渲染——绝对定位下后续行位置不变,
+  // 视觉上直接合并为主行(与 Web displayRows 一致)。
+  _vsRow(level, i, foldSet) {
+    if (foldSet && foldSet.has(i)) return html``;
     const it = level.vCache.get(i);
     return html`
       <div class="vs-row" style="top:${i * ROW_STEP}px">
