@@ -5,10 +5,10 @@
 import { LitElement, html, css } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { BackendClient, childToQueueItem, parseLyrics } from "./backend-client.js";
+import { localize } from "./localize/localize.js";
 
 const PLAY_MODES = ["order", "one", "all", "shuffle"];
-const PLAY_MODE_LABEL = { order: "顺序", one: "单曲", all: "循环", shuffle: "随机" };
-const PLAY_MODE_TIP = { order: "顺序播放", one: "单曲循环", all: "列表循环", shuffle: "随机播放" };
+// 播放模式提示经 localize 读取(playModeTip.*);PLAY_MODE_ICON 为图标映射(不含文案)
 // 与主项目一致(lucide):order→list-ordered / one→repeat-1 / all→repeat / shuffle→shuffle
 const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", shuffle: "shuffle" };
 // 媒体库全库统一滚动(所有库类型同一套):虚拟滚动 + 窗口化预取。
@@ -196,6 +196,15 @@ class MusicFlowRemoteCard extends LitElement {
     if (!old && hass && !this._ready) this._bootstrap(hass);
   }
   get hass() { return this._hass; }
+
+  // 本地化:跟随 HA 前端语言(zh 中文 / 其余英文),localizer 按语言缓存复用。
+  _loc() {
+    const lang = this._hass?.language || "";
+    if (this.__locLang !== lang) { this.__locLang = lang; this.__loc = localize(lang); }
+    return this.__loc;
+  }
+
+  _t(key, params) { return this._loc().t(key, params); }
 
   async _bootstrap(hass) {
     this._ready = true;
@@ -527,7 +536,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (!media) { this._clearNowPlaying(); return; }
     const song = {
       songId: media.songId,
-      title: media.title || "未知",
+      title: media.title || this._t("common.unknown"),
       artist: media.artist || "",
       album: media.album || "",
       coverArt: media.coverArt,
@@ -849,7 +858,7 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="vol-overlay">
         <div class="vol-row" @click=${(e) => e.stopPropagation()}>
-          <button class="ctl" title="${u.muted ? "取消静音" : "静音"}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
+          <button class="ctl" title="${u.muted ? this._t("control.unmute") : this._t("control.mute")}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
           <div class="vol-slider" @pointerdown=${this._volPointerDown} @pointermove=${this._volPointerMove} @pointerup=${this._volPointerUp} @pointercancel=${this._volPointerUp}>
             <div class="vol-track"></div>
             <div class="vol-fill" style="width:${vpct}%"></div>
@@ -983,7 +992,7 @@ class MusicFlowRemoteCard extends LitElement {
     } catch (e) {
       err("like toggle failed", e);
       this._ui.liked = wasLiked; // 失败回退到真实状态
-      this._ui.error = "喜欢操作失败(可能代理通道异常或未连通),请重试";
+      this._ui.error = this._t("errors.likeFailed");
       this.requestUpdate();
     }
   }
@@ -1312,7 +1321,7 @@ class MusicFlowRemoteCard extends LitElement {
       return html`<ha-card><div class="wrap"><div class="err">MusicFlow: ${this._ui.error}</div></div></ha-card>`;
     }
     if (!this._client) {
-      return html`<ha-card><div class="wrap"><div class="err">MusicFlow 卡片初始化中…</div></div></ha-card>`;
+      return html`<ha-card><div class="wrap"><div class="err">${this._t("common.init")}</div></div></ha-card>`;
     }
     const u = this._ui;
     const song = u.song;
@@ -1326,13 +1335,13 @@ class MusicFlowRemoteCard extends LitElement {
             <div class="coverbg-veil"></div>
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
-          ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">连接恢复中…（REST 兜底）</div>` : ""}
-          ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">无法连接后端，自动重连中…</div>` : ""}
+          ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">${this._t("connection.restoring")}</div>` : ""}
+          ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">${this._t("connection.cannotConnect")}</div>` : ""}
           ${this._renderOutputs()}
 
           <div class="now">
             <div class="meta">
-              <div class="track">${song ? song.title : "未在播放"}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
+              <div class="track">${song ? song.title : this._t("common.notPlaying")}<span class="t-art">${song && song.artist ? " - " + song.artist : ""}</span></div>
               ${this._renderLyricBox()}
             </div>
             <div class="cover" role="button" @click=${(e) => { e.stopPropagation(); this._openBrowser(); }}>${song?.coverArt
@@ -1345,13 +1354,13 @@ class MusicFlowRemoteCard extends LitElement {
                队列/媒体库面板已移出到 .wrap 级(.panelmode 时覆盖整张卡)。 -->
           <div class="lower ${u.showVolume ? "volmode" : ""}">
             <div class="controls">
-              <button class="ctl ${u.showQueue ? "active" : ""}" title="队列" @click=${(e) => { e.stopPropagation(); u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
-              <button class="ctl" title="${PLAY_MODE_TIP[u.playMode]}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
-              <button class="ctl" title="上一首" @click=${this._prev}>${this._icon("prev", 22)}</button>
-              <button class="ctl play" title="播放/暂停" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 22, true)}</button>
-              <button class="ctl" title="下一首" @click=${this._next}>${this._icon("next", 22)}</button>
-              <button class="ctl like ${u.liked ? "on" : ""}" title="喜欢" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
-              <button class="ctl vol-open" title="音量" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
+              <button class="ctl ${u.showQueue ? "active" : ""}" title="${this._t("control.queue")}" @click=${(e) => { e.stopPropagation(); u.showQueue = !u.showQueue; u.showBrowser = false; this.requestUpdate(); }}>${this._icon("queue", 20)}</button>
+              <button class="ctl" title="${this._t("playModeTip." + u.playMode)}" @click=${this._cyclePlayMode}>${this._icon(PLAY_MODE_ICON[u.playMode], 20)}</button>
+              <button class="ctl" title="${this._t("control.prev")}" @click=${this._prev}>${this._icon("prev", 22)}</button>
+              <button class="ctl play" title="${this._t("control.playPause")}" @click=${this._togglePlay}>${this._icon(u.isPlaying ? "pause" : "play", 22, true)}</button>
+              <button class="ctl" title="${this._t("control.next")}" @click=${this._next}>${this._icon("next", 22)}</button>
+              <button class="ctl like ${u.liked ? "on" : ""}" title="${this._t("control.like")}" @click=${this._toggleLike}>${this._icon("heart", 20, u.liked)}</button>
+              <button class="ctl vol-open" title="${this._t("control.volume")}" @click=${this._toggleVolumePop}>${this._icon(u.muted || u.volume <= 0 ? "volumeX" : "volume2", 20)}</button>
             </div>
 
             <div class="progress-row">
@@ -1375,7 +1384,7 @@ class MusicFlowRemoteCard extends LitElement {
   _renderOutputs() {
     // 兜底过滤:任何路径进来的离线设备都不渲染。
     const peers = (this._ui.peers || []).filter((p) => p.available !== false);
-    if (!peers.length) return html`<div class="outputs"><span class="hint">无可用播放器</span></div>`;
+    if (!peers.length) return html`<div class="outputs"><span class="hint">${this._t("browser.noPlayer")}</span></div>`;
     return html`
       <div class="outputs">
         ${peers.map((p) => html`
@@ -1423,11 +1432,11 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="panel queue">
         <div class="panel-head">
-          <span>队列 (${total})</span>
-          <button class="mini" @click=${this._clearQueue}>清空</button>
-          <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showQueue = false; this._ui.showBrowser = false; this.requestUpdate(); }}>✕</button>
+          <span>${this._t("queue.title", { n: total })}</span>
+          <button class="mini" @click=${this._clearQueue}>${this._t("control.clear")}</button>
+          <button class="mini close" title="${this._t("control.close")}" @click=${(e) => { e.stopPropagation(); this._ui.showQueue = false; this._ui.showBrowser = false; this.requestUpdate(); }}>✕</button>
         </div>
-        ${total === 0 ? html`<div class="empty">队列为空</div>` : html`
+        ${total === 0 ? html`<div class="empty">${this._t("queue.empty")}</div>` : html`
           <div class="qlist" @scroll=${this._qOnScroll}>
             <div class="vs-spacer" style="height:${total * ROW_STEP}px">
               ${win.map((i) => this._qRow(i, cur))}
@@ -1455,8 +1464,8 @@ class MusicFlowRemoteCard extends LitElement {
             <span class="idx">${i + 1}</span>
             <span class="qt">${it.title}</span>
             <span class="qa">${it.artist || ""}</span>
-            <button class="mini" title="跳播" @click=${() => this._jumpTo(i)}>▶</button>
-            <button class="mini" title="移除" @click=${() => this._removeFromQueue(i)}>✕</button>
+            <button class="mini" title="${this._t("control.jump")}" @click=${() => this._jumpTo(i)}>▶</button>
+            <button class="mini" title="${this._t("control.remove")}" @click=${() => this._removeFromQueue(i)}>✕</button>
           </div>
         ` : html`<div class="qitem vs-skel"></div>`}
       </div>`;
@@ -1465,7 +1474,7 @@ class MusicFlowRemoteCard extends LitElement {
   // 底部「加载中」提示(队列分块预取在途时显示)。
   _qMoreHint() {
     if (!this._ui.qLoading || this._ui.qLoading.size === 0) return html``;
-    return html`<div class="vs-more">加载中…</div>`;
+    return html`<div class="vs-more">${this._t("common.loading")}</div>`;
   }
 
   // ============ 队列虚拟滚动 + 窗口化预取 ============
@@ -1563,12 +1572,12 @@ class MusicFlowRemoteCard extends LitElement {
     u.browserStack = [{
       type: "root",
       items: [
-        { kind: "cat", cat: "home", name: "首页推荐" },
-        { kind: "cat", cat: "playlists", name: "歌单" },
-        { kind: "cat", cat: "albums", name: "专辑" },
-        { kind: "cat", cat: "songs", name: "音乐" },
-        { kind: "cat", cat: "artists", name: "艺术家" },
-        { kind: "cat", cat: "genres", name: "风格" },
+        { kind: "cat", cat: "home", name: this._t("browser.home") },
+        { kind: "cat", cat: "playlists", name: this._t("browser.playlists") },
+        { kind: "cat", cat: "albums", name: this._t("browser.albums") },
+        { kind: "cat", cat: "songs", name: this._t("browser.songs") },
+        { kind: "cat", cat: "artists", name: this._t("browser.artists") },
+        { kind: "cat", cat: "genres", name: this._t("browser.genres") },
       ],
       query: "", loading: false,
     }];
@@ -1577,25 +1586,25 @@ class MusicFlowRemoteCard extends LitElement {
 
   _crumbName(lv) {
     switch (lv.type) {
-      case "root": return "媒体库";
-      case "home": return "首页推荐";
-      case "playlists": return "歌单";
-      case "playlist": return lv.name || "歌单";
-      case "albums": return "专辑";
-      case "album": return lv.name || "专辑";
-      case "songs": return "音乐";
-      case "artists": return "艺术家";
-      case "artist": return lv.name || "艺术家";
-      case "genres": return "风格";
-      case "genre": return lv.name || "风格";
-      case "starred": return "我喜欢的音乐";
+      case "root": return this._t("browser.library");
+      case "home": return this._t("browser.home");
+      case "playlists": return this._t("browser.playlists");
+      case "playlist": return lv.name || this._t("browser.playlists");
+      case "albums": return this._t("browser.albums");
+      case "album": return lv.name || this._t("browser.albums");
+      case "songs": return this._t("browser.songs");
+      case "artists": return this._t("browser.artists");
+      case "artist": return lv.name || this._t("browser.artists");
+      case "genres": return this._t("browser.genres");
+      case "genre": return lv.name || this._t("browser.genres");
+      case "starred": return this._t("browser.starred");
       default: return "";
     }
   }
 
   _toSongItem(s) {
     return {
-      kind: "song", id: String(s.id), title: s.title || "未知",
+      kind: "song", id: String(s.id), title: s.title || this._t("common.unknown"),
       artist: s.artist || "", album: s.album || "",
       coverArt: s.coverArt, duration: s.duration || 0, suffix: s.suffix,
     };
@@ -1776,7 +1785,7 @@ class MusicFlowRemoteCard extends LitElement {
         const res = await this._client.getPlaylists({ offset, size, query: q });
         const arr = res?.playlists?.playlist || res?.playlists || [];
         return {
-          items: arr.map((p) => ({ kind: "playlist", id: String(p.id), name: p.name || "未命名歌单", coverArt: p.coverArt, songCount: p.songCount })),
+          items: arr.map((p) => ({ kind: "playlist", id: String(p.id), name: p.name || this._t("common.unnamedPlaylist"), coverArt: p.coverArt, songCount: p.songCount })),
           total: res?.playlists?.total ?? arr.length,
         };
       }
@@ -1785,7 +1794,7 @@ class MusicFlowRemoteCard extends LitElement {
         const res = await this._client.getArtist(level.id);
         const albums = res?.artist?.album || [];
         const slice = albums.slice(offset, offset + size).map((a) => ({
-          kind: "album", id: String(a.id), name: a.name || "未知专辑", artist: a.artist || "", coverArt: a.coverArt,
+          kind: "album", id: String(a.id), name: a.name || this._t("common.unknownAlbum"), artist: a.artist || "", coverArt: a.coverArt,
         }));
         return { items: slice, total: albums.length };
       }
@@ -1798,11 +1807,11 @@ class MusicFlowRemoteCard extends LitElement {
   _mapBrowseItems(type, items) {
     if (type === "songs") return (items || []).map((s) => this._toSongItem(s));
     if (type === "albums") return (items || []).map((a) => ({
-      kind: "album", id: String(a.id), name: a.name || "未知专辑",
+      kind: "album", id: String(a.id), name: a.name || this._t("common.unknownAlbum"),
       artist: a.artist || "", coverArt: a.coverArt, songCount: a.songCount,
     }));
     if (type === "artists") return (items || []).map((a) => ({
-      kind: "artist", id: String(a.id), name: a.name || "未知艺术家", coverArt: a.coverArt,
+      kind: "artist", id: String(a.id), name: a.name || this._t("common.unknownArtist"), coverArt: a.coverArt,
     }));
     if (type === "genres") return (items || []).map((g) => ({
       kind: "genre", id: g.id, name: g.name, songCount: g.songCount, albumCount: g.albumCount,
@@ -1839,10 +1848,10 @@ class MusicFlowRemoteCard extends LitElement {
     const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
     const items = [];
     const pushPl = (id, name, coverArt, songCount, badge) => items.push({
-      kind: "playlist", id: String(id), name: name || "未命名歌单",
+      kind: "playlist", id: String(id), name: name || this._t("common.unnamedPlaylist"),
       coverArt, songCount: songCount || 0, badge,
     });
-    cards.forEach((c) => pushPl(c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? "今日漫游" : (c.playlistName || c.name)));
+    cards.forEach((c) => pushPl(c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name)));
     side.forEach((p) => pushPl(p.id, p.name, p.coverArt, p.songCount, ""));
     // 各平台精选分区:channels → 分区头 + 远程歌单行(直接整播=先导入再播,与 Web playRemotePl 同流程)。
     const channels = recRes?.channels || [];
@@ -1850,9 +1859,9 @@ class MusicFlowRemoteCard extends LitElement {
     for (const ch of channels) {
       const chPls = ch.playlists || [];
       if (!chPls.length) continue;
-      items.push({ kind: "section", name: `${(ch.name || ch.source || "").replace(/音乐$/, "")}精选`, count: chPls.length });
+      items.push({ kind: "section", name: `${(ch.name || ch.source || "").replace(/音乐$/, "")}${this._t("browser.featured")}`, count: chPls.length });
       chPls.forEach((pl) => items.push({
-        kind: "remote", id: String(pl.id), name: pl.name || "未命名歌单",
+        kind: "remote", id: String(pl.id), name: pl.name || this._t("common.unnamedPlaylist"),
         coverUrl: pl.cover || "", source: pl.source || ch.source || "",
         trackCount: pl.trackCount || "", creator: pl.creator || "", link: pl.link || "",
         providerId,
@@ -1869,7 +1878,7 @@ class MusicFlowRemoteCard extends LitElement {
       const base = (ch.name || ch.source || "").replace(/音乐$/, "");
       items.push({
         kind: "section",
-        name: `${base}·${ch.subtag || "本地随机"}`,
+        name: `${base}·${ch.subtag || this._t("browser.localRandom")}`,
         tagline: typeof ch.tagline === "string" && ch.tagline ? ch.tagline : null,
         count: chPls.length,
         _local: true,
@@ -1994,18 +2003,18 @@ class MusicFlowRemoteCard extends LitElement {
       source: it.source || "", platformLabel: it.platformLabel || "",
     };
     if (kind === "song") {
-      return { ...base, kind: "song", id: String(it.id), title: it.name || "未知",
+      return { ...base, kind: "song", id: String(it.id), title: it.name || this._t("common.unknown"),
         artist: it.artist || "", album: it.album || "", duration: it.duration || 0, coverArt: it.cover || "" };
     }
     if (kind === "album") {
-      return { ...base, kind: "album", id: String(it.id), name: it.name || "未知专辑",
+      return { ...base, kind: "album", id: String(it.id), name: it.name || this._t("common.unknownAlbum"),
         artist: it.artist || "", coverArt: it.cover || "", songCount: it.trackCount || 0 };
     }
     if (kind === "artist") {
-      return { ...base, kind: "artist", id: String(it.id), name: it.name || "未知艺术家",
+      return { ...base, kind: "artist", id: String(it.id), name: it.name || this._t("common.unknownArtist"),
         coverArt: it.avatar || it.cover || "", albumCount: it.albumCount, songCount: it.songCount };
     }
-    return { ...base, kind: "playlist", id: String(it.id), name: it.name || "未命名歌单",
+    return { ...base, kind: "playlist", id: String(it.id), name: it.name || this._t("common.unnamedPlaylist"),
       coverArt: it.cover || "", songCount: it.trackCount || 0, creator: it.creator || "" };
   }
 
@@ -2036,7 +2045,7 @@ class MusicFlowRemoteCard extends LitElement {
         const localRes = await this._client.getPlaylists({ offset: 0, size: 500, query: q }).catch(() => null);
         const localRaw = localRes?.playlists?.playlist || localRes?.playlists || [];
         localList = localRaw.map((p) => ({
-          kind: "playlist", id: String(p.id), name: p.name || "未命名歌单",
+          kind: "playlist", id: String(p.id), name: p.name || this._t("common.unnamedPlaylist"),
           coverArt: p.coverArt, songCount: p.songCount,
         }));
       } else {
@@ -2093,7 +2102,7 @@ class MusicFlowRemoteCard extends LitElement {
       const ids = (task && task.ids) || [];
       if (!ids.length) { err("remote song import returned no ids"); return; }
       await this._appendAndPlay({
-        id: ids[0], title: item.title || item.name || "未知",
+        id: ids[0], title: item.title || item.name || this._t("common.unknown"),
         artist: item.artist || "", album: item.album || "",
         duration: item.duration || 0, coverArt: item.coverArt || "", suffix: "mp3",
       });
@@ -2188,12 +2197,12 @@ class MusicFlowRemoteCard extends LitElement {
 
   _collLabel(it) {
     switch (it.kind) {
-      case "playlist": return "歌单";
-      case "remote": return "歌单";
-      case "album": return "专辑";
-      case "artist": return "艺人";
-      case "genre": return "风格";
-      default: return "列表";
+      case "playlist": return this._t("browser.collPlaylist");
+      case "remote": return this._t("browser.collPlaylist");
+      case "album": return this._t("browser.collAlbum");
+      case "artist": return this._t("browser.collArtist");
+      case "genre": return this._t("browser.collGenre");
+      default: return this._t("browser.collList");
     }
   }
 
@@ -2260,15 +2269,15 @@ class MusicFlowRemoteCard extends LitElement {
     if (it.kind === "song") {
       return html`
         <div class="bitem">
-          <div class="bthumb" style="cursor:pointer" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>
+          <div class="bthumb" style="cursor:pointer" title="${this._t("browser.playSong")}" @click=${() => this._browserPlaySong(it)}>
             ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
             <div class="bt">${it.title}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
             <div class="ba">${it.artist || ""}</div>
           </div>
-          <button class="mini" title="播放这首歌" @click=${() => this._browserPlaySong(it)}>▶</button>
-          ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
+          <button class="mini" title="${this._t("browser.playSong")}" @click=${() => this._browserPlaySong(it)}>▶</button>
+          ${it._remote ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="${this._t("browser.addToLibrary")}" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? this._t("browser.added") : this._t("browser.add")}</button>` : ""}
         </div>`;
     }
     // 首页推荐分区头(各平台精选小标题)。有 tagline(说明文案)时作为副标题展示;
@@ -2276,7 +2285,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (it.kind === "section") {
       const sub = it.tagline
         ? html`<span class="bsec-sub">${it.tagline}</span>`
-        : (it._local ? "" : html`<span class="bsec-sub">${it.count || 0} 张</span>`);
+        : (it._local ? "" : html`<span class="bsec-sub">${this._t("browser.sections", { n: it.count || 0 })}</span>`);
       return html`
         <div class="bsec">
           <span class="bsec-name">${it.name}</span>
@@ -2286,22 +2295,22 @@ class MusicFlowRemoteCard extends LitElement {
     // 首页推荐:远程平台歌单(go-music-dl 等 recommend 插件输出)。封面为远程 URL,
     // 直接 <img src> 渲染(不走 getCoverArt);整播 = 先导入再播(与 Web playRemotePl 同流程)。
     if (it.kind === "remote") {
-      const sub = it.trackCount ? `${it.trackCount} 首` : "歌单";
+      const sub = it.trackCount ? this._t("browser.tracks", { n: it.trackCount }) : this._t("browser.collPlaylist");
       return html`
         <div class="bitem">
-          <div class="bthumb" style="cursor:pointer" title="播放整个歌单" @click=${() => this._browserPlayCollection(it)}>
+          <div class="bthumb" style="cursor:pointer" title="${this._t("browser.playCollection", { label: this._t("browser.collPlaylist") })}" @click=${() => this._browserPlayCollection(it)}>
             ${it.coverUrl ? html`<img class="bremote-img" src="${it.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : html`<span class="bnocover">♪</span>`}
           </div>
-          <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserPlayCollection(it)}>
+          <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="${this._t("browser.enter")}" @click=${() => this._browserPlayCollection(it)}>
             <div class="bt">${it.name}</div>
             <div class="ba">${it.source ? `${it.source} · ` : ""}${sub}</div>
           </div>
-          <button class="mini" title="播放整个歌单" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
+          <button class="mini" title="${this._t("browser.playCollection", { label: this._t("browser.collPlaylist") })}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
         </div>`;
     }
     const sub = it.kind === "album" ? (it.artist || "")
-      : it.kind === "genre" ? `${it.songCount || 0} 首`
-      : it.kind === "playlist" ? `${it.songCount || 0} 首`
+      : it.kind === "genre" ? this._t("browser.tracks", { n: it.songCount || 0 })
+      : it.kind === "playlist" ? this._t("browser.tracks", { n: it.songCount || 0 })
       : "";
     // 首页推荐:今日漫游(红角标)带角标,样式与媒体库歌单行完全一致。
     const badge = it.kind === "playlist" && it.badge
@@ -2309,15 +2318,15 @@ class MusicFlowRemoteCard extends LitElement {
       : "";
     return html`
       <div class="bitem">
-        <div class="bthumb" style="cursor:pointer" title="播放整个${this._collLabel(it)}" @click=${() => this._browserPlayCollection(it)}>
+        <div class="bthumb" style="cursor:pointer" title="${this._t("browser.playCollection", { label: this._collLabel(it) })}" @click=${() => this._browserPlayCollection(it)}>
           ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
         </div>
-        <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看" @click=${() => this._browserItemClick(it)}>
+        <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="${this._t("browser.enter")}" @click=${() => this._browserItemClick(it)}>
           <div class="bt">${it.name}${badge}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
           <div class="ba">${sub}</div>
         </div>
-        <button class="mini" title="播放整个${this._collLabel(it)}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
-        ${it._remote && it.kind !== "artist" ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="加入库" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? "已入" : "入库"}</button>` : ""}
+        <button class="mini" title="${this._t("browser.playCollection", { label: this._collLabel(it) })}" @click=${(e) => { e.stopPropagation(); this._browserPlayCollection(it); }}>▶</button>
+        ${it._remote && it.kind !== "artist" ? html`<button class="mini imp" ?disabled=${it._importing || this._ui.remoteBusy === it.id} title="${this._t("browser.addToLibrary")}" @click=${(e) => { e.stopPropagation(); this._browserImportRemote(it); }}>${it._imported ? this._t("browser.added") : this._t("browser.add")}</button>` : ""}
       </div>`;
   }
 
@@ -2337,27 +2346,27 @@ class MusicFlowRemoteCard extends LitElement {
     }
     return html`
       <div class="panel browser">
-        <button class="mini close" title="关闭" @click=${(e) => { e.stopPropagation(); this._ui.showBrowser = false; this._ui.showQueue = false; this.requestUpdate(); }}>✕</button>
+        <button class="mini close" title="${this._t("control.close")}" @click=${(e) => { e.stopPropagation(); this._ui.showBrowser = false; this._ui.showQueue = false; this.requestUpdate(); }}>✕</button>
         <div class="br-crumbs">
           ${stack.map((lv, i) => html`
             <span class="crumb ${i === stack.length - 1 ? "cur" : ""}" @click=${() => this._browserPopTo(i)}>${this._crumbName(lv)}</span>
             ${i < stack.length - 1 ? html`<span class="crumb-sep">›</span>` : ""}
           `)}
           ${level.type === "home" ? html`
-            <button class="br-refresh" title="刷新今日漫游(重新随机生成)" ?disabled=${this._ui.homeRefreshing}
+            <button class="br-refresh" title="${this._t("browser.refreshHome")}" ?disabled=${this._ui.homeRefreshing}
               @click=${() => this._browserRefreshHome()}>⟳</button>
           ` : ""}
         </div>
         ${showSearch ? html`
           <div class="br-search">
             ${this._levelSearchable(level.type) ? html`
-              <select class="br-src" .value=${level.srcMode || "local"} title="搜索来源:聚合/本地库或插件" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
-                ${this._levelSearchable(level.type) ? html`<option value="aggregate">聚合</option>` : ""}
-                <option value="local">本地</option>
+              <select class="br-src" .value=${level.srcMode || "local"} title="${this._t("browser.srcHint")}" @change=${(e) => this._onSrcModeChange(level, e.target.value)}>
+                ${this._levelSearchable(level.type) ? html`<option value="aggregate">${this._t("browser.aggregate")}</option>` : ""}
+                <option value="local">${this._t("browser.local")}</option>
                 ${(level.providers || []).map((p) => html`<option value=${p.id}>${p.name}</option>`)}
               </select>
             ` : ""}
-            <input class="search-input" placeholder="搜索…" .value=${level.query}
+            <input class="search-input" placeholder="${this._t("browser.search")}" .value=${level.query}
               @input=${(e) => { level.query = e.target.value; this._browserSearchInput(); }}
               @compositionstart=${(e) => { this._searchComposing = true; }}
               @compositionend=${(e) => { this._searchComposing = false; this._browserSearchInput(); }}
@@ -2374,18 +2383,18 @@ class MusicFlowRemoteCard extends LitElement {
                 </button>
               `)}
             </div>
-          ` : (level.loading && !level.total ? html`<div class="empty">加载中…</div>` : html`
+          ` : (level.loading && !level.total ? html`<div class="empty">${this._t("common.loading")}</div>` : html`
             ${level.type === "playlists" ? html`
               <div class="bitem pin-fav" @click=${() => this._browserPush({ type: "starred", items: [], query: "", loading: false })}>
-                <div class="bthumb fav" title="进入查看">${this._icon("heart2", 20, true)}</div>
-                <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="进入查看">
-                  <div class="bt">我喜欢的音乐</div>
-                  <div class="ba">收藏的歌曲</div>
+                <div class="bthumb fav" title="${this._t("browser.enter")}">${this._icon("heart2", 20, true)}</div>
+                <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="${this._t("browser.enter")}">
+                  <div class="bt">${this._t("browser.starred")}</div>
+                  <div class="ba">${this._t("browser.starredDesc")}</div>
                 </div>
-                <button class="mini" title="进入查看" @click=${(e) => { e.stopPropagation(); this._browserPush({ type: "starred", items: [], query: "", loading: false }); }}>›</button>
+                <button class="mini" title="${this._t("browser.enter")}" @click=${(e) => { e.stopPropagation(); this._browserPush({ type: "starred", items: [], query: "", loading: false }); }}>›</button>
               </div>
             ` : ""}
-            ${!level.total && !level.loading ? html`<div class="empty">无内容</div>` : ""}
+            ${!level.total && !level.loading ? html`<div class="empty">${this._t("common.empty")}</div>` : ""}
             <div class="vs-spacer" style="height:${(level.total || 0) * ROW_STEP}px">
               ${win.map((i) => this._vsRow(level, i))}
             </div>
@@ -2408,7 +2417,7 @@ class MusicFlowRemoteCard extends LitElement {
   // 底部「加载中」轻量指示(预取在途时显示,用户感知仍在加载)。
   _vsMoreHint(level) {
     if (!level.vLoading || level.vLoading.size === 0) return html``;
-    return html`<div class="vs-more">加载中…</div>`;
+    return html`<div class="vs-more">${this._t("common.loading")}</div>`;
   }
 
   static get styles() {
@@ -2721,5 +2730,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "hass-musicflow-card",
   name: "MusicFlow Remote Card",
-  description: "MusicFlow 服务器的外部控制器:实时同步播放/队列/歌词/歌单/喜欢。",
+  description: localize().t("card.description"),
 });
