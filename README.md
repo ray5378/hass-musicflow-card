@@ -118,6 +118,14 @@ npm run build        # rollup: src/musicflow-remote-card.js -> dist/hass-musicfl
 产物在 `dist/hass-musicflow-card.js`，需要一并提交（`.github/workflows/validate.yml`
 会校验产物与源码一致）。
 
+## 国际化（i18n）
+
+卡片面向用户文案全部接入本地化，**完全跟随 HA 系统语言**自动切换（`zh*` 显示中文，其余显示英文），不提供手动切换入口：
+
+- **基础设施** `src/localize/localize.js`：`_loc()` 读取 `hass.language`，缺 key 先回退中文再回显 key；HA 切换语言时自动重建 localizer。
+- **语言包** `src/localize/languages/zh.js` / `en.js`：62 键一一对齐；构建产物 `dist/hass-musicflow-card.js` 已含本地化逻辑（无 `localStorage` 覆盖）。
+- **新增要求**：任何新用户可见文案必须同时补 zh.js 与 en.js，键集合一致，禁止硬编码中文。
+
 ## 相关仓库
 
 | 仓库 | 说明 |
