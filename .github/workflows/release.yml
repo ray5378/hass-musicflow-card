@@ -40,17 +40,17 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.6.92 — 首页本地随机分区去掉 tagline 小字注释
+            ## v1.7.0 — 国际化：卡片文案完全跟随 Home Assistant 系统语言
 
-            ### 修复
-            - 本地随机分区(QQ音乐/酷狗/网易云榜单)副标题仅在有 tagline 时显示
-            - 三个榜单插件不再输出说明性 tagline,首页分区只保留「X榜单·每日更新」,不再显示小字注释
-            - 精选分区保持「N 张」副标题不变
+            ### 新增
+            - 卡片全部面向用户文案接入本地化（zh/en 双语）
+            - 完全跟随 Home Assistant 系统语言自动切换：中文系统显示中文，其余显示英文；无可见/手动切换入口
+            - 语言包 60+ key 齐对，缺 key 自动回退中文
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.6.92`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.7.0`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
