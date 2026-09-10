@@ -8,6 +8,9 @@ import { BackendClient, childToQueueItem, parseLyrics } from "./backend-client.j
 import { localize } from "./localize/localize.js";
 
 const PLAY_MODES = ["order", "one", "all", "shuffle"];
+// 服务端能自行解析成队列的内容类型:这些类型起播走主通道 POST /v1/play
+// (只传内容 id,服务端查库解析),不必把整份歌曲列表推给 /queue/play。
+const CONTENT_PLAY_TYPES = new Set(["song", "playlist", "album", "artist", "genre"]);
 // 播放模式提示经 localize 读取(playModeTip.*);PLAY_MODE_ICON 为图标映射(不含文案)
 // 与主项目一致(lucide):order→list-ordered / one→repeat-1 / all→repeat / shuffle→shuffle
 const PLAY_MODE_ICON = { order: "listOrdered", one: "repeat1", all: "repeat", shuffle: "shuffle" };
@@ -34,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "1.7.0";
+const CARD_VERSION = "1.8.0";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -1013,6 +1016,7 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 跳播到队列中指定曲目并立即播放(后端已持有该队列,直接跳;shuffle 下也尊重指定索引)
+  // 后端 v2.3.23 起 playFrom 同样尊重指定起点(shuffle 不再随机覆盖),两条路都对。
   _jumpTo(index) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
@@ -1032,10 +1036,14 @@ class MusicFlowRemoteCard extends LitElement {
   // 加入播放队列并播放这首歌(不是继续播队列里别的歌):
   // 1) enqueue 把该曲追加到后端队列末尾(队列为空时后端会自动起播)
   // 2) 取权威队列,定位刚追加的这首歌(末尾),用 jump 跳播到它
-  //    —— 关键:后端 playFrom 在 shuffle 下会随机起播、忽视 startIndex,
-  //       所以必须用专门的 jump 端点严格跳到这首歌(随机只作用于后续续播)。
+  //    —— jump 是"在既有队列里跳到第 N 位"的专用端点,语义比重新起播精确:
+  //       它不会动队列内容,也不会触发洗牌序列重建。
   //    后端未升级(无 /queue/jump)时退化为"重建队列=原队列+该曲、从该曲起播",
-  //    绝不再用 playQueue([song],0) 清空原队列。
+  //    绝不用 playQueue([song],0) 清空原队列。
+  //
+  // 注(2026-09-10):后端 v2.3.23 起 `playFrom` 已修好「指定起点不再被随机覆盖」
+  // (修前它在 shuffle 下会 Math.random 丢弃 startIndex)。上面这套 jump 流程仍保留
+  // ——它是"在既有队列中定位"的正确工具,与起点定位 bug 无关,不因该修复而失效。
   async _appendAndPlay(song) {
     const pid = this._ui.currentPeerId;
     if (!pid || !song) return;
@@ -2124,6 +2132,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.remoteBusy = item.id;
     this.requestUpdate();
     let queueItems = [];
+    let serverPlaylistId = null;
     try {
       const kind = item.kind; // album | playlist | artist
       if (kind === "album" || kind === "playlist") {
@@ -2133,6 +2142,8 @@ class MusicFlowRemoteCard extends LitElement {
         const task = await this._client.waitTask(imp.taskId);
         const plId = task && task.playlistId;
         if (!plId) { err("remote collection import returned no playlistId"); return; }
+        // 导入后已是本地歌单 → 优先走主通道(服务端自己解析,不必拉全量回浏览器)。
+        serverPlaylistId = plId;
         const res = await this._client.getPlaylistSongs(plId);
         queueItems = ((res && res.playlist && res.playlist.entry) || [])
           .map((s) => this._toSongItem(s)).map((s) => childToQueueItem(s));
@@ -2160,6 +2171,17 @@ class MusicFlowRemoteCard extends LitElement {
     if (!queueItems.length) { log("remote collection empty"); return; }
     this._ui.isPlaying = true;
     this.requestUpdate();
+    // 专辑/歌单导入后已是本地歌单 → 主通道(服务端解析)优于把整份列表推回去。
+    // 艺术家分支没有对应的服务端内容 id(是逐曲聚合成的一个临时队列),走整队推送。
+    if (serverPlaylistId) {
+      try {
+        await this._client.playContent(pid, "playlist", serverPlaylistId);
+        log("playing remote via server content", item.name);
+        return;
+      } catch (e) {
+        err("playContent failed for remote collection, fallback to playQueue", e);
+      }
+    }
     this._client.playQueue(pid, queueItems, 0)
       .then(() => log("playing remote", this._collLabel(item), item.name, queueItems.length, "songs"))
       .catch((e) => err("play remote collection failed", e));
@@ -2208,6 +2230,12 @@ class MusicFlowRemoteCard extends LitElement {
 
   // 点击封面:直接播放整个集合(歌单/专辑/艺人/风格)的全部歌曲,
   // 用集合歌曲替换当前队列并从第 1 首开始播放。
+  //
+  // 起播走**主通道** `/v1/play`(只传内容类型 + 内容 ID,几百字节):
+  // 由服务端自行查库解析队列再投屏,与 Web 前端同源,且享有服务端的多源优选
+  // 与换源回退。历史上这里是把浏览器里的整份快照推给 `/queue/play`(数千首
+  // 可达数 MB),弱网下极易超时 —— 那正是「大歌单推不动」的根因。
+  // 服务端解析不出该内容时(如远程导入的歌单 id 变了),回落到整队推送。
   async _browserPlayCollection(item) {
     const pid = this._ui.currentPeerId;
     if (!pid || !item) return;
@@ -2216,14 +2244,41 @@ class MusicFlowRemoteCard extends LitElement {
       this._playRemoteCollection(item);
       return;
     }
+    // 服务端能自行解析的内容 → 走主通道,不必在浏览器里拉全量。
+    let serverType = item.kind;
+    let serverId = item.id;
+    if (item.kind === "remote") {
+      // 首页推荐平台歌单:先导入为本地歌单,再按本地歌单 id 走主通道解析。
+      if (!item.providerId) { err("remote playlist missing providerId"); return; }
+      const imp = await this._client.importRecommendPlaylist(item.providerId, {
+        source: item.source || "", id: item.id, name: item.name || "",
+        cover: item.coverUrl || "", creator: item.creator || "",
+        trackCount: item.trackCount || "", link: item.link || "",
+      }).catch((e) => { err("import remote playlist failed", e); return null; });
+      const plId = imp && imp.playlistId;
+      if (!plId) { err("import remote playlist returned no playlistId"); return; }
+      serverType = "playlist";
+      serverId = plId;
+    }
+    if (CONTENT_PLAY_TYPES.has(serverType) && serverId) {
+      this._ui.isPlaying = true;
+      this.requestUpdate();
+      try {
+        await this._client.playContent(pid, serverType, serverId);
+        log("playing via server content", serverType, serverId);
+        return;
+      } catch (e) {
+        // 主通道失败(老服务端无 /v1/play、或内容解析不出)→ 回落整队推送
+        err("playContent failed, fallback to playQueue", e);
+      }
+    }
     let songs = [];
     try {
       if (item.kind === "playlist") {
         const res = await this._client.getPlaylistSongs(item.id);
         songs = (res?.playlist?.entry || []).map((s) => this._toSongItem(s));
       } else if (item.kind === "remote") {
-        // 首页推荐平台歌单:先导入为本地歌单(recommend/import),再拉歌曲整播(与 Web playRemotePl 同流程)。
-        if (!item.providerId) { err("remote playlist missing providerId"); return; }
+        // 主通道已尝试并失败:退回浏览器拉全量后整队推送。
         const imp = await this._client.importRecommendPlaylist(item.providerId, {
           source: item.source || "", id: item.id, name: item.name || "",
           cover: item.coverUrl || "", creator: item.creator || "",

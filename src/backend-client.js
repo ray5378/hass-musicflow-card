@@ -477,6 +477,17 @@ export class BackendClient {
   playQueue(peerId, items, startIndex = 0) {
     return this.rest(this.peerPath(peerId, "/queue/play"), { method: "POST", body: { items, startIndex } });
   }
+  // 服务端内容点播(主通道,遥控器语义):只把「内容类型 + 内容 ID + 起点身份」交给后端,
+  // 由后端自行查库解析队列并投屏。相比 playQueue 整队推送:几百字节 vs 数 MB,
+  // 且享有服务端的多源优选与换源回退(卡片推的是浏览器里的一份快照,没有这些)。
+  // start 二选一:songId(身份,推荐)或 startIndex(行号)。
+  playContent(peerId, type, id, { songId = null, startIndex = null, playMode = null, enqueue = false } = {}) {
+    const body = { peerId, type, id, enqueue };
+    if (songId) body.songId = songId;
+    else if (startIndex !== null) body.startIndex = startIndex;
+    if (playMode) body.playMode = playMode;
+    return this.rest("/api/v1/play", { method: "POST", body });
+  }
   // 跳播到指定索引并立即播放(即使随机模式也尊重 index)。见后端 queue/jump。
   jumpToIndex(peerId, index) {
     return this.rest(this.peerPath(peerId, "/queue/jump"), { method: "POST", body: { index } });

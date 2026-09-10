@@ -40,17 +40,28 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v1.7.0 — 国际化：卡片文案完全跟随 Home Assistant 系统语言
+            ## v1.8.0 — 起播改走服务端主通道，修复「大歌单推不动 / 播错歌」
 
-            ### 新增
-            - 卡片全部面向用户文案接入本地化（zh/en 双语）
-            - 完全跟随 Home Assistant 系统语言自动切换：中文系统显示中文，其余显示英文；无可见/手动切换入口
-            - 语言包 60+ key 齐对，缺 key 自动回退中文
+            ### 修复
+            - **大歌单推不动**：播放歌单/专辑/首页推荐时，不再把浏览器里的整份歌曲列表
+              推给 `/queue/play`（数千首可达数 MB，弱网必超时）；改为走服务端主通道
+              `POST /api/v1/play`，只传「内容类型 + 内容 ID」（几百字节），
+              由服务端自行查库解析队列并投屏。
+            - **播的不是你点的那首**：服务端 v2.3.23 起 `playFrom` 已修好「shuffle 模式下
+              随机覆盖调用方指定起点」的问题，卡片可选传 `songId`（身份定位，不受排序影响）。
+
+            ### 兼容性
+            - 主通道失败（老服务端无 `/v1/play`）时自动回落到整队推送，行为不变。
+            - 远程（第三方平台）歌单/专辑导入后同样改走主通道；艺术家聚合队列仍走整队推送。
+
+            ### 配套版本
+            - 服务端 MusicFlow **v2.3.23**（必须，提供起点归属修复）
+            - HA 集成 hass-musicflow **v1.5.0**（`play_content` 支持 `song_id`）
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v1.7.0`
+            3. F12 Console 确认 `[musicflow-remote-card] v1.8.0`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
