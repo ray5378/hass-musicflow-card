@@ -132,7 +132,6 @@ npm run build        # rollup: src/musicflow-remote-card.js -> dist/hass-musicfl
 |---|---|
 | [MusicFlow](https://github.com/ray5378/MusicFlow) | 服务端：曲库、DLNA 播放、播放组 |
 | [hass-musicflow](https://github.com/ray5378/hass-musicflow) | HACS 集成（媒体播放器实体 + 卡片代理） |
-| [hassio-addons](https://github.com/ray5378/hassio-addons) | 服务端的 HA 加载项封装 |
 
 ## 许可证
 
