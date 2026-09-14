@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.1.0";
+const CARD_VERSION = "2.1.1";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -107,6 +107,17 @@ const IDLE_THEMES = {
 };
 const IDLE_SPOT_DUR = [36, 47, 61]; // 光斑周期(s),互质
 const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
+// 光斑几何:初版每个光斑 inset:-30%(直径 = 卡宽 160%)且三斑完全重合,
+// 卡片里只能看到中心那一小块平台区 → 观感"有但不明显"。
+// 改为「直径 70% 卡宽 + 三斑各占一角 + 漂移 ±18%」,才有可辨的光斑轮廓与流动感。
+const IDLE_SPOT_SIZE = 70; // 光斑直径(相对卡宽 %)
+const IDLE_SPOT_FADE = 72; // 径向渐变收边位置(%)
+const IDLE_SPOT_OFFSET = [[-18, -12], [16, 10], [-4, 20]]; // 三斑基准偏移(%,相对自身尺寸)
+const IDLE_SPOT_MOVE = 18; // 漂移幅度(%)
+const IDLE_SPOT_SCALE = 1.35; // 呼吸缩放上限
+const IDLE_SPOT_OPA_MIN = 0.35; // 最暗时的透明度(原 0.55,拉开明暗呼吸)
+const IDLE_SPOT_SAT = 1.25; // 饱和度倍率
+const IDLE_SPOT_LIFT = 0.06; // 与底色的明度差:暗色主题提亮,亮色主题压暗
 
 // CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
 function parseCssColor(str) {
@@ -622,10 +633,13 @@ class MusicFlowRemoteCard extends LitElement {
     const key = `${name}|${dark}|${primary}`;
     if (this._idleKey === key && this._idlePaletteCache) return this._idlePaletteCache;
 
-    let base, spots, accRgb;
+    let base, spotsHsl, accRgb;
     const preset = name === "auto" ? null : IDLE_THEMES[name];
     if (preset) {
-      base = preset.base; spots = preset.spots.slice(); accRgb = preset.acc;
+      base = preset.base;
+      // 预设色组是 hex,先转 HSL 才能统一做「提饱和 / 拉明度」
+      spotsHsl = preset.spots.map((c) => rgbToHsl(...(parseCssColor(c) || [88, 101, 242])));
+      accRgb = preset.acc;
     } else {
       // auto:取 HA 主色的色相,重设饱和度/明度 → 保证任何主题色下都"安静"且文字可读
       const rgb = parseCssColor(primary) || [88, 101, 242]; // 解析失败回落 HA 默认蓝紫
@@ -633,23 +647,27 @@ class MusicFlowRemoteCard extends LitElement {
       // 主色接近无彩(黑/白/灰主题):色相无意义,直接给中性灰,避免被算成红色调
       if (hs < 0.08) {
         base = hslCss(0, dark ? 0.05 : 0.03, dark ? 0.15 : 0.80);
-        spots = [
-          hslCss(0, dark ? 0.06 : 0.04, dark ? 0.32 : 0.62),
-          hslCss(210, dark ? 0.05 : 0.03, dark ? 0.30 : 0.66),
-          hslCss(30, dark ? 0.05 : 0.03, dark ? 0.28 : 0.64),
+        spotsHsl = [
+          [0, dark ? 0.06 : 0.04, dark ? 0.32 : 0.62],
+          [210, dark ? 0.05 : 0.03, dark ? 0.30 : 0.66],
+          [30, dark ? 0.05 : 0.03, dark ? 0.28 : 0.64],
         ];
         accRgb = dark ? "176, 180, 190" : "96, 100, 110";
       } else {
         base = hslCss(h, dark ? 0.22 : 0.14, dark ? 0.15 : 0.80);
-        spots = [
-          hslCss(h, dark ? 0.42 : 0.30, dark ? 0.32 : 0.62),
-          hslCss(h + 26, dark ? 0.38 : 0.26, dark ? 0.28 : 0.66),
-          hslCss(h + 338, dark ? 0.40 : 0.28, dark ? 0.30 : 0.64),
+        spotsHsl = [
+          [h, dark ? 0.42 : 0.30, dark ? 0.32 : 0.62],
+          [h + 26, dark ? 0.38 : 0.26, dark ? 0.28 : 0.66],
+          [h + 338, dark ? 0.40 : 0.28, dark ? 0.30 : 0.64],
         ];
         const [ar, ag, ab] = hslToRgb(h, dark ? 0.34 : 0.30, dark ? 0.62 : 0.40);
         accRgb = `${ar}, ${ag}, ${ab}`;
       }
     }
+    // 光斑「可见化」:统一提饱和,并按明暗模式拉开与底色的明度差。
+    // 暗色主题光斑本就比底色亮 → 再提亮;亮色主题光斑比底色暗 → 必须压暗,否则越调越平。
+    const spots = spotsHsl.map(([hh, s, l]) =>
+      hslCss(hh, s * IDLE_SPOT_SAT, l + (dark ? IDLE_SPOT_LIFT : -IDLE_SPOT_LIFT)));
     const factor = IDLE_SPEED_FACTOR[cfg.idle_speed] ?? 1;
     this._idleKey = key;
     this._idlePaletteCache = {
@@ -1501,7 +1519,14 @@ class MusicFlowRemoteCard extends LitElement {
           </div>` : ""}
         ${pal ? html`
           <div class="idlebg ${pal.durs[0] > 0 ? "" : "static"}" style="--idle-base: ${pal.base}">
-            ${pal.spots.map((c, i) => html`<i style="--c: ${c}; --dur: ${pal.durs[i]}s; --dly: ${-i * 7}s"></i>`)}
+            ${pal.spots.map((c, i) => {
+              const [ox, oy] = IDLE_SPOT_OFFSET[i] || [0, 0];
+              const m = IDLE_SPOT_MOVE;
+              return html`<i style="--c: ${c}; --dur: ${pal.durs[i]}s; --dly: ${-i * 7}s;
+                --fx: ${ox - m * 0.9}%; --fy: ${oy - m * 1.1}%;
+                --tx: ${ox + m * 1.2}%; --ty: ${oy + m}%;
+                --sc: ${IDLE_SPOT_SCALE}; --omin: ${IDLE_SPOT_OPA_MIN}"></i>`;
+            })}
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">${this._t("connection.restoring")}</div>` : ""}
@@ -2687,21 +2712,29 @@ class MusicFlowRemoteCard extends LitElement {
          contain 把重绘锁在本层内,不影响 HA 整页合成。 */
       .idlebg { position: absolute; inset: 0; z-index: 0; overflow: hidden;
         contain: layout paint style;
+        --sz: ${IDLE_SPOT_SIZE}%; --fade: ${IDLE_SPOT_FADE}%;
         background: var(--idle-base); opacity: 0; transition: opacity 900ms ease; }
       ha-card.idle .idlebg { opacity: 1; }
-      .idlebg i { position: absolute; inset: -30%; display: block; border-radius: 50%;
-        background: radial-gradient(closest-side, var(--c), transparent 72%);
+      /* 光斑:正圆(aspect-ratio 保证宽高一致),居中靠 margin 负偏移 —— 
+         transform 已被动画占用,不能用 translate 居中。 */
+      .idlebg i { position: absolute; left: 50%; top: 50%;
+        width: var(--sz); aspect-ratio: 1;
+        margin: calc(var(--sz) / -2) 0 0 calc(var(--sz) / -2);
+        display: block; border-radius: 50%;
+        background: radial-gradient(closest-side, var(--c), transparent var(--fade));
         will-change: transform, opacity;
         animation: mf-idle-drift var(--dur) cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
         animation-delay: var(--dly); }
+      /* 起止位姿由 JS 按 IDLE_SPOT_OFFSET / MOVE 注入,三斑各占一角、互不重合 */
       @keyframes mf-idle-drift {
-        from { transform: translate3d(-9%, -11%, 0) scale(1); opacity: .55; }
-        to   { transform: translate3d(12%, 10%, 0) scale(1.25); opacity: 1; }
+        from { transform: translate3d(var(--fx), var(--fy), 0) scale(1); opacity: var(--omin); }
+        to   { transform: translate3d(var(--tx), var(--ty), 0) scale(var(--sc)); opacity: 1; }
       }
       /* 三档降级:idle_speed=off → 纯静态;不可见 / 后台 tab / 面板态 → 停表;无障碍 → 静态 */
       .idlebg.static i { animation: none; opacity: .8; }
       .idlebg.paused i { animation-play-state: paused; }
-      @media (prefers-reduced-motion: reduce) { .idlebg i { animation: none; } }
+      /* 无障碍降级下动画停在第 0 帧(opacity 只有 --omin),显式提亮保证静态时也看得见 */
+      @media (prefers-reduced-motion: reduce) { .idlebg i { animation: none; opacity: .8; } }
       /* 未连接:整卡调暗降饱和做区分(不再显示"已连接/未连接"文字) */
       .wrap.off { opacity: 0.45; filter: saturate(0.5) brightness(0.75); }
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
