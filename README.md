@@ -108,6 +108,21 @@ transport: direct   # 始终直连后端
 # transport: proxy  # 始终经 HA 中转（需要集成 1.3.0+）
 ```
 
+### 未播放态底色（idle ambient）
+
+当前播放器**没有封面可显示**时（停止 / 清空队列 / 无媒体），卡片改用缓慢流动的低饱和光斑填充底色，避免整卡失去颜色。有封面时一律沿用封面主色，两者互斥。
+
+```yaml
+type: custom:hass-musicflow-card
+idle_background: true    # 默认 true;设 false 关闭(回到原来无封面的静态紫灰渐变)
+idle_theme: auto         # auto | twilight | ocean | ember | forest | mono
+idle_speed: normal       # slow | normal | fast | off(纯静态,不动画)
+```
+
+- `idle_theme: auto`（默认）取 HA 主题的 `--primary-color`，重设饱和度与明度后派生底色，因此任何主题色下都足够克制，并自动跟随明暗模式切换文字色。
+- 开销控制：只动画 `transform` / `opacity`（合成线程驱动，主线程零参与），不用 `filter` / `backdrop-filter` / JS 逐帧；光斑用 `radial-gradient` 自带柔边，连 `blur` 都省掉。三个光斑周期取互质（36 / 47 / 61 秒），合成周期约 28.7 小时。
+- 卡片滚出视口、切到后台标签页、打开队列/媒体库面板时自动停表；系统开启“减少动态效果”时降级为静态渐变。
+
 ## 构建
 
 ```bash

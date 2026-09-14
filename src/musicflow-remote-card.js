@@ -91,6 +91,58 @@ function hslToRgb(h, s, l) {
 const CAT_ICONS = { home: "home", playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library" };
 const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分类使用)
 
+// ============ 未播放态「流动底色」(idle ambient) ============
+// 触发条件:当前没有封面可显示(停止 / 清空队列 / 无媒体)。与 .coverbg 严格互斥——
+// 有封面就用封面主色,没封面才用缓慢流动的低饱和光斑补上底色空窗。
+// 性能约定(关键):只动画 transform / opacity → 走合成线程,主线程零参与;
+// 不用 filter / backdrop-filter / JS 逐帧;光斑用 radial-gradient 自带柔边,连 blur 都省掉。
+// 三个周期取互质,合成周期 ≈ 8.6 小时,肉眼感觉不到"循环播放"。
+const IDLE_THEMES = {
+  auto: null, // 运行时从 HA 主题 --primary-color 派生(降饱和 + 压暗)
+  twilight: { base: "#1a1f2e", spots: ["#4a63a0", "#5b4f8f", "#386f7d"], acc: "150, 168, 214" },
+  ocean: { base: "#16232c", spots: ["#2c7286", "#2e7f72", "#32527f"], acc: "122, 196, 208" },
+  ember: { base: "#231a1d", spots: ["#8f5245", "#96603a", "#6d446f"], acc: "214, 150, 120" },
+  forest: { base: "#18221c", spots: ["#3f6b4a", "#4a6f3c", "#2f6b63"], acc: "140, 200, 150" },
+  mono: { base: "#1c1f24", spots: ["#3b424c", "#464c56", "#333941"], acc: "168, 178, 196" },
+};
+const IDLE_SPOT_DUR = [36, 47, 61]; // 光斑周期(s),互质
+const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
+
+// CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
+function parseCssColor(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const h = hex[1];
+    const n = h.length === 3 ? h.split("").map((c) => parseInt(c + c, 16)) : [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    return n;
+  }
+  const rgb = s.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  if (rgb) return [+rgb[1], +rgb[2], +rgb[3]];
+  return null;
+}
+
+// RGB → HSL(h:0-360, s/l:0-1)。仅取色用,不追求感知精度。
+function rgbToHsl(r, g, b) {
+  const rr = r / 255, gg = g / 255, bb = b / 255;
+  const mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
+  const l = (mx + mn) / 2;
+  const d = mx - mn;
+  let h = 0, s = 0;
+  if (d) {
+    s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) * 60;
+    else if (mx === gg) h = ((bb - rr) / d + 2) * 60;
+    else h = ((rr - gg) / d + 4) * 60;
+  }
+  return [h, s, l];
+}
+
+function hslCss(h, s, l) {
+  return `hsl(${Math.round(((h % 360) + 360) % 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+}
+
 class MusicFlowRemoteCard extends LitElement {
   static get properties() {
     return {
@@ -101,6 +153,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   setConfig(config) {
     this._config = config || {};
+    this._idleKey = ""; // idle_theme / 明暗模式可能变了,下次重新算底色配色
   }
 
   constructor() {
@@ -161,6 +214,12 @@ class MusicFlowRemoteCard extends LitElement {
     this._vsInflight = 0; // 全库滚动:同时在途的块请求数(上限 VS_CONCURRENCY)
     this._vsRaf = 0; // 滚动处理 rAF 句柄(节流)
     this._visHandler = null; // 后台 tab 回前台刷新监听
+    // 未播放态流动底色:可见性(IO 判定)/ 配色缓存 / 后台 tab 监听
+    this._idleVisible = true;
+    this._idleObserver = null;
+    this._idleVisHandler = null;
+    this._idlePaletteCache = null;
+    this._idleKey = "";
   }
 
   // HA 前端可能 detach 再 attach 卡片(面板切换/资源重载/其他卡片报错触发重渲染):
@@ -188,6 +247,8 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (this._pauseTimer) { clearTimeout(this._pauseTimer); this._pauseTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
+    if (this._idleVisHandler) { document.removeEventListener("visibilitychange", this._idleVisHandler); this._idleVisHandler = null; }
+    if (this._idleObserver) { this._idleObserver.disconnect(); this._idleObserver = null; }
     if (this._client) this._client.disconnect();
     if (this._coverObserver) { this._coverObserver.disconnect(); this._coverObserver = null; }
     this._coverObserverRoot = null;
@@ -532,7 +593,95 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.duration = 0;
     this._ui.isPlaying = false;
     this._lastPos = -1;
+    // 无封面后必须清掉上一首的强调色:否则 --acc 残留旧歌色,
+    // 未播放态的图标/进度条会带着上一首的颜色(并盖掉 idle 底色的柔色)。
+    this._ui.accentRgb = null;
     this.requestUpdate();
+  }
+
+  // ============ 未播放态「流动底色」(idle ambient) ============
+  // 是否启用:与 .coverbg 严格互斥——只要有封面就走封面主色,没封面才补流动底色。
+  // (停止/清空队列/无媒体 → 启用;暂停但有封面 → 不启用,保持原封面背景。)
+  _idleAmbientOn() {
+    if ((this._config || {}).idle_background === false) return false;
+    return !(this._ui.song && this._ui.song.coverArt);
+  }
+
+  // 配色:默认 auto(从 HA 主题 --primary-color 派生),否则用预设色组。
+  // 结果按「主题 + 明暗模式 + 主色」缓存,只在变化时重算一次。
+  _idlePalette() {
+    const cfg = this._config || {};
+    const name = IDLE_THEMES[cfg.idle_theme] !== undefined ? cfg.idle_theme : "auto";
+    // HA 未就绪时按暗色处理(ha-card 默认底色就是暗色)
+    const dark = this._hass?.themes?.darkMode !== false;
+    let primary = "";
+    if (name === "auto") {
+      // HA 把 --primary-color 挂在 :root 上,shadow DOM 内可继承读取
+      primary = (getComputedStyle(this).getPropertyValue("--primary-color") || "").trim();
+    }
+    const key = `${name}|${dark}|${primary}`;
+    if (this._idleKey === key && this._idlePaletteCache) return this._idlePaletteCache;
+
+    let base, spots, accRgb;
+    const preset = name === "auto" ? null : IDLE_THEMES[name];
+    if (preset) {
+      base = preset.base; spots = preset.spots.slice(); accRgb = preset.acc;
+    } else {
+      // auto:取 HA 主色的色相,重设饱和度/明度 → 保证任何主题色下都"安静"且文字可读
+      const rgb = parseCssColor(primary) || [88, 101, 242]; // 解析失败回落 HA 默认蓝紫
+      const [h, hs] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+      // 主色接近无彩(黑/白/灰主题):色相无意义,直接给中性灰,避免被算成红色调
+      if (hs < 0.08) {
+        base = hslCss(0, dark ? 0.05 : 0.03, dark ? 0.15 : 0.80);
+        spots = [
+          hslCss(0, dark ? 0.06 : 0.04, dark ? 0.32 : 0.62),
+          hslCss(210, dark ? 0.05 : 0.03, dark ? 0.30 : 0.66),
+          hslCss(30, dark ? 0.05 : 0.03, dark ? 0.28 : 0.64),
+        ];
+        accRgb = dark ? "176, 180, 190" : "96, 100, 110";
+      } else {
+        base = hslCss(h, dark ? 0.22 : 0.14, dark ? 0.15 : 0.80);
+        spots = [
+          hslCss(h, dark ? 0.42 : 0.30, dark ? 0.32 : 0.62),
+          hslCss(h + 26, dark ? 0.38 : 0.26, dark ? 0.28 : 0.66),
+          hslCss(h + 338, dark ? 0.40 : 0.28, dark ? 0.30 : 0.64),
+        ];
+        const [ar, ag, ab] = hslToRgb(h, dark ? 0.34 : 0.30, dark ? 0.62 : 0.40);
+        accRgb = `${ar}, ${ag}, ${ab}`;
+      }
+    }
+    const factor = IDLE_SPEED_FACTOR[cfg.idle_speed] ?? 1;
+    this._idleKey = key;
+    this._idlePaletteCache = {
+      dark, base, spots, acc: accRgb,
+      // off / 未知档 → 0,不加动画(纯静态底色)
+      durs: IDLE_SPOT_DUR.map((d) => Math.round(d * factor * 10) / 10),
+    };
+    return this._idlePaletteCache;
+  }
+
+  // 只在 idlebg 实际渲染后调用:同步暂停态(不可见 / 后台 tab / 面板打开)并挂可见性监听。
+  _syncIdleAmbient() {
+    const el = this.shadowRoot?.querySelector(".idlebg");
+    if (!el) {
+      if (this._idleObserver) { this._idleObserver.disconnect(); this._idleObserver = null; }
+      if (this._idleVisHandler) { document.removeEventListener("visibilitychange", this._idleVisHandler); this._idleVisHandler = null; }
+      return;
+    }
+    const u = this._ui;
+    el.classList.toggle("paused", !this._idleVisible || !!document.hidden || !!u.showQueue || !!u.showBrowser);
+    if (!this._idleObserver) {
+      this._idleObserver = new IntersectionObserver(([e]) => {
+        this._idleVisible = !!e.isIntersecting;
+        const n = this.shadowRoot?.querySelector(".idlebg");
+        if (n) n.classList.toggle("paused", !this._idleVisible || document.hidden);
+      }, { threshold: 0.01 });
+      this._idleObserver.observe(this);
+    }
+    if (!this._idleVisHandler) {
+      this._idleVisHandler = () => this._syncIdleAmbient();
+      document.addEventListener("visibilitychange", this._idleVisHandler);
+    }
   }
 
   _setMedia(media) {
@@ -1322,6 +1471,8 @@ class MusicFlowRemoteCard extends LitElement {
     }
     // 极简歌词模式:相关状态变化时重置空闲计时;条件不满足(暂停/开面板/无歌词)时强制恢复完整模式。
     this._updatedMiniWatch();
+    // 未播放态流动底色:同步暂停态(不可见 / 后台 tab / 面板打开)。
+    this._syncIdleAmbient();
   }
 
   render() {
@@ -1334,13 +1485,23 @@ class MusicFlowRemoteCard extends LitElement {
     const u = this._ui;
     const song = u.song;
     const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
+    // 未播放态流动底色:无封面时接管底色(与 .coverbg 互斥),并让 --acc 落到柔色,
+    // 使图标/进度条/选中态与底色同一色系,而不是突兀的纯白。
+    const idleOn = this._idleAmbientOn();
+    const pal = idleOn ? this._idlePalette() : null;
+    const acc = u.accentRgb || (pal ? pal.acc : "255, 255, 255");
+    const cardCls = pal ? (pal.dark ? "light" : "dark") : (u.coverLightText ? "light" : "dark");
 
     return html`
-      <ha-card class="${u.coverLightText ? "light" : "dark"}" style="--acc: ${u.accentRgb || "255, 255, 255"}">
+      <ha-card class="${cardCls} ${pal ? "idle" : ""}" style="--acc: ${acc}">
         ${song?.coverArt ? html`
           <div class="coverbg">
             <img class="coverbg-img" data-cover-id="${song.coverArt}" alt="" @load=${this._onBgCoverLoad} />
             <div class="coverbg-veil"></div>
+          </div>` : ""}
+        ${pal ? html`
+          <div class="idlebg ${pal.durs[0] > 0 ? "" : "static"}" style="--idle-base: ${pal.base}">
+            ${pal.spots.map((c, i) => html`<i style="--c: ${c}; --dur: ${pal.durs[i]}s; --dly: ${-i * 7}s"></i>`)}
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">${this._t("connection.restoring")}</div>` : ""}
@@ -2520,6 +2681,27 @@ class MusicFlowRemoteCard extends LitElement {
         transform: scale(1.45); filter: blur(42px) saturate(1.35); }
       .coverbg-veil { position: absolute; inset: 0;
         background: linear-gradient(180deg, rgba(0,0,0,0.30) 0%, rgba(0,0,0,0.40) 55%, rgba(0,0,0,0.50) 100%); }
+      /* 未播放态流动底色(idle ambient):无封面时接管整卡底色。
+         性能约定:只动画 transform / opacity → 合成线程独立驱动,主线程零参与、无重绘;
+         不用 filter / backdrop-filter / JS 逐帧;光斑靠 radial-gradient 自带柔边,连 blur 都省掉。
+         contain 把重绘锁在本层内,不影响 HA 整页合成。 */
+      .idlebg { position: absolute; inset: 0; z-index: 0; overflow: hidden;
+        contain: layout paint style;
+        background: var(--idle-base); opacity: 0; transition: opacity 900ms ease; }
+      ha-card.idle .idlebg { opacity: 1; }
+      .idlebg i { position: absolute; inset: -30%; display: block; border-radius: 50%;
+        background: radial-gradient(closest-side, var(--c), transparent 72%);
+        will-change: transform, opacity;
+        animation: mf-idle-drift var(--dur) cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+        animation-delay: var(--dly); }
+      @keyframes mf-idle-drift {
+        from { transform: translate3d(-9%, -11%, 0) scale(1); opacity: .55; }
+        to   { transform: translate3d(12%, 10%, 0) scale(1.25); opacity: 1; }
+      }
+      /* 三档降级:idle_speed=off → 纯静态;不可见 / 后台 tab / 面板态 → 停表;无障碍 → 静态 */
+      .idlebg.static i { animation: none; opacity: .8; }
+      .idlebg.paused i { animation-play-state: paused; }
+      @media (prefers-reduced-motion: reduce) { .idlebg i { animation: none; } }
       /* 未连接:整卡调暗降饱和做区分(不再显示"已连接/未连接"文字) */
       .wrap.off { opacity: 0.45; filter: saturate(0.5) brightness(0.75); }
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }

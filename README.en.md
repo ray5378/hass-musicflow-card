@@ -119,6 +119,21 @@ transport: direct   # always connect straight to the backend
 # transport: proxy  # always route through Home Assistant (needs integration 1.3.0+)
 ```
 
+### Idle background (idle ambient)
+
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with slowly drifting, low-saturation light blobs instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+
+```yaml
+type: custom:hass-musicflow-card
+idle_background: true    # default true; set false for the original static gradient
+idle_theme: auto         # auto | twilight | ocean | ember | forest | mono
+idle_speed: normal       # slow | normal | fast | off (static, no animation)
+```
+
+- `idle_theme: auto` (default) derives the palette from the HA theme's `--primary-color` and rewrites its saturation/lightness, so it stays restrained under any theme colour and follows dark/light mode for text contrast.
+- Cost: only `transform` / `opacity` are animated (compositor-driven, zero main-thread work) — no `filter`, no `backdrop-filter`, no per-frame JS. Blobs rely on the soft edge of `radial-gradient`, so not even a `blur` is needed. The three blob periods are coprime (36 / 47 / 61 s), giving a combined cycle of ~28.7 hours.
+- Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static gradient under `prefers-reduced-motion`.
+
 ## How it works
 
 The card obtains the backend connection details from the integration via the
