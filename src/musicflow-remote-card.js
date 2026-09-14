@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.1.1";
+const CARD_VERSION = "2.2.0";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -91,12 +91,19 @@ function hslToRgb(h, s, l) {
 const CAT_ICONS = { home: "home", playlists: "list", albums: "disc3", songs: "headphones", artists: "user", genres: "library" };
 const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分类使用)
 
-// ============ 未播放态「流动底色」(idle ambient) ============
+// ============ 未播放态「流动光晕」(idle ambient) ============
 // 触发条件:当前没有封面可显示(停止 / 清空队列 / 无媒体)。与 .coverbg 严格互斥——
-// 有封面就用封面主色,没封面才用缓慢流动的低饱和光斑补上底色空窗。
-// 性能约定(关键):只动画 transform / opacity → 走合成线程,主线程零参与;
-// 不用 filter / backdrop-filter / JS 逐帧;光斑用 radial-gradient 自带柔边,连 blur 都省掉。
-// 三个周期取互质,合成周期 ≈ 8.6 小时,肉眼感觉不到"循环播放"。
+// 有封面就用封面主色,没封面才用流动光晕补上底色空窗。
+//
+// 颜色来源:最后一首播放歌曲的封面。走 _analyzeBrightness() 同一套算法(24×24 降采样 →
+// RGB 4bit 分桶 → 频次×饱和度评分),只是把「取最高分 1 个」改成「色距去重取 5 个」。
+// 停播后 coverArt 已经没了,所以这 5 色必须在播放时算好缓存,停播后才有得用。
+//
+// 性能约定(关键,决定实现形态):渐变画在「比卡片大一倍」的层上,blur 一次性烘焙;
+// 动画只做 transform 平移。层内容自始至终恒定 → blur 结果被缓存成纹理,每帧只有一次
+// 带矩阵的合成,主线程与 paint 全程零参与。
+// 刻意不用:background-position(每帧层内容失效 → 整层重绘 + blur 卷积重算)、
+// conic-gradient 多层叠加、旋转、连续 JS 逐帧。will-change 只声明 transform 这一处。
 const IDLE_THEMES = {
   auto: null, // 运行时从 HA 主题 --primary-color 派生(降饱和 + 压暗)
   twilight: { base: "#1a1f2e", spots: ["#4a63a0", "#5b4f8f", "#386f7d"], acc: "150, 168, 214" },
@@ -105,19 +112,22 @@ const IDLE_THEMES = {
   forest: { base: "#18221c", spots: ["#3f6b4a", "#4a6f3c", "#2f6b63"], acc: "140, 200, 150" },
   mono: { base: "#1c1f24", spots: ["#3b424c", "#464c56", "#333941"], acc: "168, 178, 196" },
 };
-const IDLE_SPOT_DUR = [36, 47, 61]; // 光斑周期(s),互质
-const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
-// 光斑几何:初版每个光斑 inset:-30%(直径 = 卡宽 160%)且三斑完全重合,
-// 卡片里只能看到中心那一小块平台区 → 观感"有但不明显"。
-// 改为「直径 70% 卡宽 + 三斑各占一角 + 漂移 ±18%」,才有可辨的光斑轮廓与流动感。
-const IDLE_SPOT_SIZE = 70; // 光斑直径(相对卡宽 %)
-const IDLE_SPOT_FADE = 72; // 径向渐变收边位置(%)
-const IDLE_SPOT_OFFSET = [[-18, -12], [16, 10], [-4, 20]]; // 三斑基准偏移(%,相对自身尺寸)
-const IDLE_SPOT_MOVE = 18; // 漂移幅度(%)
-const IDLE_SPOT_SCALE = 1.35; // 呼吸缩放上限
-const IDLE_SPOT_OPA_MIN = 0.35; // 最暗时的透明度(原 0.55,拉开明暗呼吸)
-const IDLE_SPOT_SAT = 1.25; // 饱和度倍率
-const IDLE_SPOT_LIFT = 0.06; // 与底色的明度差:暗色主题提亮,亮色主题压暗
+// 一轮时长(s):平移恰好一个渐变周期,首尾同色 → 无缝
+const IDLE_DUR = { slow: 11, normal: 7, fast: 4, off: 0 };
+const IDLE_BLUR = 24; // 渐变层模糊半径(px)
+const IDLE_OVER = 40; // 渐变层四周溢出(px):吃掉 blur 的淡边,否则卡片四周会露底
+const IDLE_GLOW_OPA = 0.85; // 光晕层不透明度(留一点 base 透出来压住对比度)
+// 封面原色不能直接当整卡底色:饱和普遍 0.5~0.9、明度跨度极大,铺满会把文字压死。
+// 统一降饱和 + 把明度收进窄带(只留 ±0.03 起伏):保留色调差异,又不会循环时一亮一暗地跳。
+const IDLE_GLOW_SAT = 0.85;
+const IDLE_GLOW_L_DARK = 0.30;
+const IDLE_GLOW_L_LIGHT = 0.72;
+const IDLE_GLOW_L_SPREAD = 0.03;
+// 取色:原算法只取最高分 1 个桶,直接取 top-5 会拿到同一颜色的相邻 4bit 桶(5 个深浅变体),
+// 故加色距去重 + 跳过近灰桶;取不满(低饱和封面)逐轮放宽阈值,仍不足才用主色明度阶补齐。
+const IDLE_SWATCH_N = 5;
+const IDLE_SWATCH_MIN_DIST = 56; // RGB 欧氏距离阈值
+const IDLE_SWATCH_MIN_SAT = 0.11;
 
 // CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
 function parseCssColor(str) {
@@ -152,6 +162,43 @@ function rgbToHsl(r, g, b) {
 
 function hslCss(h, s, l) {
   return `hsl(${Math.round(((h % 360) + 360) % 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+}
+
+// 从 _analyzeBrightness 的分桶结果里再取 n 个「互不相近」的色,供未播放态光晕使用。
+// 直接取 score 前 n 会全是同一颜色的相邻 4bit 桶(n 个深浅变体),故按 RGB 距离去重;
+// 近灰桶当整卡底色没有意义,跳过。取不满(低饱和封面)逐轮放宽距离阈值,
+// 仍不足才用主色的明度阶补齐,保证永远返回 n 个。
+function pickTopColors(bucket, n) {
+  const all = [];
+  for (const e of bucket.values()) {
+    const r = e.r / e.c, g = e.g / e.c, b = e.b / e.c;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const sat = mx > 0 ? (mx - mn) / (mx + 1e-6) : 0;
+    all.push({ r, g, b, sat, score: e.c * (1 + sat * 1.5) });
+  }
+  all.sort((a, b) => b.score - a.score);
+  const out = [];
+  let minDist = IDLE_SWATCH_MIN_DIST;
+  for (let pass = 0; pass < 4 && out.length < n; pass++) {
+    for (const c of all) {
+      if (out.length >= n) break;
+      if (c.sat < IDLE_SWATCH_MIN_SAT) continue;
+      if (out.some((o) => Math.hypot(o.r - c.r, o.g - c.g, o.b - c.b) < minDist)) continue;
+      out.push(c);
+    }
+    minDist *= 0.6;
+  }
+  const head = all[0];
+  if (head) {
+    const [hh, hs] = rgbToHsl(head.r, head.g, head.b);
+    while (out.length < n) {
+      const i = out.length;
+      const l = Math.max(0.12, Math.min(0.8, 0.3 + (i - 2) * 0.06));
+      const [r, g, b] = hslToRgb(hh, Math.max(0.25, hs), l);
+      out.push({ r, g, b, sat: hs, fill: true });
+    }
+  }
+  return out.length ? out : null;
 }
 
 class MusicFlowRemoteCard extends LitElement {
@@ -198,6 +245,9 @@ class MusicFlowRemoteCard extends LitElement {
       lyricIndex: -1,
       liked: false,
       accentRgb: null, // 封面提取的强调色 "r,g,b"(当前播放器立体样式 --acc;null=回落中性白,不落品牌红)
+      // 封面提取的 5 个主色([{r,g,b,sat}]),供未播放态光晕用。
+      // 注意:停播后 coverArt 会清空,但这里刻意**不清** —— 保留"最后一首播放的歌曲"的颜色。
+      coverSwatches: null,
       wsState: "init", // init | open(WS 正常) | rest(WS 断,REST 兜底) | down(都不可达)
       showQueue: false,
       showBrowser: false,
@@ -607,6 +657,8 @@ class MusicFlowRemoteCard extends LitElement {
     // 无封面后必须清掉上一首的强调色:否则 --acc 残留旧歌色,
     // 未播放态的图标/进度条会带着上一首的颜色(并盖掉 idle 底色的柔色)。
     this._ui.accentRgb = null;
+    // coverSwatches 不清:未播放态光晕用的就是"最后一首播放的歌曲"的颜色,
+    // 清掉的话停播瞬间光晕会失去色彩来源、回落成主题派生色。
     this.requestUpdate();
   }
 
@@ -618,8 +670,9 @@ class MusicFlowRemoteCard extends LitElement {
     return !(this._ui.song && this._ui.song.coverArt);
   }
 
-  // 配色:默认 auto(从 HA 主题 --primary-color 派生),否则用预设色组。
-  // 结果按「主题 + 明暗模式 + 主色」缓存,只在变化时重算一次。
+  // 配色:优先用「最后一首播放歌曲的封面」取到的 5 个真实色。
+  // 冷启动(还没播过歌 / 封面跨域取色失败)没有缓存 → 回落 idle_theme(默认 auto 从 HA 主色派生)。
+  // 结果按「主题 + 明暗 + 主色 + 5 色」缓存,只在变化时重算一次。
   _idlePalette() {
     const cfg = this._config || {};
     const name = IDLE_THEMES[cfg.idle_theme] !== undefined ? cfg.idle_theme : "auto";
@@ -630,50 +683,71 @@ class MusicFlowRemoteCard extends LitElement {
       // HA 把 --primary-color 挂在 :root 上,shadow DOM 内可继承读取
       primary = (getComputedStyle(this).getPropertyValue("--primary-color") || "").trim();
     }
-    const key = `${name}|${dark}|${primary}`;
+    const sw = this._ui.coverSwatches;
+    const swKey = sw ? sw.map((c) => `${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)}`).join("|") : "";
+    const key = `${name}|${dark}|${primary}|${swKey}`;
     if (this._idleKey === key && this._idlePaletteCache) return this._idlePaletteCache;
 
-    let base, spotsHsl, accRgb;
-    const preset = name === "auto" ? null : IDLE_THEMES[name];
-    if (preset) {
-      base = preset.base;
-      // 预设色组是 hex,先转 HSL 才能统一做「提饱和 / 拉明度」
-      spotsHsl = preset.spots.map((c) => rgbToHsl(...(parseCssColor(c) || [88, 101, 242])));
-      accRgb = preset.acc;
+    let base, glowHsl, accRgb;
+    if (sw) {
+      // 有真实取色:直接转 HSL,饱和/明度交给下面的「底色化」统一处理
+      glowHsl = sw.map((c) => rgbToHsl(c.r, c.g, c.b));
+      const [bh, bs] = glowHsl[0];
+      const [ar, ag, ab] = hslToRgb(bh, Math.min(0.5, Math.max(0.2, bs * 0.6)), dark ? 0.62 : 0.40);
+      accRgb = `${ar}, ${ag}, ${ab}`;
+      base = hslCss(bh, bs * 0.5, dark ? IDLE_GLOW_L_DARK * 0.55 : Math.min(0.94, IDLE_GLOW_L_LIGHT + 0.13));
     } else {
-      // auto:取 HA 主色的色相,重设饱和度/明度 → 保证任何主题色下都"安静"且文字可读
-      const rgb = parseCssColor(primary) || [88, 101, 242]; // 解析失败回落 HA 默认蓝紫
-      const [h, hs] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
-      // 主色接近无彩(黑/白/灰主题):色相无意义,直接给中性灰,避免被算成红色调
-      if (hs < 0.08) {
-        base = hslCss(0, dark ? 0.05 : 0.03, dark ? 0.15 : 0.80);
-        spotsHsl = [
-          [0, dark ? 0.06 : 0.04, dark ? 0.32 : 0.62],
-          [210, dark ? 0.05 : 0.03, dark ? 0.30 : 0.66],
-          [30, dark ? 0.05 : 0.03, dark ? 0.28 : 0.64],
-        ];
-        accRgb = dark ? "176, 180, 190" : "96, 100, 110";
+      const preset = name === "auto" ? null : IDLE_THEMES[name];
+      if (preset) {
+        // 预设色组是 hex,先转 HSL 才能统一做「降饱和 / 收明度」
+        glowHsl = preset.spots.map((c) => rgbToHsl(...(parseCssColor(c) || [88, 101, 242])));
+        base = preset.base;
+        accRgb = preset.acc;
       } else {
-        base = hslCss(h, dark ? 0.22 : 0.14, dark ? 0.15 : 0.80);
-        spotsHsl = [
-          [h, dark ? 0.42 : 0.30, dark ? 0.32 : 0.62],
-          [h + 26, dark ? 0.38 : 0.26, dark ? 0.28 : 0.66],
-          [h + 338, dark ? 0.40 : 0.28, dark ? 0.30 : 0.64],
-        ];
-        const [ar, ag, ab] = hslToRgb(h, dark ? 0.34 : 0.30, dark ? 0.62 : 0.40);
-        accRgb = `${ar}, ${ag}, ${ab}`;
+        // auto:取 HA 主色的色相,重设饱和度/明度 → 保证任何主题色下都"安静"且文字可读
+        const rgb = parseCssColor(primary) || [88, 101, 242]; // 解析失败回落 HA 默认蓝紫
+        const [h, hs] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+        // 主色接近无彩(黑/白/灰主题):色相无意义,直接给中性灰,避免被算成红色调
+        if (hs < 0.08) {
+          base = hslCss(0, dark ? 0.05 : 0.03, dark ? 0.15 : 0.80);
+          glowHsl = [
+            [0, dark ? 0.06 : 0.04, dark ? 0.32 : 0.62],
+            [210, dark ? 0.05 : 0.03, dark ? 0.30 : 0.66],
+            [30, dark ? 0.05 : 0.03, dark ? 0.28 : 0.64],
+          ];
+          accRgb = dark ? "176, 180, 190" : "96, 100, 110";
+        } else {
+          base = hslCss(h, dark ? 0.22 : 0.14, dark ? 0.15 : 0.80);
+          glowHsl = [
+            [h, dark ? 0.42 : 0.30, dark ? 0.32 : 0.62],
+            [h + 26, dark ? 0.38 : 0.26, dark ? 0.28 : 0.66],
+            [h + 338, dark ? 0.40 : 0.28, dark ? 0.30 : 0.64],
+          ];
+          const [ar, ag, ab] = hslToRgb(h, dark ? 0.34 : 0.30, dark ? 0.62 : 0.40);
+          accRgb = `${ar}, ${ag}, ${ab}`;
+        }
+      }
+      // 主题派生只有 3 色,补成 5 色对称排列([a,b,c,b,a])——首尾同色,渐变本来就要求无缝
+      if (glowHsl.length < IDLE_SWATCH_N) {
+        const [a, b, c] = glowHsl;
+        glowHsl = [a, b, c, b, a].slice(0, IDLE_SWATCH_N);
       }
     }
-    // 光斑「可见化」:统一提饱和,并按明暗模式拉开与底色的明度差。
-    // 暗色主题光斑本就比底色亮 → 再提亮;亮色主题光斑比底色暗 → 必须压暗,否则越调越平。
-    const spots = spotsHsl.map(([hh, s, l]) =>
-      hslCss(hh, s * IDLE_SPOT_SAT, l + (dark ? IDLE_SPOT_LIFT : -IDLE_SPOT_LIFT)));
-    const factor = IDLE_SPEED_FACTOR[cfg.idle_speed] ?? 1;
+
+    // 底色化:封面原色饱和普遍 0.5~0.9,直接铺满会把文字压死 → 统一降饱和;
+    // 明度收进窄带(只留 ±IDLE_GLOW_L_SPREAD 起伏):保留色调差异,又不会循环时一亮一暗地跳。
+    const target = dark ? IDLE_GLOW_L_DARK : IDLE_GLOW_L_LIGHT;
+    const avgL = glowHsl.reduce((a, c) => a + c[2], 0) / glowHsl.length;
+    const cols = glowHsl.map(([hh, s, l]) => {
+      const d = Math.max(-IDLE_GLOW_L_SPREAD, Math.min(IDLE_GLOW_L_SPREAD, (l - avgL) * 0.35));
+      return hslCss(hh, Math.min(1, s * IDLE_GLOW_SAT), Math.max(0.04, Math.min(0.96, target + d)));
+    });
+    // 首尾同色 → 平移一个周期后与原位置重合,循环无缝
+    const grad = `linear-gradient(100deg, ${cols.concat(cols[0]).join(", ")})`;
     this._idleKey = key;
     this._idlePaletteCache = {
-      dark, base, spots, acc: accRgb,
-      // off / 未知档 → 0,不加动画(纯静态底色)
-      durs: IDLE_SPOT_DUR.map((d) => Math.round(d * factor * 10) / 10),
+      dark, base, grad, acc: accRgb,
+      dur: IDLE_DUR[cfg.idle_speed] ?? IDLE_DUR.normal, // off / 未知档 → 0,不加动画
     };
     return this._idlePaletteCache;
   }
@@ -1389,6 +1463,11 @@ class MusicFlowRemoteCard extends LitElement {
             this.requestUpdate();
           }
         }
+        // 未播放态光晕的 5 个色:同一套分桶结果再取 5 个互不相近的色。
+        // 与上面主色提取共用一次像素遍历,零额外成本。
+        // (配色缓存 key 里含这 5 色,换歌后会自动重算,无需手动失效。)
+        const sw = pickTopColors(bucket, IDLE_SWATCH_N);
+        if (sw) this._ui.coverSwatches = sw;
       }
     } catch (err2) {
       // tainted canvas(直连跨域无 CORS):无法分析,保持默认浅色文字与品牌红强调色。
@@ -1518,16 +1597,8 @@ class MusicFlowRemoteCard extends LitElement {
             <div class="coverbg-veil"></div>
           </div>` : ""}
         ${pal ? html`
-          <div class="idlebg ${pal.durs[0] > 0 ? "" : "static"}" style="--idle-base: ${pal.base}">
-            ${pal.spots.map((c, i) => {
-              const [ox, oy] = IDLE_SPOT_OFFSET[i] || [0, 0];
-              const m = IDLE_SPOT_MOVE;
-              return html`<i style="--c: ${c}; --dur: ${pal.durs[i]}s; --dly: ${-i * 7}s;
-                --fx: ${ox - m * 0.9}%; --fy: ${oy - m * 1.1}%;
-                --tx: ${ox + m * 1.2}%; --ty: ${oy + m}%;
-                --sc: ${IDLE_SPOT_SCALE}; --omin: ${IDLE_SPOT_OPA_MIN}"></i>`;
-            })}
-          </div>` : ""}
+          <div class="idlebg ${pal.dur > 0 ? "" : "static"}" style="--idle-base: ${pal.base};
+            --idle-grad: ${pal.grad}; --idle-dur: ${pal.dur}s"></div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">${this._t("connection.restoring")}</div>` : ""}
           ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">${this._t("connection.cannotConnect")}</div>` : ""}
@@ -2706,35 +2777,36 @@ class MusicFlowRemoteCard extends LitElement {
         transform: scale(1.45); filter: blur(42px) saturate(1.35); }
       .coverbg-veil { position: absolute; inset: 0;
         background: linear-gradient(180deg, rgba(0,0,0,0.30) 0%, rgba(0,0,0,0.40) 55%, rgba(0,0,0,0.50) 100%); }
-      /* 未播放态流动底色(idle ambient):无封面时接管整卡底色。
-         性能约定:只动画 transform / opacity → 合成线程独立驱动,主线程零参与、无重绘;
-         不用 filter / backdrop-filter / JS 逐帧;光斑靠 radial-gradient 自带柔边,连 blur 都省掉。
+      /* 未播放态流动光晕(idle ambient):无封面时接管整卡底色。
+         实现形态由性能目标倒推:渐变画在「比卡片大一倍」的层上,blur 只烘焙一次;
+         动画仅 transform 平移 → 层内容恒定,blur 结果被缓存成纹理,每帧只有一次合成,
+         paint 与主线程零参与。
+         刻意不用:background-position(每帧层内容失效 → 重绘 + blur 卷积重算)、
+         conic-gradient 叠加、旋转、JS 逐帧。will-change 只声明 transform 一处。
          contain 把重绘锁在本层内,不影响 HA 整页合成。 */
       .idlebg { position: absolute; inset: 0; z-index: 0; overflow: hidden;
         contain: layout paint style;
-        --sz: ${IDLE_SPOT_SIZE}%; --fade: ${IDLE_SPOT_FADE}%;
+        --ov: ${IDLE_OVER}px;
         background: var(--idle-base); opacity: 0; transition: opacity 900ms ease; }
       ha-card.idle .idlebg { opacity: 1; }
-      /* 光斑:正圆(aspect-ratio 保证宽高一致),居中靠 margin 负偏移 —— 
-         transform 已被动画占用,不能用 translate 居中。 */
-      .idlebg i { position: absolute; left: 50%; top: 50%;
-        width: var(--sz); aspect-ratio: 1;
-        margin: calc(var(--sz) / -2) 0 0 calc(var(--sz) / -2);
-        display: block; border-radius: 50%;
-        background: radial-gradient(closest-side, var(--c), transparent var(--fade));
-        will-change: transform, opacity;
-        animation: mf-idle-drift var(--dur) cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
-        animation-delay: var(--dly); }
-      /* 起止位姿由 JS 按 IDLE_SPOT_OFFSET / MOVE 注入,三斑各占一角、互不重合 */
-      @keyframes mf-idle-drift {
-        from { transform: translate3d(var(--fx), var(--fy), 0) scale(1); opacity: var(--omin); }
-        to   { transform: translate3d(var(--tx), var(--ty), 0) scale(var(--sc)); opacity: 1; }
-      }
+      /* 一张伪元素承载全部光晕内容。
+         宽度 = 卡宽 2 倍 + 4×溢出;background-size:50% → 一个周期 = (卡宽 + 2×溢出);
+         translate3d(-50%) 位移量 = 半个自身宽 = 恰好一个周期 → 循环无缝。
+         平移到极限时右边缘仍在卡片右边界之外(溢出量 > blur 半径),blur 的淡边被裁在卡外。 */
+      .idlebg::before { content: ""; position: absolute;
+        top: calc(var(--ov) * -1); bottom: calc(var(--ov) * -1); left: calc(var(--ov) * -1);
+        width: calc(200% + var(--ov) * 4);
+        background-image: var(--idle-grad);
+        background-size: 50% 100%; background-repeat: repeat;
+        filter: blur(${IDLE_BLUR}px);
+        opacity: ${IDLE_GLOW_OPA};
+        will-change: transform;
+        animation: mf-idle-flow var(--idle-dur) linear infinite; }
+      @keyframes mf-idle-flow { to { transform: translate3d(-50%, 0, 0); } }
       /* 三档降级:idle_speed=off → 纯静态;不可见 / 后台 tab / 面板态 → 停表;无障碍 → 静态 */
-      .idlebg.static i { animation: none; opacity: .8; }
-      .idlebg.paused i { animation-play-state: paused; }
-      /* 无障碍降级下动画停在第 0 帧(opacity 只有 --omin),显式提亮保证静态时也看得见 */
-      @media (prefers-reduced-motion: reduce) { .idlebg i { animation: none; opacity: .8; } }
+      .idlebg.static::before { animation: none; }
+      .idlebg.paused::before { animation-play-state: paused; }
+      @media (prefers-reduced-motion: reduce) { .idlebg::before { animation: none; } }
       /* 未连接:整卡调暗降饱和做区分(不再显示"已连接/未连接"文字) */
       .wrap.off { opacity: 0.45; filter: saturate(0.5) brightness(0.75); }
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }

@@ -121,17 +121,21 @@ transport: direct   # always connect straight to the backend
 
 ### Idle background (idle ambient)
 
-When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with slowly drifting, low-saturation light blobs instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a slowly drifting colour glow instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+
+**Colours come from the last played song's cover**, through the same extraction pipeline the card already uses (24×24 downsample → RGB 4-bit bucketing → frequency × saturation scoring → distance-deduplicated top 5). Since the cover is gone once playback stops, those five colours are cached while the song is playing.
 
 ```yaml
 type: custom:hass-musicflow-card
 idle_background: true    # default true; set false for the original static gradient
-idle_theme: auto         # auto | twilight | ocean | ember | forest | mono
+idle_theme: auto         # fallback palette, only used before any song has played
 idle_speed: normal       # slow | normal | fast | off (static, no animation)
 ```
 
-- `idle_theme: auto` (default) derives the palette from the HA theme's `--primary-color` and rewrites its saturation/lightness, so it stays restrained under any theme colour and follows dark/light mode for text contrast.
-- Cost: only `transform` / `opacity` are animated (compositor-driven, zero main-thread work) — no `filter`, no `backdrop-filter`, no per-frame JS. Blobs rely on the soft edge of `radial-gradient`, so not even a `blur` is needed. The three blob periods are coprime (36 / 47 / 61 s), giving a combined cycle of ~28.7 hours.
+- `idle_theme` is only a **fallback** for a cold start (HA restarted and nothing has played yet, or the cover is cross-origin and cannot be sampled): `auto` (default) derives from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`. After the first song plays it no longer has any effect.
+- `idle_speed` is the duration of one full drift: `slow` 11s / `normal` 7s / `fast` 4s / `off` static.
+- Performance: the gradient is painted on a layer twice the card's width and blurred **once**; the animation only translates it. The layer content never changes, so the blurred result is cached as a texture and every frame is a single composite — no paint, no main-thread work. Deliberately avoids `background-position` (which invalidates the layer every frame → repaint + re-blur), `conic-gradient` stacking and rotation; `will-change` is declared for `transform` only.
+- Raw cover colours are never used directly (saturation is commonly 0.5–0.9 and would swallow the text). They are desaturated ×0.85 and their lightness is collapsed into a narrow band (±0.03), which keeps the hue variety without flashing brighter/darker as the loop runs.
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static gradient under `prefers-reduced-motion`.
 
 ## How it works

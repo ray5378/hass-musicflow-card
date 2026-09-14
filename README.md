@@ -110,17 +110,21 @@ transport: direct   # 始终直连后端
 
 ### 未播放态底色（idle ambient）
 
-当前播放器**没有封面可显示**时（停止 / 清空队列 / 无媒体），卡片改用缓慢流动的低饱和光斑填充底色，避免整卡失去颜色。有封面时一律沿用封面主色，两者互斥。
+当前播放器**没有封面可显示**时（停止 / 清空队列 / 无媒体），卡片改用缓慢流动的色彩光晕填充底色，避免整卡失去颜色。有封面时一律沿用封面主色，两者互斥。
+
+**颜色取自最后一首播放歌曲的封面**：走卡片取色同一套算法（24×24 降采样 → RGB 4bit 分桶 → 频次×饱和度评分 → 色距去重取 5 个），所以每首歌停播后的底色都是它自己的调子。停播后封面已不可用，这 5 色在播放时就缓存好了。
 
 ```yaml
 type: custom:hass-musicflow-card
 idle_background: true    # 默认 true;设 false 关闭(回到原来无封面的静态紫灰渐变)
-idle_theme: auto         # auto | twilight | ocean | ember | forest | mono
+idle_theme: auto         # 仅在"还没播过歌"时生效的回落色组
 idle_speed: normal       # slow | normal | fast | off(纯静态,不动画)
 ```
 
-- `idle_theme: auto`（默认）取 HA 主题的 `--primary-color`，重设饱和度与明度后派生底色，因此任何主题色下都足够克制，并自动跟随明暗模式切换文字色。
-- 开销控制：只动画 `transform` / `opacity`（合成线程驱动，主线程零参与），不用 `filter` / `backdrop-filter` / JS 逐帧；光斑用 `radial-gradient` 自带柔边，连 `blur` 都省掉。三个光斑周期取互质（36 / 47 / 61 秒），合成周期约 28.7 小时。
+- `idle_theme`：冷启动（HA 重启后还没播过歌，或封面跨域取色失败）没有缓存色时的回落。`auto`（默认）取 HA 主题的 `--primary-color` 派生；也可固定 `twilight` / `ocean` / `ember` / `forest` / `mono`。播过一首歌之后这个配置就不再起作用。
+- `idle_speed` 是一轮流动的时长：`slow` 11s / `normal` 7s / `fast` 4s / `off` 静态。
+- 性能：渐变画在比卡片大一倍的层上，`blur` 只烘焙一次；动画只做 `transform` 平移 → 层内容恒定，模糊结果被缓存成纹理，每帧只有一次合成，paint 与主线程零参与。刻意不用 `background-position`（每帧层内容失效 → 重绘 + 模糊重算）、不用 `conic-gradient` 叠加、不旋转，`will-change` 只声明 `transform` 一处。
+- 底色不会直接用封面原色：原色饱和度普遍 0.5~0.9，铺满会压死文字，因此统一降饱和 ×0.85，并把明度收进窄带（仅留 ±0.03 起伏）——既保留色调差异，又不会在循环时一亮一暗地跳。
 - 卡片滚出视口、切到后台标签页、打开队列/媒体库面板时自动停表；系统开启“减少动态效果”时降级为静态渐变。
 
 ## 构建
