@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.8";
+const CARD_VERSION = "2.3.9";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -737,9 +737,11 @@ class MusicFlowRemoteCard extends LitElement {
       this._idleBuiltKey = builtKey;
     }
 
-    // 不可见 / 后台 tab / 打开面板 → 停表(animation-play-state: paused)
-    const u = this._ui;
-    const paused = !this._idleVisible || !!document.hidden || !!u.showQueue || !!u.showBrowser;
+    // 不可见 / 后台 tab → 停表(animation-play-state: paused)。
+    // **打开队列/媒体库面板不停表**:面板是透明全屏覆盖(.panel 无背景色),底下露出的就是本层
+    // 流动底色 —— 停表会让用户看到"背景冻住"(v2.3.9 修)。且本动画只动 opacity(合成器线程),
+    // 各层还有 contain 隔离,不占主线程,与面板滚动无争用,为它停表没收益、只有可见的副作用。
+    const paused = !this._idleVisible || !!document.hidden;
     el.classList.toggle("paused", paused);
 
     if (!this._idleObserver) {
@@ -2772,7 +2774,7 @@ class MusicFlowRemoteCard extends LitElement {
       /* mf-cyc 关键帧不写死在这里:它的窗口宽必须随层数推导(见 _syncIdleKeyframes)。
          写死窗口(旧值 0~10% 停留)只对 5 层成立 —— 层数一多,错峰 < 窗口,
          就会有 3~4 层同时半透明叠在一起,主导配色权重掉到 ~45%,观感发糊。 */
-      /* 降级:idle_speed=off → 静止在首组配色;不可见 / 后台 tab / 面板态 → 停表;无障碍 → 静止 */
+      /* 降级:idle_speed=off → 静止在首组配色;不可见 / 后台 tab → 停表(打开面板**不停表**);无障碍 → 静止 */
       .idlebg.static i { animation: none; }
       .idlebg.static i:first-child { opacity: 1; }
       .idlebg.paused i { animation-play-state: paused; }

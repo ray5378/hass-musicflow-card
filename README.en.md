@@ -158,7 +158,7 @@ idle_theme: auto         # tints the accent colour only; no longer affects the b
 - `idle_speed` scales the **seconds each palette holds**: `slow` 11.2s / `normal` 7s / `fast` 4.2s, i.e. a full cycle of 89.6s / 56s / 33.6s; `off` rests on the first palette (deep red).
 - `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
 - The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode; white text on the brightest peak palette still has a **4.67:1** contrast ratio (passes AA).
-- Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette (the first one, red) under `prefers-reduced-motion`.
+- Animation pauses when the card scrolls out of view or the tab goes to the background. **It keeps running while the queue / media-browser panel is open** — that panel is a transparent full-cover layer, so this ambient gradient is exactly what shows through it, and a frozen backdrop reads as "stuck". It degrades to a static palette (the first one, red) under `prefers-reduced-motion`.
 
 ## How it works
 
