@@ -40,47 +40,25 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v2.2.0 — 未播放态改用「流动光晕」，颜色取自最后一首歌的封面
+            ## v2.3.0 — 未播放态底色改为「5 组配色轮换 + 呼吸」雪碧条方案
 
-            ### 变了什么
-            未播放态的底色不再是算法编出来的渐变，而是**最后一首播放歌曲的封面色**：
-            走卡片取色同一套算法（24×24 降采样 → RGB 4bit 分桶 → 频次×饱和度评分），
-            把「取最高分 1 个」扩展成「色距去重取 5 个」。停播后封面已不可用，
-            这 5 色在播放时就缓存好了，所以**每首歌停播后的底色都是它自己的调子**。
+            ### 变更
+            - 未播放态（无封面）底色由旧的 3 光斑漂移 / 取封面色流动光晕，改为**「5 组配色轮换 + 呼吸」雪碧条**：
+              一张 5 格横条，`background-position` 平移换格，叠加一层 `transform` / `opacity` 呼吸光晕。
+            - 全程只动合成属性（`background-position` / `transform` / `opacity`），**Paint / Raster / Layout 均为 0 次**，
+              主线程零参与，多卡稳态无压力。
 
-            同时把实现从「三个流动光斑」换成「一张渐变光晕层平移」：视觉更整、更贴封面，
-            性能也从「三路动画」降到「一路合成」。
-
-            ### 性能：为什么是这种写法
-            | | 常见写法 | 本版 |
-            |---|---|---|
-            | 动画属性 | `background-position` | **`transform` 平移** |
-            | 每帧代价 | 层内容失效 → 整层重绘 → `blur` 卷积重算 | **层内容恒定，模糊结果缓存为纹理，每帧仅一次合成** |
-            | 主线程 | 参与 paint | **零参与** |
-
-            具体做法：渐变画在**比卡片宽一倍**的层上，`blur(24px)` 只烘焙一次；
-            动画只做 `translate3d(-50%)`，位移量恰好等于一个渐变周期，首尾同色 → 无缝循环。
-            刻意不用 `background-position`（每帧重绘 + 模糊重算）、不用 `conic-gradient` 叠加、
-            不旋转；`will-change` 只声明 `transform` 一处。
-            不可见 / 后台标签页 / 打开队列面板时自动停表，`prefers-reduced-motion` 降级为静态。
-
-            ### 两处必要的处理
-            - **原色不能直接当底色**：封面色饱和度普遍 0.5~0.9，铺满会把文字压死。
-              统一降饱和 ×0.85，并把 5 色的明度收进窄带（只留 ±0.03 起伏）——
-              既保留色调差异，又不会在流动时一亮一暗地跳。
-            - **取色要加去重**：原算法只取最高分 1 个桶，直接取 top-5 会拿到同一颜色的
-              相邻 4bit 桶（5 个深浅变体）。故按 RGB 距离去重 + 跳过近灰桶；
-              低饱和封面取不满时用主色明度阶补齐。
-
-            ### 配置变化
-            `idle_theme` 现在**只在冷启动生效**（HA 重启后还没播过歌 / 封面跨域取不到色时回落），
-            播过一首歌之后不再起作用。`idle_speed` 改为一轮流动的时长：
-            `slow` 11s / `normal` 7s / `fast` 4s / `off` 静态。
+            ### 兼容性 / 配置语义
+            - `idle_background` / `idle_theme` / `idle_speed` 名称与取值不变；`idle_theme` 的 6 个预设
+              （`auto` + `twilight` / `ocean` / `ember` / `forest` / `mono`）全部保留，改为只固定色相。
+            - **`idle_speed` 语义变了**：同时驱动呼吸与换色。`off` 档由「仍有 3 个光斑可见」改为「静止在首组配色」——
+              升级后如觉得静止观感变化，属预期。
+            - 换色节奏：一轮 `slow` 32s / `normal` 20s / `fast` 12s（`off` 静态）。
 
             ### 升级步骤
             1. HACS 中更新本卡片
-            2. 浏览器 Ctrl+Shift+R 或 Lovelace「重新加载资源」清掉卡片缓存
-            3. F12 Console 确认 `[musicflow-remote-card] v2.2.0`
+            2. 浏览器 `Ctrl+Shift+R` 或 Lovelace「重新加载资源」
+            3. F12 Console 确认 `[musicflow-remote-card] v2.3.0`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

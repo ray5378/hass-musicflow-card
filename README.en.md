@@ -121,9 +121,15 @@ transport: direct   # always connect straight to the backend
 
 ### Idle background (idle ambient)
 
-When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a slowly drifting colour glow instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a "5-palette rotation" flowing colour instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
 
-**Colours come from the last played song's cover**, through the same extraction pipeline the card already uses (24×24 downsample → RGB 4-bit bucketing → frequency × saturation scoring → distance-deduplicated top 5). Since the cover is gone once playback stops, those five colours are cached while the song is playing.
+Under the hood is **a 5-cell sprite strip**: `background-size: 500%` makes one cell exactly the card width, and sliding `background-position` by one cell swaps to the next palette. `background-position` joins `transform` / `opacity` as a compositor-only property, so the whole animation triggers **zero Paint / Raster / Layout** — no main-thread work.
+
+Three layers:
+
+- `base`: a low-saturation colour derived from the HA theme's `--primary-color`. It **never moves** and carries the white-text contrast; because the base layer never changes colour, there is no brightness dip during palette swaps.
+- `sprite`: the 5-palette strip, sliding cell-by-cell at the `idle_speed` cadence. Adjacent palettes differ by only 22° of hue and wrap around after a full cycle; all derive from a single base hue.
+- `breath`: a soft glow that slowly drifts / scales / brightens (`transform` + `opacity`), independent of the swap cadence.
 
 ```yaml
 type: custom:hass-musicflow-card
@@ -132,10 +138,8 @@ idle_theme: auto         # fallback palette, only used before any song has playe
 idle_speed: normal       # slow | normal | fast | off (static, no animation)
 ```
 
-- `idle_theme` is only a **fallback** for a cold start (HA restarted and nothing has played yet, or the cover is cross-origin and cannot be sampled): `auto` (default) derives from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`. After the first song plays it no longer has any effect.
-- `idle_speed` is the duration of one full drift: `slow` 11s / `normal` 7s / `fast` 4s / `off` static.
-- Performance: the gradient is painted on a layer twice the card's width and blurred **once**; the animation only translates it. The layer content never changes, so the blurred result is cached as a texture and every frame is a single composite — no paint, no main-thread work. Deliberately avoids `background-position` (which invalidates the layer every frame → repaint + re-blur), `conic-gradient` stacking and rotation; `will-change` is declared for `transform` only.
-- Raw cover colours are never used directly (saturation is commonly 0.5–0.9 and would swallow the text). They are desaturated ×0.85 and their lightness is collapsed into a narrow band (±0.03), which keeps the hue variety without flashing brighter/darker as the loop runs.
+- `idle_theme` is only a **fallback** for a cold start (HA restarted and nothing has played yet): `auto` (default) derives from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`, now fixing the hue only. After the first song plays it no longer has any effect.
+- `idle_speed` now drives **both** the breathing and the palette swap: `slow` 32s / `normal` 20s / `fast` 12s / `off` holds on the first palette (a full cycle is 160s / 100s / 60s respectively). **The `off` behaviour changed**: the old build still showed 3 drifting spots when paused; the new build rests on the first palette.
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static gradient under `prefers-reduced-motion`.
 
 ## How it works
