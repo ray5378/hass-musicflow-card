@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.2";
+const CARD_VERSION = "2.3.3";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -126,8 +126,8 @@ const IDLE_THEMES = {
   mono: { color: "#8a919c" },
 };
 const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
-// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 10s/组、一轮 50s(数值越小越快)
-const IDLE_SWAP_BASE = 10;
+// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 2s/组、一轮 10s(数值越小越快)
+const IDLE_SWAP_BASE = 2;
 
 // CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
 function parseCssColor(str) {
