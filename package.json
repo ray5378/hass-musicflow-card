@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rollup -c",
     "dev": "rollup -c --watch",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "guard:client-link": "node tools/guard-client-link.mjs"
   },
   "keywords": [
     "home-assistant",

@@ -1,0 +1,55 @@
+name: Client Link Guard
+
+# 客户端本机实例（安卓 / Windows）链路守卫（blocking）。
+#
+# 背景：客户端实例经 /status 回传的东西与设备型 peer 不同 ——
+#   1. media 只有 {songId}，标题/封面/时长都在队列快照的 items 里；
+#   2. position 是**周期上报的采样**（实测 ~4s 一次），采样时刻由 reportedAt 给出，
+#      不是实时值。
+# 卡片 v2.4.0 沿用了设备型的假设，于是「歌名恒为未知、无封面、进度/歌词反复
+# 回退、拖完进度条又跳回原位」。v2.4.1 修了这四类。
+#
+# 它们的共同点是**静默退化**：不报错、不崩溃，只是显示不对，手测容易当成"网络卡"，
+# 所以必须在 CI 钉死，而且不能只查"函数还在不在"，要查**调用点是否真的接上了**
+# （定义了却不在赋值处调用，等于没修）。
+#
+# 另：v2.4.0 那次事故的真凶是「src 里改了、dist 没重建」，用户跑的产物里根本没有
+# 那段修复。所以本门禁**先 build 再同时校验 src 与 dist**，把这条路也堵上。
+#
+# 守卫脚本：tools/guard-client-link.mjs（已做变异验证：把修复改回 bug 形态，对应用例转红）。
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: client-link-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  client-link-guard:
+    name: client link guard (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 必须先构建：守卫同时校验 dist 产物，防止重演「src 有修复、dist 没重建」。
+      - name: Build dist
+        run: npm run build
+
+      - name: "Guard - 客户端本机实例链路 (src + dist)"
+        run: node tools/guard-client-link.mjs
