@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.0";
+const CARD_VERSION = "2.4.1";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -259,6 +259,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
     this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
+    this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
     this._vsInflight = 0; // 全库滚动:同时在途的块请求数(上限 VS_CONCURRENCY)
@@ -625,6 +626,31 @@ class MusicFlowRemoteCard extends LitElement {
     }
   }
 
+  // 客户端实例(local)的 position 是它**周期性上报**的采样(实测约 4s 一次),不是实时值;
+  // 采样时刻由服务端随 status 回传的 `reportedAt` 给出。
+  //
+  // 直接把采样值当"此刻"写进进度,会把本地已经在推进的时钟每轮询拽回旧值 ——
+  // 表现为进度/歌词"前进一段又回退"(回退幅度 = 一个上报周期,实测 2~4s,不是固定 2s)。
+  // 卡片 2s 轮询、客户端 ~4s 上报,于是每两轮就回退一次。
+  //
+  // 修法:按 `采样值 + (现在 - reportedAt)` 外推到此刻再写入 —— 两次上报之间连续推进,
+  // 新上报只重新对齐锚点,不再回退。暂停时保持上报值原样(不推进,避免暂停态漂移)。
+  //
+  // 边界:只有客户端实例的 status 带 `reportedAt`。DLNA / AirPlay / Sendspin / 群组的
+  // status 走各自实时查询(SOAP / 进程内状态),没有该字段 → 原样返回,行为完全不变。
+  _projectStatusPosition(status, playing) {
+    const pos = status.position;
+    if (!playing) return pos;
+    const at = status.reportedAt;
+    if (typeof at !== "number" || !isFinite(at)) return pos;
+    const ageSec = (Date.now() - at) / 1000;
+    // 上报过旧(TTL 30s,见服务端 getLocalStatusReport)或时钟异常 → 原样,不做外推。
+    if (!(ageSec > 0) || ageSec > 30) return pos;
+    const projected = pos + ageSec;
+    const dur = typeof status.duration === "number" ? status.duration : 0;
+    return dur > 0 ? Math.min(projected, dur) : projected;
+  }
+
   // 播放状态判定(自愈,对齐 Web 端 player.ts:625-627):
   // 1) 显式 state 为 PLAYING 变体 → 播放中;
   // 2) 关键自愈:部分 DLNA 设备 GENA 事件缓存停留在旧值(如 STOPPED)并覆盖 SOAP
@@ -641,13 +667,29 @@ class MusicFlowRemoteCard extends LitElement {
       this._lastPos >= 0 && status.position > this._lastPos && status.position < status.duration;
     this._ui.isPlaying = statePlaying || advancing;
     if (typeof status.position === "number") this._lastPos = status.position;
-    if (typeof status.position === "number") this._ui.currentTime = status.position;
+    if (typeof status.position === "number") {
+      // 刚发起过 seek 时跳过"比 seek 更早采样"的上报:客户端此刻上报的仍是**旧位置**
+      // (要等它下一个上报周期才回新位置),采纳它会把进度条拽回 seek 之前,过两秒再跳回去
+      // —— 表现为"拖完进度又跳回原位"。窗口上限 6s;无 reportedAt 的设备型 peer 不参与
+      // (它们走实时查询,seek 后立刻就能读到新值,不受影响)。
+      const stale = this._seekIssuedAt > 0
+        && Date.now() - this._seekIssuedAt <= 6000
+        && typeof status.reportedAt === "number"
+        && status.reportedAt < this._seekIssuedAt;
+      if (!stale) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
+    }
     // 客户端本机实例(local)经 /status 回传的 duration 来自它本地上报,真实可用;
     // 若上报 duration 为 0(旧端/上报空窗),回退到队列快照里当前曲的时长,避免进度条分母恒为 0。
     const statusItems = Array.isArray(status.items) ? status.items : null;
     const statusIdx = typeof status.currentIndex === "number" ? status.currentIndex
       : (typeof this._ui.currentIndex === "number" ? this._ui.currentIndex : -1);
-    const statusItem = statusItems && statusIdx >= 0 ? statusItems[statusIdx] : null;
+    let statusItem = statusItems && statusIdx >= 0 ? statusItems[statusIdx] : null;
+    // 兜底:游标不可用(队列行未激活 / 越界)时按客户端**上报的 songId** 反查当前项 ——
+    // 否则 media 补不全,标题/封面又掉回「未知」。正常路径(游标有效)行为不变。
+    if (!statusItem && statusItems) {
+      const sid = status.media && status.media.songId;
+      if (sid) statusItem = statusItems.find((it) => it.songId === sid) || null;
+    }
     if (typeof status.duration === "number" && status.duration > 0) this._ui.duration = status.duration;
     else if (statusItem && typeof statusItem.duration === "number" && statusItem.duration > 0) this._ui.duration = statusItem.duration;
     // 拖拽中忽略服务器回传的音量,避免外网代理延迟把滑块拽回旧值(跟手问题)。
@@ -821,6 +863,8 @@ class MusicFlowRemoteCard extends LitElement {
       this._ui.currentLyric = "";
       this._ui.lyricIndex = -1;
       this._ui.coverLightText = true; // 新封面分析完成前先浅色文字,避免闪深色
+      // 注意:backend-client 目前没有 scrobble 方法,`?.()` 会短路掉整条链(含后面的 .catch),
+      // 所以这里是**静默空转**(不抛错、也不上报播放记录)。属既有行为,本次不动。
       this._client.scrobble?.(song.songId).catch((e) => err("scrobble failed", e));
       this._loadLyrics(song.songId);
       this._loadLiked(song.songId);
@@ -935,6 +979,7 @@ class MusicFlowRemoteCard extends LitElement {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
     if (this._ui.currentTime > 3) {
+      this._seekIssuedAt = Date.now(); // 同 _seek:回退到 0 也要丢弃 seek 前采样的上报
       this._client.seek(pid, 0).then(() => { this._ui.currentTime = 0; this.requestUpdate(); }).catch((e) => err("seek failed", e));
     } else {
       this._client.prev(pid).catch((e) => err("prev failed", e));
@@ -1199,6 +1244,7 @@ class MusicFlowRemoteCard extends LitElement {
     const pct = Number(e.target.value);
     const t = (pct / 100) * (this._ui.duration || 0);
     this._ui.currentTime = t;
+    this._seekIssuedAt = Date.now(); // 丢弃 seek 前采样的上报,避免进度条被拽回
     this._client.seek(pid, t).catch((err2) => err("seek failed", err2));
     this._updateLyric();
     this.requestUpdate();

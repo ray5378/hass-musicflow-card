@@ -52,33 +52,37 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v2.4.0 — 卡片播放器列表接入 MusicFlow 客户端本机实例
+            ## v2.4.1 — 修复卡片对客户端本机实例的「正在播放」与进度回退
 
-            ### 新增
-            - 卡片的「播放器」列表现在包含 **MusicFlow 客户端本机实例**（安卓 / Windows，`kind==="local"` 且非 web 平台），
-              与既有的 DLNA / AirPlay / Sendspin 设备并列显示与控制。
-            - 客户端本机实例用 **手机 / 显示器图标** 区分平台（安卓=手机、Windows=显示器），DLNA 设备仍用音箱图标；
-              列表项在缺省名时回退为「本机」/「MusicFlow 客户端」/「播放设备」。
-            - 服务端 `decoratePeersForClient` 已对其它端隐藏 `web` 行（Web 不再作为被遥控目标），
-              卡片侧再以 `platform !== "web"` 保险一次；`group` 暂不在卡片播放器列表展示。
-            - 客户端本机实例起播 / 换曲时，卡片空闲（未选播放器）或正看离线设备时**自动跟随显示**，
-              语义与 DLNA 的 `_maybeFollowDevice` 一致，不打扰正在看的在线设备。
+            本版只改 **MusicFlow 客户端本机实例（安卓 / Windows）** 这一条链路；
+            DLNA / AirPlay / Sendspin / 群组的显示与控制行为与 v2.4.0 完全一致。
 
-            ### 修复 / 加固
-            - **取消卡片对远端客户端 peer 的保活心跳**：卡片是「控制器」而非「播放器」，
-              原先的 `heartbeat(local:)` 分支会让已离线的客户端被错误标记为在线
-              （此前 local 不被列表收纳，该分支是死代码；现在会真实触发，已移除）。
-            - 客户端本机实例的状态 / 队列仍走既有的 `getStatus` 轮询 + `peer_queue_changed` 推送，无需额外事件。
+            ### 修复
+            - **歌名恒「未知」、封面不渲染**：客户端实例的 `GET /peers/:id/status` 只回
+              `media: { songId }`（标题 / 艺人 / 专辑 / 封面 / 时长都在同一响应的队列快照 `items` 里）。
+              卡片此前直接拿这份薄 `media` 渲染，于是标题走「未知」兜底、封面为空。
+              现在用 `status.items[currentIndex]` 把它补全成完整媒体信息；
+              若游标不可用（队列行未激活 / 越界）则按客户端上报的 `songId` 反查当前项兜底。
+            - **进度 / 歌词"前进一段又回退"**：客户端上报的 `position` 是**周期性采样**（实测约 4s 一次），
+              采样时刻由 `reportedAt` 给出。卡片每 2s 轮询却把采样值当"此刻"直接写入，
+              于是每两轮就把本地已在推进的时钟拽回旧值（回退幅度 = 一个上报周期，约 2~4s，**不是固定 2 秒**）。
+              现在按 `position + (现在 − reportedAt)` 外推到此刻再写入，两次上报之间连续推进。
+              暂停时不做外推（保持上报值，避免暂停态漂移）。
+              > 仅客户端实例的 status 带 `reportedAt`；设备型 peer 走实时查询、无该字段，行为不变。
+            - **拖动进度条后位置又跳回**：同上成因 —— seek 后客户端要等下一个上报周期才回新位置，
+              期间轮询读到的仍是 seek 之前的采样，会先把进度条拽回原位。现在记录本卡片发起 seek 的时刻，
+              在 6s 窗口内丢弃"采样早于该 seek"的上报，等客户端回新值再对齐。
 
-            ### 兼容性
-            - 与 **MusicFlow 服务端 v3.0.18+** 及 **客户端 v5.0.1+** 配套使用最佳；
-              旧版服务端仍只回 DLNA 类设备时，本卡片行为与 v2.3.9 完全一致。
-            - `rest` 降级、心跳重连、透明全屏面板「不停表」等既有行为未改动。
+            ### 配置语义
+            - 无新增 / 变更的卡片配置项，`idle_background`、配色、透明全屏等既有选项语义不变。
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 `Ctrl+Shift+R` 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v2.4.0`
+            3. F12 Console 确认 `[musicflow-remote-card] v2.4.1`
+
+            ### 配套
+            - 服务端 v3.0.18+ / 客户端 v5.0.1+（客户端实例要出现在列表里，需要它在服务端注册且在线）。
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false
