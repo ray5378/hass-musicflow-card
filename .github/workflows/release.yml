@@ -52,35 +52,33 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v2.3.9 — 打开媒体库 / 队列时，未播放态底色继续轮换（不再停表）
+            ## v2.4.0 — 卡片播放器列表接入 MusicFlow 客户端本机实例
 
-            ### 修复
-            - **问题**：未播放态下打开媒体库（或队列）面板，底层流动底色会**冻住**，必须退出面板才恢复。
-            - **根因**：面板是**透明全屏覆盖**（`.panel` 不带背景色，故意「无感」叠在卡片上），未播放态
-              下它底下露出的正是这层流动底色；而暂停判定里带了 `showQueue || showBrowser`，于是变成
-              「背景可见却被暂停」。播放态有封面时 `.idlebg` 根本不渲染，所以这个别扭只在未播放态暴露。
-            - **修复**：暂停判定改为**只看「卡片滚出视口」与「后台标签页」**，打开面板不再停表。
-              这是零风险的：该动画只动 `opacity`（跑在合成器线程），每层还有 `contain: layout paint style`
-              隔离，不占主线程、与面板滚动无争用 —— 为它停表几乎没有收益，却带来可见的「卡死」观感。
+            ### 新增
+            - 卡片的「播放器」列表现在包含 **MusicFlow 客户端本机实例**（安卓 / Windows，`kind==="local"` 且非 web 平台），
+              与既有的 DLNA / AirPlay / Sendspin 设备并列显示与控制。
+            - 客户端本机实例用 **手机 / 显示器图标** 区分平台（安卓=手机、Windows=显示器），DLNA 设备仍用音箱图标；
+              列表项在缺省名时回退为「本机」/「MusicFlow 客户端」/「播放设备」。
+            - 服务端 `decoratePeersForClient` 已对其它端隐藏 `web` 行（Web 不再作为被遥控目标），
+              卡片侧再以 `platform !== "web"` 保险一次；`group` 暂不在卡片播放器列表展示。
+            - 客户端本机实例起播 / 换曲时，卡片空闲（未选播放器）或正看离线设备时**自动跟随显示**，
+              语义与 DLNA 的 `_maybeFollowDevice` 一致，不打扰正在看的在线设备。
 
-            ### 变更范围
-            - `_syncIdleAmbient()` 的 paused 判定：`!visible || hidden || showQueue || showBrowser`
-              → `!visible || hidden`。
-            - README（中 / 英）里「打开队列 / 媒体库面板时自动停表」的说明同步更新为「不停表」。
-            - **未播放态配色 / 环顺序 / 亮度定标 / 关键帧 / 轮换节奏一律未动**，与 v2.3.8 完全一致。
+            ### 修复 / 加固
+            - **取消卡片对远端客户端 peer 的保活心跳**：卡片是「控制器」而非「播放器」，
+              原先的 `heartbeat(local:)` 分支会让已离线的客户端被错误标记为在线
+              （此前 local 不被列表收纳，该分支是死代码；现在会真实触发，已移除）。
+            - 客户端本机实例的状态 / 队列仍走既有的 `getStatus` 轮询 + `peer_queue_changed` 推送，无需额外事件。
 
             ### 兼容性
-            - 白字在最亮配色组上的对比度仍为 **4.67:1**（过 WCAG AA 4.5:1），idle 态依旧是
-              「暗底浅字」，不会读不清。
-            - `idle_background` / `idle_theme` / `idle_speed` 名称与取值不变，无需改配置。
-            - `idle_speed` 仍是 `slow` 11.2s / `normal` 7s / `fast` 4.2s（一轮 89.6 / 56 / 33.6s）；
-              `idle_theme` 仍**只**决定强调色（图标 / 进度条 / 选中态）色相，不影响底色。
-            - 关键帧由 JS 注入：若你自定义过卡片样式里写死的 `mf-cyc`，请删掉以免覆盖。
+            - 与 **MusicFlow 服务端 v3.0.18+** 及 **客户端 v5.0.1+** 配套使用最佳；
+              旧版服务端仍只回 DLNA 类设备时，本卡片行为与 v2.3.9 完全一致。
+            - `rest` 降级、心跳重连、透明全屏面板「不停表」等既有行为未改动。
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 `Ctrl+Shift+R` 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v2.3.9`
+            3. F12 Console 确认 `[musicflow-remote-card] v2.4.0`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

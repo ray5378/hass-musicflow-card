@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.9";
+const CARD_VERSION = "2.4.0";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -65,6 +65,9 @@ const MF_ICONS = {
   heart2: '<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/>',
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   speaker: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 6h.01"/><circle cx="12" cy="14" r="4"/><path d="M12 14h.01"/>',
+  // 客户端本机实例(安卓/Windows):与 DLNA 的 speaker 区分开来,一眼看出是「客户端播放器」。
+  smartphone: '<rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/>',
+  monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -358,7 +361,7 @@ class MusicFlowRemoteCard extends LitElement {
       .then((res) => {
         this._ui.serverOk = true;
         this._ui.wsState = "rest"; // WS 断但 REST 通:兜底模式
-        const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
+        const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false);
         if (peers.length) {
           this._ui.peers = peers;
           this._ensurePeerSelected();
@@ -412,23 +415,29 @@ class MusicFlowRemoteCard extends LitElement {
     return null;
   }
 
-  // 本卡片控制后端驱动的播放器(dlna 设备、AirPlay 设备、Sendspin 客户端),
-  // 非受控 peer(local / group)不显示。
-  _isDlnaPeer(p) {
+  // 本卡片控制后端驱动的播放器:DLNA 设备、AirPlay 设备、Sendspin 客户端,以及
+  // MusicFlow 客户端本机实例(安卓 / Windows,kind==="local" 且非 web 平台)。
+  // 服务端 decoratePeersForClient 已对其它端隐藏 web 行(Web 不再作为被遥控目标),
+  // 这里再以 platform!=="web" 保险一次;group 暂不在卡片播放器列表展示。
+  _isControllablePeer(p) {
     if (!p) return false;
     if (typeof p.peerId === "string") {
-      return p.peerId.startsWith("dlna:") || p.peerId.startsWith("airplay:") || p.peerId.startsWith("sendspin:");
+      if (p.peerId.startsWith("dlna:") || p.peerId.startsWith("airplay:") || p.peerId.startsWith("sendspin:")) return true;
+      if (p.peerId.startsWith("local:")) return p.platform !== "web";
+      return false;
     }
     const k = p.kind || "";
-    return k === "dlna" || k === "airplay" || k === "sendspin";
+    if (k === "dlna" || k === "airplay" || k === "sendspin") return true;
+    if (k === "local") return p.platform !== "web";
+    return false;
   }
-  _filterDlna(peers) {
-    return (peers || []).filter((p) => this._isDlnaPeer(p));
+  _filterControllable(peers) {
+    return (peers || []).filter((p) => this._isControllablePeer(p));
   }
 
   _applyPeerSnapshot(peers) {
-    // 只显示在线 DLNA 设备(离线设备由 _upsertPeer 移除,此处过滤兜底)。
-    const list = this._filterDlna(peers).filter((p) => p.available !== false);
+    // 只显示在线可控播放器(DLNA 设备 + 客户端本机实例;离线由 _upsertPeer 移除,此处过滤兜底)。
+    const list = this._filterControllable(peers).filter((p) => p.available !== false);
     this._ui.peers = list;
     const pinned = this._resolveDefaultPeerId(list);
     if (!this._ui.currentPeerId || pinned) {
@@ -509,8 +518,8 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _upsertPeer(peer) {
-    if (!peer || !this._isDlnaPeer(peer)) return;
-    // 设备离线:从列表移除(不再置灰显示);若正是当前播放设备,自动切到下一个可用。
+    if (!peer || !this._isControllablePeer(peer)) return;
+    // 播放器离线:从列表移除(不再置灰显示);若正是当前播放设备,自动切到下一个可用。
     if (peer.available === false) {
       const before = this._ui.peers.length;
       this._ui.peers = this._ui.peers.filter((x) => x.peerId !== peer.peerId);
@@ -531,7 +540,19 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _applyPeerQueue(peerId, queue) {
-    if (peerId === this._ui.currentPeerId) this._applyQueue(queue);
+    if (peerId === this._ui.currentPeerId) {
+      this._applyQueue(queue);
+      return;
+    }
+    // 客户端本机实例(非 DLNA)起播/换曲:卡片空闲(未选)或正看离线设备时自动跟随显示,
+    // 与 DLNA 的 _maybeFollowDevice 语义一致 —— 不打扰正在看的在线设备。
+    if (peerId.startsWith("local:")) {
+      const cur = (this._ui.peers || []).find((p) => p.peerId === this._ui.currentPeerId);
+      if (!cur || cur.available === false) {
+        this._selectPeer(peerId, true);
+        return;
+      }
+    }
     const idx = this._ui.peers.findIndex((p) => p.peerId === peerId);
     if (idx >= 0) this._ui.peers[idx] = { ...this._ui.peers[idx], queue };
     this.requestUpdate();
@@ -785,7 +806,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   _refreshPeers() {
     this._client.getPeers().then((res) => {
-      const peers = this._filterDlna(res?.peers || []).filter((p) => p.available !== false);
+      const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false);
       if (peers.length) {
         this._ui.peers = peers;
         this._ensurePeerSelected();
@@ -861,12 +882,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
   }
 
+  // 心跳:卡片是「遥控器」,自身不会注册成 local peer,故无需对任何 peer 发心跳。
+  // 关键:绝不能为当前选中的客户端本机实例代发心跳 —— 在线状态由客户端自身上报维持;
+  // 卡片代发等于「保活」一台可能已挂掉的客户端,使其一直被误显示为在线、无法自动下线。
   _startHeartbeat() {
-    if (this._heartbeatTimer) return;
-    this._heartbeatTimer = setInterval(() => {
-      const pid = this._ui.currentPeerId;
-      if (pid && pid.startsWith("local:")) this._client.heartbeat(pid).catch((e) => err("heartbeat failed", e));
-    }, 30000);
+    // 故意为空:卡片充当控制器,不做 peer 心跳(避免误保活远端客户端)。
   }
 
   // ============ Controls ============
@@ -1632,13 +1652,31 @@ class MusicFlowRemoteCard extends LitElement {
       <div class="outputs">
         ${peers.map((p) => html`
           <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"}"
-            title="${p.kind || ""}"
+            title="${this._peerTitle(p)}"
             @click=${() => this._selectPeer(p.peerId)}>
-            ${this._icon("speaker", 16)} ${p.name || p.peerId}
+            ${this._icon(this._peerIcon(p), 16)} ${this._peerLabel(p)}
           </button>
         `)}
       </div>
     `;
+  }
+
+  // 客户端本机实例与 DLNA 设备用不同图标区分,一眼看出是「客户端播放器」还是「设备」。
+  _peerIcon(p) {
+    if (p.kind === "local") return p.platform === "windows" ? "monitor" : "smartphone";
+    return "speaker";
+  }
+  _peerLabel(p) {
+    if (p.name) return p.name;
+    if (p.kind === "local") return p.self ? this._t("outputs.selfDevice") : this._t("outputs.client");
+    return p.peerId;
+  }
+  _peerTitle(p) {
+    if (p.kind === "local") {
+      const base = p.self ? this._t("outputs.selfDevice") : this._t("outputs.client");
+      return p.platform ? `${base} · ${p.platform}` : base;
+    }
+    return this._t("outputs.device");
   }
 
   // 歌词滚动:视口固定 LYRIC_VIEW_LINES 行高,整条歌词轨道按当前行整体上移,
