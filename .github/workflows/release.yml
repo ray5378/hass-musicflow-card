@@ -40,34 +40,22 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: |
-            ## v2.3.1 — 未播放态底色重做为「5 层固定配色原地交叉淡入」(A+ 方案)
+            ## v2.3.2 — idle 轮换提速：每组停留 10s
 
-            ### 修复
-            - v2.3.0 的「雪碧条横条 + `background-position` 平移」与预期效果差距过大：过渡是相邻两格的
-              **空间线性插值**，底色会跟着「往左走」，观感与 A+ 参考完全不同。
-            - 本版照搬 A+ 方案重做：**5 层整卡对角渐变、原地交叉淡入**。
-              每层 `linear-gradient(140deg, c1, c2 62%, #14182a 100%)`，初始 `opacity: 0`，
-              各自跑同一条 `mf-cyc` 关键帧，靠负 `animation-delay` 把 5 层相位均匀错开 1/5 周期。
-            - 关键帧：`0%~10%` 全亮停留 → `10%~20%` 交叉淡出 → `20%~90%` 全透 → `90%~100%` 淡入回来。
-              5 层相位恰好错开 20%，**任一时刻各层 opacity 之和恒为 1**，不存在亮度塌陷或「先暗再亮」的空档。
-            - 全程只动 `opacity`（合成属性）：**无位移、无重绘、无滤镜，Paint / Raster / Layout 均为 0 次**。
+            ### 变更
+            - 未播放态底色的轮换节奏加快一倍：**每组配色停留 10s**（一轮 50s）。
+            - `idle_speed` 语义不变（缩放「每组停留秒数」），各档位等比减半：
+              `slow` 16s / `normal` 10s / `fast` 6s（一轮 80s / 50s / 30s）；`off` 仍静止在首组配色。
+            - 动效本身不变：仍是 5 层固定配色整卡对角渐变、原地交叉淡入（A+ 方案）。
 
-            ### 配色
-            - 底色固定为 A+ 的 5 组配色（**再不受主题影响**）：暮蓝 / 暖褐 / 青苔 / 紫灰 / 鴨青。
-            - 底色收尾固定深色 `#14182a`，故 idle 态一律按「暗底浅字」渲染，不再随 HA 明暗模式切浅色底。
-            - `idle_theme` 保留，但现在**只**决定强调色（图标 / 进度条 / 选中态）色相；不再影响底色。
-
-            ### 兼容性 / 配置语义
-            - `idle_background` / `idle_theme` / `idle_speed` 名称与取值不变。
-            - `idle_speed` 现在缩放「**每组停留秒数**」：`slow` 32s / `normal` 20s / `fast` 12s
-              （一轮 160s / 100s / 60s）；`off` 静止在首组配色。
-            - 卡片滚出视口 / 切后台标签页 / 打开队列或媒体库面板时自动停表；
-              系统开启「减少动态效果」时降级为静态底色。
+            ### 兼容性
+            - `idle_background` / `idle_theme` / `idle_speed` 名称与取值不变，无需改配置；
+              觉得太快可在卡片配置里设 `idle_speed: slow`（16s/组）。
 
             ### 升级步骤
             1. HACS 中更新本卡片
             2. 浏览器 `Ctrl+Shift+R` 或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v2.3.1`
+            3. F12 Console 确认 `[musicflow-remote-card] v2.3.2`
           files: dist/hass-musicflow-card.js
           draft: false
           prerelease: false

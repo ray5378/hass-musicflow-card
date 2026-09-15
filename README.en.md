@@ -147,7 +147,7 @@ idle_theme: auto         # tints the accent colour only; no longer affects the b
 ```
 
 - The 5 fixed palettes are **dusk blue / warm brown / moss / violet grey / teal**, hard-coded in the card and independent of the theme.
-- `idle_speed` scales the **seconds each palette holds**: `slow` 32s / `normal` 20s / `fast` 12s, i.e. a full cycle of 160s / 100s / 60s; `off` rests on the first palette. **The `off` behaviour changed**: the old build still showed 3 drifting spots when paused; the new build rests on the first palette.
+- `idle_speed` scales the **seconds each palette holds**: `slow` 16s / `normal` 10s / `fast` 6s, i.e. a full cycle of 80s / 50s / 30s; `off` rests on the first palette. **The `off` behaviour changed**: the old build still showed 3 drifting spots when paused; the new build rests on the first palette.
 - `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
 - The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode.
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette under `prefers-reduced-motion`.
