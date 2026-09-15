@@ -146,8 +146,9 @@ idle_speed: normal       # slow | normal | fast | off (static, rests on the firs
 idle_theme: auto         # tints the accent colour only; no longer affects the background
 ```
 
-- The 5 fixed palettes are **dusk blue / warm brown / moss / violet grey / teal**, hard-coded in the card and independent of the theme.
-- `idle_speed` scales the **seconds each palette holds**: `slow` 3.2s / `normal` 2s / `fast` 1.2s, i.e. a full cycle of 16s / 10s / 6s; `off` rests on the first palette.
+- The 5 fixed palettes are **indigo / warm brown / pine ink / wisteria / lake teal**, hard-coded in the card and independent of the theme.
+- They are ordered as a **brightness V** (peak → mid → trough → mid → peak) with a **1.88x** relative-luminance span from peak to trough, so a full cycle reads as one clear "breath" of light and shade rather than a mere hue shift. Both ends are peaks, so the wrap-around stays luminance-continuous with no hard jump.
+- `idle_speed` scales the **seconds each palette holds**: `slow` 8s / `normal` 5s / `fast` 3s, i.e. a full cycle of 40s / 25s / 15s; `off` rests on the first palette.
 - `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
 - The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode.
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette under `prefers-reduced-motion`.

@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.3";
+const CARD_VERSION = "2.3.4";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -106,12 +106,20 @@ const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分�
 //   ③ transition: background-image:Chromium 对 gradient 不做插值,会直接硬跳。
 // 渐变以固定深色 #14182a 收尾,故 idle 态一律按"暗底浅字"渲染(cardCls 恒 light),
 //   不再随 HA 明暗模式切浅色底 —— 保证任一配色组下白字对比度都够。
+// 5 组固定配色,按「亮度 V 形」排序:峰值 → 中 → 谷底 → 中 → 峰值。
+// 目的是让整轮读起来是一次明显的「吸气—呼气」明暗起伏,而不只是色相在挪。
+//   · 相邻两组亮度差够大,换组时肉眼能看到卡片整体变亮/变暗;
+//   · 首尾都是峰值,回绕那一下亮度连续,不会出现硬跳;
+//   · 每组 c1 按**相对亮度 Y** 定标(不是 HSL 的 L):peak .175 / mid .110 / trough .070,
+//     峰值→谷底亮度比 1.88×。上一版 5 组几乎等亮(0.081~0.115,只有 1.26×),
+//     交叉淡入时只有色相在动、亮度几乎不变 → 观感就是"没有呼吸",已被否。
+// 白字落在最亮的 peak 组上对比度仍有 4.67:1(过 WCAG AA 4.5:1),故 idle 恒用浅字安全。
 const IDLE_GROUPS = [
-  { c1: "#3f5f96", c2: "#386f7d" }, // 暮蓝
-  { c1: "#6b4650", c2: "#7a5540" }, // 暖褐
-  { c1: "#3a5f55", c2: "#456b8c" }, // 青苔
-  { c1: "#5a4a72", c2: "#6d5180" }, // 紫灰
-  { c1: "#2f5568", c2: "#3a6b74" }, // 鴨青
+  { c1: "#4c71c7", c2: "#317394" }, // 靛蓝 peak   Y .175
+  { c1: "#825232", c2: "#66542a" }, // 暖褐 mid    Y .110
+  { c1: "#225441", c2: "#234b55" }, // 松墨 trough Y .070
+  { c1: "#7a42ab", c2: "#863783" }, // 藤紫 mid    Y .110
+  { c1: "#307d98", c2: "#28786b" }, // 湖青 peak   Y .175
 ];
 const IDLE_GROUP_COUNT = IDLE_GROUPS.length;
 
@@ -126,8 +134,8 @@ const IDLE_THEMES = {
   mono: { color: "#8a919c" },
 };
 const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
-// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 2s/组、一轮 10s(数值越小越快)
-const IDLE_SWAP_BASE = 2;
+// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 5s/组、一轮 25s(数值越小越快)
+const IDLE_SWAP_BASE = 5;
 
 // CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
 function parseCssColor(str) {
