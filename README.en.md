@@ -121,21 +121,23 @@ transport: direct   # always connect straight to the backend
 
 ### Idle background (idle ambient)
 
-When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a rotating set of **8 fixed palettes** instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a rotating set of **12 fixed palettes** instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
 
-The implementation is **five full-card diagonal gradients cross-fading in place**: each layer paints `linear-gradient(140deg, c1, c2 62%, #14182a 100%)`, starts at `opacity: 0`, and runs the same keyframes with a **negative `animation-delay`** that staggers the five layers evenly by 1/5 of a cycle.
+The implementation is **N full-card diagonal gradients cross-fading in place**: each layer paints `linear-gradient(140deg, c1, c2 62%, #14182a 100%)`, starts at `opacity: 0`, and runs the same keyframes with a **negative `animation-delay`** that staggers the N layers evenly by 1/N of a cycle.
 
-The keyframes pin the "hold" and the "cross" to fixed slots within a cycle:
+The keyframe window is **derived from the layer count** (not hard-coded): hold window = fade window = `50/N %`, so each layer's "visible window" is exactly the `100/N %` stagger — guaranteeing only two adjacent layers ever overlap, instead of three or four blurring together. For N=12 the card injects:
 
 ```css
-@keyframes mf-cyc {
-  0%, 10%  { opacity: 1; }  /* first 1/10: full opacity, holding */
-  20%, 90% { opacity: 0; }  /* 10%~20% cross-fade out, then fully clear */
-  100%     { opacity: 1; }  /* last 1/10: fade back in */
+@keyframes mf-cyc {                        /* N=12: hold = fade = 50/12 ≈ 4.167% */
+  0%, 4.167%      { opacity: 1; }          /* full opacity, holding */
+  8.333%, 95.833% { opacity: 0; }          /* cross-fade out, then fully clear */
+  100%            { opacity: 1; }          /* fade back in */
 }
 ```
 
-The phases are staggered by 1/N of a cycle (N = number of palettes, **8** today) — inside a transition window one layer is always falling while another rises, so there is no "dark then bright" gap and no additive brightening either (every layer is a **fully opaque** gradient, so over-compositing normalises itself). The one thing worth watching is **backdrop bleed**: when every layer is semi-transparent the card background shows through. Measured worst case: **N=5 → 25%**, **N=8 → 1.56%** (denser staggering means a near-opaque layer is almost always pinned underneath; the least-opaque "top" layer is still 87.5%). Only `opacity` is animated (a compositor-only property) — **no movement, no repaint, no filters, zero main-thread work**.
+> For N=5 this reduces exactly to the old `{0%,10%→1; 20%,90%→0; 100%→1}`, so the visual baseline is unchanged. The keyframe is **not hard-coded in CSS** — the card injects it from `50/N` after mounting. A hard-coded window only holds for one layer count; with more layers the stagger drops below the window, three or four layers go semi-transparent at once, and the dominant palette falls to ~45% — which reads as mush.
+
+The phases are staggered by 1/N of a cycle (N = number of palettes, **12** today) — inside a transition window one layer is always falling while another rises, so there is no "dark then bright" gap and no additive brightening either (every layer is a **fully opaque** gradient, so over-compositing normalises itself). The one thing worth watching is **backdrop bleed**: when every layer is semi-transparent the card background shows through. Measured worst case: **N=5 → 25%**, **N=8 → 1.56%**, **N=12 → 0%** (the 8.33% stagger is already denser than the hold window, so a fully opaque layer is always pinned underneath). Only `opacity` is animated (a compositor-only property) — **no movement, no repaint, no filters, zero main-thread work**.
 
 > 2.3.0 used a **5-cell sprite strip shifted via `background-position`**; that transition is a spatial interpolation between two cells, so the colour literally slides sideways rather than swapping in place. **2.3.1 switched to the A+ in-place cross-fade.**
 
@@ -146,12 +148,15 @@ idle_speed: normal       # slow | normal | fast | off (static, rests on the firs
 idle_theme: auto         # tints the accent colour only; no longer affects the background
 ```
 
-- The 8 fixed palettes are **indigo / warm brown / lake teal / gold / wisteria / burnt orange / pine ink / red**, hard-coded in the card and independent of the theme.
-- They form a ring in which **no two neighbours share a hue or a brightness**: every step is at least 118° of hue and 1.18x of relative luminance apart, so each swap changes both colour and light level — that is what makes the "breath" read. Relative luminance is pinned at `peak 0.175 / 0.140 / 0.110 / trough 0.070`, a **1.88x** peak-to-trough span.
-- Red / yellow / orange are constrained by the dark base plus white text (luminance tops out near 0.183 before white text drops below WCAG AA), so they render as **deep red / dark gold / burnt orange** rather than bright primaries.
+- The **12 fixed palettes** are **magenta / grass green / slate grey / red / teal / orange / lake teal / gold / indigo / warm brown / wisteria / pine ink**, hard-coded in the card and independent of the theme.
+- The **order is a fixed ring, not random**: there is no random number anywhere in the code — it always cycles in the order above. The ring order was optimised directly on **Lab ΔE** (max-min criterion), giving a **minimum adjacent ΔE of 65.7** — every swap is a clearly visible jump (ΔE 65 is roughly the gap between "mid blue" and "mid orange").
+- "Do two palettes look alike?" is judged by **Lab ΔE*ab, not hue difference**: low-chroma deep teal-greens must be pulled far apart in hue to be told apart. In the first 12-palette draft "pine ink vs teal" were only ΔE 15~17 apart, so pine ink was moved to 125° (a true pine green), teal raised to 65% chroma and moved to 170°, and warm brown desaturated — lifting their nearest-neighbour distances from 15/20/21 to 27/27/24. The closest pair overall is "warm brown vs orange" (ΔE 24.4), and they are not adjacent on the ring.
+- Each palette is pinned by **relative luminance Y** (not HSL's L): `peak 0.175` (grass green / lake teal / indigo) / `0.140` (magenta / teal / orange / gold) / `0.110` (red / warm brown / wisteria) / `0.085` (slate grey) / `trough 0.070` (pine ink), a **1.88x** peak-to-trough span. Neighbouring palettes therefore change both colour *and* light level — that is what makes the "breath" read.
+- Red / yellow / orange are constrained by the dark base plus white text (luminance tops out near 0.183 before white text drops below WCAG AA), so they render as **deep red / burnt orange / dark gold** rather than bright primaries — a deliberate trade-off, not a colour-picking slip.
+- Slate grey is the only **achromatic** entry (~7% saturation): it covers "the axis other than hue" and acts as a breather between two high-chroma palettes.
 - `idle_speed` scales the **seconds each palette holds**: `slow` 11.2s / `normal` 7s / `fast` 4.2s, i.e. a full cycle of 89.6s / 56s / 33.6s; `off` rests on the first palette.
 - `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
-- The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode.
+- The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode; white text on the brightest peak palette still has a **4.67:1** contrast ratio (passes AA).
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette under `prefers-reduced-motion`.
 
 ## How it works

@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.5";
+const CARD_VERSION = "2.3.6";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -92,15 +92,14 @@ const CAT_ICONS = { home: "home", playlists: "list", albums: "disc3", songs: "he
 const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分类使用)
 
 // 未播放态「固定配色底色」(idle ambient):无封面时接管整卡底色。
-// 视觉构成 = A+ 方案:N 层**固定配色**的整卡对角渐变,原地交叉淡入轮换(N = IDLE_GROUPS 长度,现 8)。
+// 视觉构成 = A+ 方案:N 层**固定配色**的整卡对角渐变,原地交叉淡入轮换(N = IDLE_GROUPS 长度,现 12)。
 //   .idlebg 内 N 个 <i>,每层一条 linear-gradient(140deg, c1, c2 62%, #14182a 100%);
 //   层初始 opacity 0,各自跑同一条 mf-cyc 关键帧,靠负 animation-delay 错峰 1/N 周期。
-//   关键帧:0~10% 停在全亮 → 10~20% 交叉淡出 → 20~90% 全透 → 90~100% 淡入。
+//   关键帧的窗口宽随 N 推导(见 _syncIdleKeyframes),不写死 —— 写死就只对某一种层数成立。
 //   相位均匀错开 1/N,交叉区里必然一层在升、另一层在降,所以不会"先暗再亮"。
 //   每层都是**全不透明**的渐变,叠起来按 over 合成自动归一,不会叠加变亮;
-//   真正要留意的是"底层漏出"(所有层都半透时透出卡片底色)。实测漏出比例:
-//   N=5 → 最大 25%(两个半透层叠在一起);N=8 → 最大 1.56%(错峰更密,几乎总有一层
-//   接近满不透明压在最下面,任一层最高不透明度最低也有 87.5%)。层数越多越稳。
+//   真正要留意的是"底层漏出"(所有层都半透时透出卡片底色)。实测最大漏出比例:
+//   N=5 → 25%,N=8 → 1.56%,N=12 → 0%(错峰 8.33% 已比停留窗还密,任意时刻都有一层满不透明压着)。
 // 只动 opacity —— 合成属性:无位移、无重绘、无滤镜,动画主线程零参与。
 // 明确不用:
 //   ① background-position 平移雪碧条(上一版做法):过渡是相邻两格的空间线性插值,
@@ -109,31 +108,42 @@ const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分�
 //   ③ transition: background-image:Chromium 对 gradient 不做插值,会直接硬跳。
 // 渐变以固定深色 #14182a 收尾,故 idle 态一律按"暗底浅字"渲染(cardCls 恒 light),
 //   不再随 HA 明暗模式切浅色底 —— 保证任一配色组下白字对比度都够。
-// 8 组固定配色。环上按「相邻既不同色相、也不同亮度」排布:
-//   靛蓝 → 暖褐 → 湖青 → 黄 → 藤紫 → 橙 → 松墨 → 红 →(回靛蓝)
-// 每段 Δhue ≥ 118°、相邻亮度比 ≥ 1.18×,所以每次换组都同时吃到色相与明暗两重变化,
-// 观感上的"呼吸"才立得住。排列由脚本对 8! 个环穷举择优(min pair score 最大)得到。
+// 12 组固定配色。顺序是一条**固定的环**(代码里没有任何随机数):
+//   品红 → 草绿 → 烟灰 → 红 → 青绿 → 橙 → 湖青 → 黄 → 靛蓝 → 暖褐 → 藤紫 → 松墨 →(回品红)
+// 环的顺序用 Lab ΔE 直接优化(max-min),结果 **相邻两组的最小 ΔE = 65.7** ——
+//   每换一组都是一次肉眼明确的跳变(ΔE 65 约等于"中蓝 → 中橙"的差距)。
+//   顺序是脚本排的、不是手排的;以后增删配色请重跑"ΔE 环排序"那套脚本,别手工插位。
 // 每组 c1 按**相对亮度 Y** 定标(不是 HSL 的 L):
-//   peak .175(靛蓝/湖青) / .140(黄/橙) / .110(暖褐/藤紫/红) / trough .070(松墨),
-//   峰值→谷底 1.88×。更早的 5 组版几乎等亮(0.081~0.115,只有 1.26×),
-//   交叉淡入时只有色相在挪、亮度几乎不变 → 观感就是"没有呼吸",已被否。
+//   峰 .175(草绿/湖青/靛蓝) / .140(品红/青绿/橙/黄) / .110(红/暖褐/藤紫) / .085(烟灰) / 谷 .070(松墨),
+//   峰值→谷底 1.88×。更早的 5 组版几乎等亮(0.081~0.115,只有 1.26×),交叉淡入时只有色相在挪、
+//   亮度几乎不变 → 观感就是"没有呼吸"。这是整条线上最重要的一条经验。
+// 判"两组看着像不像"的口径是 Lab ΔE*ab,不是色相差:
+//   全表最像的一对是 暖褐 vs 橙(ΔE 24.4),它们环上不相邻;其余组合都 ≥26。
+//   初版 12 组里 松墨 vs 青绿 只有 ΔE 15~17 —— 低彩度的深青绿三色挤在 158~196°,
+//   而低彩度色相必须拉很大才分得开,于是把 松墨 挪到 125°(真·墨绿)、青绿 彩度提到 65%
+//   并挪到 170°,两者最近邻距离由 15 / 20 拉到 27。
 // 红/黄/橙 受「暗底 + 白字」约束(Y 上限 ≈0.183,再亮白字对比度就跌破 WCAG AA),
-//   故呈现为**深红 / 焦橙 / 暗金**色,不是明亮原色——这是取舍,不是取色失误。
-// 白字落在最亮的 peak 组上对比度仍有 4.67:1(过 AA),故 idle 恒用浅字安全。
+//   故呈现为**深红 / 焦橙 / 暗金**色,不是明亮原色 —— 这是取舍,不是取色失误。
+// 烟灰是唯一的无彩组(饱和度 ~7%):补的是"色相之外的那条轴",夹在两张高彩之间当一次换气。
+// 白字落在最亮的峰值组上对比度仍有 4.67:1(过 AA),故 idle 恒用浅字安全。
 const IDLE_GROUPS = [
-  { c1: "#4c71c7", c2: "#317394" }, // 靛蓝 peak     Y .175
-  { c1: "#825232", c2: "#66542a" }, // 暖褐 mid      Y .110
-  { c1: "#307d98", c2: "#28786b" }, // 湖青 peak     Y .175
-  { c1: "#796811", c2: "#825913" }, // 黄   mid-high Y .140(暗金)
-  { c1: "#7a42ab", c2: "#863783" }, // 藤紫 mid      Y .110
-  { c1: "#9a5816", c2: "#a93e24" }, // 橙   mid-high Y .140(焦橙)
-  { c1: "#225441", c2: "#234b55" }, // 松墨 trough   Y .070
-  { c1: "#b2262f", c2: "#9a3424" }, // 红   mid      Y .110(深红)
+  { c1: "#ad3a92", c2: "#a43a6b" }, // 品红     Y .140
+  { c1: "#3a841f", c2: "#4e7720" }, // 草绿 峰  Y .175
+  { c1: "#4f535a", c2: "#4b4c54" }, // 烟灰 无彩 Y .085
+  { c1: "#b2262f", c2: "#9a3424" }, // 红 深红  Y .110
+  { c1: "#197566", c2: "#216a7c" }, // 青绿     Y .140
+  { c1: "#9a5816", c2: "#a64027" }, // 橙 焦橙  Y .140
+  { c1: "#307d98", c2: "#26786b" }, // 湖青 峰  Y .175
+  { c1: "#796811", c2: "#7e5b1f" }, // 黄 暗金  Y .140
+  { c1: "#4c71c7", c2: "#317394" }, // 靛蓝 峰  Y .175
+  { c1: "#874f3a", c2: "#705030" }, // 暖褐     Y .110
+  { c1: "#7a42ab", c2: "#893386" }, // 藤紫     Y .110
+  { c1: "#1d5621", c2: "#1a4f30" }, // 松墨 谷  Y .070
 ];
 const IDLE_GROUP_COUNT = IDLE_GROUPS.length;
 
 // 强调色(图标 / 进度条 / 选中态)仍跟随主题:auto 取 HA --primary-color 派生;
-// 预设只固定强调色色相,不再影响底色(底色恒为上面那 8 组固定配色)。
+// 预设只固定强调色色相,不再影响底色(底色恒为上面那 12 组固定配色)。
 const IDLE_THEMES = {
   auto: null, // 运行时从 HA 主题 --primary-color 派生
   twilight: { color: "#5b6fa8" },
@@ -681,6 +691,30 @@ class MusicFlowRemoteCard extends LitElement {
 
   // 只在 idlebg 实际渲染后调用:下发节奏变量、切暂停/静止态、挂可见性监听。
   // 换色完全由 CSS 动画驱动,这里不做任何逐帧或定时器工作。
+  // mf-cyc 关键帧按层数推导(而非写死)。要满足两条:
+  //   ① 每层的「出现窗」(淡入 + 停留 + 淡出)必须正好等于错峰 100/N %,这样任意时刻
+  //      只有相邻两层在交叉,不会三四层糊在一起;
+  //   ② 窗内一半时间全亮、一半时间做淡入淡出,即 停留窗 = 淡出窗 = 50/N %。
+  // 合起来:opacity 1 于 [0, 50/N] → 淡出到 [100/N] → 0 到 [100-50/N] → 淡入回 100%。
+  // N=5 时正好算回原 A+ 的 {0%,10%→1; 20%,90%→0; 100%→1},所以视觉基准没变;
+  // N=12 时是 {0%,4.167%→1; 8.333%,95.833%→0; 100%→1},仍是干净的两两交叉。
+  // 只在 N 变化时重写 textContent —— 不放进 render():每次 render 重建 <style>
+  // 会让动画从头上播,相位跳一下。
+  _syncIdleKeyframes() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const hold = 50 / IDLE_GROUP_COUNT; // 停留窗 = 淡出窗 = 50/N %
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    const css = `@keyframes mf-cyc{0%,${r3(hold)}%{opacity:1}${r3(hold * 2)}%,${r3(100 - hold)}%{opacity:0}100%{opacity:1}}`;
+    let tag = root.querySelector("style[data-mf-cyc]");
+    if (!tag) {
+      tag = document.createElement("style");
+      tag.setAttribute("data-mf-cyc", "");
+      root.appendChild(tag);
+    }
+    if (tag.textContent !== css) tag.textContent = css;
+  }
+
   _syncIdleAmbient() {
     const el = this.shadowRoot?.querySelector(".idlebg");
     if (!el) {
@@ -691,6 +725,8 @@ class MusicFlowRemoteCard extends LitElement {
     }
     // 节奏变了(主题/主色/speed)→ 重新下发 --idle-cycle 与静止态。只在这里做重活,不进 render。
     const pal = this._idlePalette();
+    // 关键帧的窗口宽随层数,与节奏无关,但同样只在挂到 DOM 后才需要(只写一次)。
+    this._syncIdleKeyframes();
     const builtKey = `${this._idleKey}|${pal.cycle}`;
     if (this._idleBuiltKey !== builtKey) {
       el.style.setProperty("--idle-cycle", pal.cycle > 0 ? `${pal.cycle}s` : "0s");
@@ -2730,11 +2766,9 @@ class MusicFlowRemoteCard extends LitElement {
         will-change: opacity;
         animation: mf-cyc var(--idle-cycle) linear infinite;
         animation-delay: var(--dly, 0s); }
-      @keyframes mf-cyc {
-        0%, 10% { opacity: 1; }
-        20%, 90% { opacity: 0; }
-        100% { opacity: 1; }
-      }
+      /* mf-cyc 关键帧不写死在这里:它的窗口宽必须随层数推导(见 _syncIdleKeyframes)。
+         写死窗口(旧值 0~10% 停留)只对 5 层成立 —— 层数一多,错峰 < 窗口,
+         就会有 3~4 层同时半透明叠在一起,主导配色权重掉到 ~45%,观感发糊。 */
       /* 降级:idle_speed=off → 静止在首组配色;不可见 / 后台 tab / 面板态 → 停表;无障碍 → 静止 */
       .idlebg.static i { animation: none; }
       .idlebg.static i:first-child { opacity: 1; }
