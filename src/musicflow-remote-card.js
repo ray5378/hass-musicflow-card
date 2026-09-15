@@ -642,11 +642,35 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.isPlaying = statePlaying || advancing;
     if (typeof status.position === "number") this._lastPos = status.position;
     if (typeof status.position === "number") this._ui.currentTime = status.position;
+    // 客户端本机实例(local)经 /status 回传的 duration 来自它本地上报,真实可用;
+    // 若上报 duration 为 0(旧端/上报空窗),回退到队列快照里当前曲的时长,避免进度条分母恒为 0。
+    const statusItems = Array.isArray(status.items) ? status.items : null;
+    const statusIdx = typeof status.currentIndex === "number" ? status.currentIndex
+      : (typeof this._ui.currentIndex === "number" ? this._ui.currentIndex : -1);
+    const statusItem = statusItems && statusIdx >= 0 ? statusItems[statusIdx] : null;
     if (typeof status.duration === "number" && status.duration > 0) this._ui.duration = status.duration;
+    else if (statusItem && typeof statusItem.duration === "number" && statusItem.duration > 0) this._ui.duration = statusItem.duration;
     // 拖拽中忽略服务器回传的音量,避免外网代理延迟把滑块拽回旧值(跟手问题)。
     if (typeof status.volume === "number" && !this._ui.volDragging) this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
     if (typeof status.muted === "boolean") this._ui.muted = status.muted;
-    if (status.media) this._setMedia(status.media);
+    // 客户端本机实例(local)经 /status 只回传 media:{ songId },标题/封面/时长都在队列
+    // 快照的 items 里(见服务端 GET /peers/:id/status)。这里用当前队列项补全成完整 media,
+    // 否则 now-playing 永远显示「未知」且无封面,收藏/歌词也定位不到具体歌曲。
+    // DLNA/airplay/sendspin 的 status 不带 items,走原本就完整的 media,不受影响。
+    if (status.media) {
+      let media = status.media;
+      if (statusItem) {
+        media = {
+          songId: media.songId || statusItem.songId,
+          title: media.title || statusItem.title,
+          artist: media.artist ?? statusItem.artist,
+          album: media.album ?? statusItem.album,
+          coverArt: media.coverArt || statusItem.coverArt,
+          duration: media.duration || statusItem.duration,
+        };
+      }
+      this._setMedia(media);
+    }
     this._updateLyric();
     this.requestUpdate();
   }
