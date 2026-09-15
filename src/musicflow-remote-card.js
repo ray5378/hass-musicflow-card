@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.1";
+const CARD_VERSION = "2.4.2";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -260,6 +260,8 @@ class MusicFlowRemoteCard extends LitElement {
     this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
+    this._volumeIssuedAt = 0; // 最近一次下发**音量类**命令(volume / mute)的时刻(ms)
+    this._transportIssuedAt = 0; // 最近一次下发**传输类**命令(play / pause)的时刻(ms)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
     this._coverObserverRoot = null; // 该 observer 绑定的滚动容器(媒体库每次重开是新节点)
     this._vsInflight = 0; // 全库滚动:同时在途的块请求数(上限 VS_CONCURRENCY)
@@ -651,6 +653,22 @@ class MusicFlowRemoteCard extends LitElement {
     return dur > 0 ? Math.min(projected, dur) : projected;
   }
 
+  // 该上报是不是「命令下发**之前**采的样」—— 即尚未包含本次命令的结果。
+  //
+  // 客户端实例的音量 / 静音 / 播放态与 position 一样,都是**周期性上报**的采样
+  // (实测约 4s 一次)。本卡片下发命令后,在下一个上报到达前,轮询读到的仍是旧值,
+  // 直接采纳会把用户刚设的值**顶回去** —— 典型表现:音量从 20 拖到 50、再拖到 30,
+  // 结果跳回 50(上报回来的还是上一拍的 50)。
+  //
+  // 判据与 seek 同款:采样时刻(reportedAt)早于命令下发时刻,且仍在 8s 保护窗口内。
+  // 无 reportedAt 的设备型 peer(走实时查询)→ 恒 false,设备链路行为完全不变。
+  _isStaleSample(status, commandAt) {
+    if (!commandAt) return false;
+    if (Date.now() - commandAt > 8000) return false;
+    const at = status && status.reportedAt;
+    return typeof at === "number" && at < commandAt;
+  }
+
   // 播放状态判定(自愈,对齐 Web 端 player.ts:625-627):
   // 1) 显式 state 为 PLAYING 变体 → 播放中;
   // 2) 关键自愈:部分 DLNA 设备 GENA 事件缓存停留在旧值(如 STOPPED)并覆盖 SOAP
@@ -663,9 +681,16 @@ class MusicFlowRemoteCard extends LitElement {
       this._clearNowPlaying();
     }
     const statePlaying = status.state === "PLAYING" || status.state === "playing" || status.state === "STARTED";
-    const advancing = status.duration > 0 && typeof status.position === "number" &&
+    // 传输类命令(play/pause)刚下发时,陈旧上报的 position 仍在前进,若照常做
+    // 「position 前进 → 判在播」自愈,会把刚点的**暂停**改回播放中
+    // (表现为「点了暂停没反应,自己又播起来」)→ 窗口内停用该自愈。
+    const transportStale = this._isStaleSample(status, this._transportIssuedAt);
+    // 音量类命令(volume/mute)刚下发时,陈旧上报会把手上刚设的值顶回上一拍。
+    const volumeStale = this._isStaleSample(status, this._volumeIssuedAt);
+    const advancing = !transportStale && status.duration > 0 && typeof status.position === "number" &&
       this._lastPos >= 0 && status.position > this._lastPos && status.position < status.duration;
-    this._ui.isPlaying = statePlaying || advancing;
+    // 沿用在地播放态:本端点过播放/暂停后,_ui.isPlaying 已是乐观值,别被滞后上报覆盖。
+    this._ui.isPlaying = transportStale ? this._ui.isPlaying : (statePlaying || advancing);
     if (typeof status.position === "number") this._lastPos = status.position;
     if (typeof status.position === "number") {
       // 刚发起过 seek 时跳过"比 seek 更早采样"的上报:客户端此刻上报的仍是**旧位置**
@@ -693,8 +718,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (typeof status.duration === "number" && status.duration > 0) this._ui.duration = status.duration;
     else if (statusItem && typeof statusItem.duration === "number" && statusItem.duration > 0) this._ui.duration = statusItem.duration;
     // 拖拽中忽略服务器回传的音量,避免外网代理延迟把滑块拽回旧值(跟手问题)。
-    if (typeof status.volume === "number" && !this._ui.volDragging) this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
-    if (typeof status.muted === "boolean") this._ui.muted = status.muted;
+    // 拖拽**结束**后同样要忽略「命令之前采样」的上报:连续拖动(20→50→30)时回传的
+    // 可能还是上一拍的 50,会把手上的 30 顶掉 —— 这正是 volumeStale 要挡的情形。
+    if (typeof status.volume === "number" && !this._ui.volDragging && !volumeStale) this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
+    // 静音态同样来自周期上报,刚切过就别被旧值顶回去。
+    if (typeof status.muted === "boolean" && !volumeStale) this._ui.muted = status.muted;
     // 客户端本机实例(local)经 /status 只回传 media:{ songId },标题/封面/时长都在队列
     // 快照的 items 里(见服务端 GET /peers/:id/status)。这里用当前队列项补全成完整 media,
     // 否则 now-playing 永远显示「未知」且无封面,收藏/歌词也定位不到具体歌曲。
@@ -966,6 +994,8 @@ class MusicFlowRemoteCard extends LitElement {
     } else {
       this._client.play(pid).catch((e) => err("play failed", e));
     }
+    // 播放/暂停态也是周期上报的:先打点,再乐观翻转,避免被滞后上报顶回去。
+    this._transportIssuedAt = Date.now();
     this._ui.isPlaying = !this._ui.isPlaying;
     this.requestUpdate();
   }
@@ -1002,6 +1032,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (pid) {
       if (this._volumeDebounce) clearTimeout(this._volumeDebounce);
       this._volumeDebounce = setTimeout(() => {
+        this._volumeIssuedAt = Date.now(); // 窗口从真正下发时刻算起
         this._client.setVolume(pid, v).catch((err2) => err("setVolume failed", err2));
       }, 150);
     }
@@ -1013,6 +1044,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (!pid) return;
     const next = !this._ui.muted;
     this._ui.muted = next;
+    this._volumeIssuedAt = Date.now(); // 静音态同样来自周期上报
     this._client.setMute(pid, next).catch((e) => err("setMute failed", e));
     this.requestUpdate();
   }
@@ -1230,10 +1262,12 @@ class MusicFlowRemoteCard extends LitElement {
     if (!pid) return;
     if (this._volumeDebounce) clearTimeout(this._volumeDebounce);
     if (immediate) {
+      this._volumeIssuedAt = Date.now();
       this._client.setVolume(pid, v).catch((e) => err("setVolume failed", e));
       return;
     }
     this._volumeDebounce = setTimeout(() => {
+      this._volumeIssuedAt = Date.now();
       this._client.setVolume(pid, v).catch((e) => err("setVolume failed", e));
     }, 120);
   }

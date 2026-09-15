@@ -110,6 +110,54 @@ check(
   /status\.reportedAt|reportedAt/,
 );
 
+// 7) 命令影子(2026-09-16):音量 / 静音 / 播放态与 position 一样是**周期性上报**的
+//    采样(实测 ~4s 一次)。下发命令后,在下一个上报到达前,轮询读到的仍是旧值,
+//    会把用户刚设的值顶回去 —— 典型表现:音量 20→50→30 却跳回 50;
+//    点了暂停又自己播起来(advancing 自愈把 PAUSED 判回 PLAYING)。
+//    注意:dist 经压缩后局部变量名会被改写,故产物只断言**属性打点**仍在。
+check(
+  "统一的陈旧采样判据 _isStaleSample 存在",
+  "音量与播放态的保护都建立在它之上",
+  /_isStaleSample\s*\(\s*status\s*,\s*commandAt\s*\)/,
+  /_isStaleSample\(/,
+);
+check(
+  "音量应用处带 volumeStale 守卫(不能只挡拖拽中)",
+  "原先只在 volDragging 时保护;拖完那一下正是被陈旧上报顶回的时刻",
+  /!this\._ui\.volDragging\s*&&\s*!volumeStale/,
+  /volDragging&&!\w+&&\(this\._ui\.volume=/,
+);
+check(
+  "静音应用处带 volumeStale 守卫",
+  "静音态同样来自周期上报",
+  /status\.muted\s*===\s*"boolean"\s*&&\s*!volumeStale/,
+  /muted=="boolean"&&!\w+&&\(this\._ui\.muted=/,
+);
+check(
+  "播放态:刚下发 play/pause 时停用 advancing 自愈",
+  "陈旧上报的 position 仍在前进,会把刚点的暂停改回播放中",
+  /const advancing = !transportStale &&/,
+  /=!\w+&&\w+\.duration>0/,
+);
+check(
+  "播放态沿用在地值(不被滞后上报覆盖)",
+  "本端已乐观翻转过",
+  /isPlaying = transportStale \? this\._ui\.isPlaying/,
+  /isPlaying=\w+\?this\._ui\.isPlaying:/,
+);
+check(
+  "音量命令真正下发时打点(窗口从发请求时刻算起)",
+  "含防抖回调内;早打点会让保护窗口提前失效,拖到一半就被顶回",
+  /this\._volumeIssuedAt\s*=\s*Date\.now\(\)/,
+  /_volumeIssuedAt\s*=\s*Date\.now\(\)/,
+);
+check(
+  "播放/暂停命令下发时打点",
+  "播放态也是周期上报的,不打点就没有保护窗口",
+  /this\._transportIssuedAt\s*=\s*Date\.now\(\)/,
+  /_transportIssuedAt\s*=\s*Date\.now\(\)/,
+);
+
 let failed = 0;
 console.log("客户端本机实例（local）链路守卫\n");
 for (const r of results) {
