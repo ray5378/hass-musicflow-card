@@ -121,7 +121,7 @@ transport: direct   # always connect straight to the backend
 
 ### Idle background (idle ambient)
 
-When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a rotating set of **5 fixed palettes** instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a rotating set of **8 fixed palettes** instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
 
 The implementation is **five full-card diagonal gradients cross-fading in place**: each layer paints `linear-gradient(140deg, c1, c2 62%, #14182a 100%)`, starts at `opacity: 0`, and runs the same keyframes with a **negative `animation-delay`** that staggers the five layers evenly by 1/5 of a cycle.
 
@@ -135,7 +135,7 @@ The keyframes pin the "hold" and the "cross" to fixed slots within a cycle:
 }
 ```
 
-Because the five phases are staggered by exactly 20%, **the per-layer opacity sums to exactly 1 at every instant**: inside a transition window one layer is always falling while another rises, so there is no brightness dip and no "dark then bright" gap. Only `opacity` is animated (a compositor-only property) — **no movement, no repaint, no filters, zero main-thread work**.
+The phases are staggered by 1/N of a cycle (N = number of palettes, **8** today) — inside a transition window one layer is always falling while another rises, so there is no "dark then bright" gap and no additive brightening either (every layer is a **fully opaque** gradient, so over-compositing normalises itself). The one thing worth watching is **backdrop bleed**: when every layer is semi-transparent the card background shows through. Measured worst case: **N=5 → 25%**, **N=8 → 1.56%** (denser staggering means a near-opaque layer is almost always pinned underneath; the least-opaque "top" layer is still 87.5%). Only `opacity` is animated (a compositor-only property) — **no movement, no repaint, no filters, zero main-thread work**.
 
 > 2.3.0 used a **5-cell sprite strip shifted via `background-position`**; that transition is a spatial interpolation between two cells, so the colour literally slides sideways rather than swapping in place. **2.3.1 switched to the A+ in-place cross-fade.**
 
@@ -146,9 +146,10 @@ idle_speed: normal       # slow | normal | fast | off (static, rests on the firs
 idle_theme: auto         # tints the accent colour only; no longer affects the background
 ```
 
-- The 5 fixed palettes are **indigo / warm brown / pine ink / wisteria / lake teal**, hard-coded in the card and independent of the theme.
-- They are ordered as a **brightness V** (peak → mid → trough → mid → peak) with a **1.88x** relative-luminance span from peak to trough, so a full cycle reads as one clear "breath" of light and shade rather than a mere hue shift. Both ends are peaks, so the wrap-around stays luminance-continuous with no hard jump.
-- `idle_speed` scales the **seconds each palette holds**: `slow` 8s / `normal` 5s / `fast` 3s, i.e. a full cycle of 40s / 25s / 15s; `off` rests on the first palette.
+- The 8 fixed palettes are **indigo / warm brown / lake teal / gold / wisteria / burnt orange / pine ink / red**, hard-coded in the card and independent of the theme.
+- They form a ring in which **no two neighbours share a hue or a brightness**: every step is at least 118° of hue and 1.18x of relative luminance apart, so each swap changes both colour and light level — that is what makes the "breath" read. Relative luminance is pinned at `peak 0.175 / 0.140 / 0.110 / trough 0.070`, a **1.88x** peak-to-trough span.
+- Red / yellow / orange are constrained by the dark base plus white text (luminance tops out near 0.183 before white text drops below WCAG AA), so they render as **deep red / dark gold / burnt orange** rather than bright primaries.
+- `idle_speed` scales the **seconds each palette holds**: `slow` 11.2s / `normal` 7s / `fast` 4.2s, i.e. a full cycle of 89.6s / 56s / 33.6s; `off` rests on the first palette.
 - `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
 - The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode.
 - Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette under `prefers-reduced-motion`.

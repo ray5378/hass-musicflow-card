@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.3.4";
+const CARD_VERSION = "2.3.5";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -92,12 +92,15 @@ const CAT_ICONS = { home: "home", playlists: "list", albums: "disc3", songs: "he
 const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分类使用)
 
 // 未播放态「固定配色底色」(idle ambient):无封面时接管整卡底色。
-// 视觉构成 = A+ 方案:5 层**固定配色**的整卡对角渐变,原地交叉淡入轮换。
-//   .idlebg 内 5 个 <i>,每层一条 linear-gradient(140deg, c1, c2 62%, #14182a 100%);
-//   层初始 opacity 0,各自跑同一条 mf-cyc 关键帧,靠负 animation-delay 错峰 1/5 周期。
+// 视觉构成 = A+ 方案:N 层**固定配色**的整卡对角渐变,原地交叉淡入轮换(N = IDLE_GROUPS 长度,现 8)。
+//   .idlebg 内 N 个 <i>,每层一条 linear-gradient(140deg, c1, c2 62%, #14182a 100%);
+//   层初始 opacity 0,各自跑同一条 mf-cyc 关键帧,靠负 animation-delay 错峰 1/N 周期。
 //   关键帧:0~10% 停在全亮 → 10~20% 交叉淡出 → 20~90% 全透 → 90~100% 淡入。
-//   5 层相位恰好均匀错开 20%,所以任一时刻各层 opacity 之和恒为 1:
-//   交叉区里必然一层在降、另一层在升,亮度不塌,也没有"先暗再亮"的空档。
+//   相位均匀错开 1/N,交叉区里必然一层在升、另一层在降,所以不会"先暗再亮"。
+//   每层都是**全不透明**的渐变,叠起来按 over 合成自动归一,不会叠加变亮;
+//   真正要留意的是"底层漏出"(所有层都半透时透出卡片底色)。实测漏出比例:
+//   N=5 → 最大 25%(两个半透层叠在一起);N=8 → 最大 1.56%(错峰更密,几乎总有一层
+//   接近满不透明压在最下面,任一层最高不透明度最低也有 87.5%)。层数越多越稳。
 // 只动 opacity —— 合成属性:无位移、无重绘、无滤镜,动画主线程零参与。
 // 明确不用:
 //   ① background-position 平移雪碧条(上一版做法):过渡是相邻两格的空间线性插值,
@@ -106,25 +109,31 @@ const CAT_HEART = new Set(); // 心形分类:filled + 实心红(暂无根级分�
 //   ③ transition: background-image:Chromium 对 gradient 不做插值,会直接硬跳。
 // 渐变以固定深色 #14182a 收尾,故 idle 态一律按"暗底浅字"渲染(cardCls 恒 light),
 //   不再随 HA 明暗模式切浅色底 —— 保证任一配色组下白字对比度都够。
-// 5 组固定配色,按「亮度 V 形」排序:峰值 → 中 → 谷底 → 中 → 峰值。
-// 目的是让整轮读起来是一次明显的「吸气—呼气」明暗起伏,而不只是色相在挪。
-//   · 相邻两组亮度差够大,换组时肉眼能看到卡片整体变亮/变暗;
-//   · 首尾都是峰值,回绕那一下亮度连续,不会出现硬跳;
-//   · 每组 c1 按**相对亮度 Y** 定标(不是 HSL 的 L):peak .175 / mid .110 / trough .070,
-//     峰值→谷底亮度比 1.88×。上一版 5 组几乎等亮(0.081~0.115,只有 1.26×),
-//     交叉淡入时只有色相在动、亮度几乎不变 → 观感就是"没有呼吸",已被否。
-// 白字落在最亮的 peak 组上对比度仍有 4.67:1(过 WCAG AA 4.5:1),故 idle 恒用浅字安全。
+// 8 组固定配色。环上按「相邻既不同色相、也不同亮度」排布:
+//   靛蓝 → 暖褐 → 湖青 → 黄 → 藤紫 → 橙 → 松墨 → 红 →(回靛蓝)
+// 每段 Δhue ≥ 118°、相邻亮度比 ≥ 1.18×,所以每次换组都同时吃到色相与明暗两重变化,
+// 观感上的"呼吸"才立得住。排列由脚本对 8! 个环穷举择优(min pair score 最大)得到。
+// 每组 c1 按**相对亮度 Y** 定标(不是 HSL 的 L):
+//   peak .175(靛蓝/湖青) / .140(黄/橙) / .110(暖褐/藤紫/红) / trough .070(松墨),
+//   峰值→谷底 1.88×。更早的 5 组版几乎等亮(0.081~0.115,只有 1.26×),
+//   交叉淡入时只有色相在挪、亮度几乎不变 → 观感就是"没有呼吸",已被否。
+// 红/黄/橙 受「暗底 + 白字」约束(Y 上限 ≈0.183,再亮白字对比度就跌破 WCAG AA),
+//   故呈现为**深红 / 焦橙 / 暗金**色,不是明亮原色——这是取舍,不是取色失误。
+// 白字落在最亮的 peak 组上对比度仍有 4.67:1(过 AA),故 idle 恒用浅字安全。
 const IDLE_GROUPS = [
-  { c1: "#4c71c7", c2: "#317394" }, // 靛蓝 peak   Y .175
-  { c1: "#825232", c2: "#66542a" }, // 暖褐 mid    Y .110
-  { c1: "#225441", c2: "#234b55" }, // 松墨 trough Y .070
-  { c1: "#7a42ab", c2: "#863783" }, // 藤紫 mid    Y .110
-  { c1: "#307d98", c2: "#28786b" }, // 湖青 peak   Y .175
+  { c1: "#4c71c7", c2: "#317394" }, // 靛蓝 peak     Y .175
+  { c1: "#825232", c2: "#66542a" }, // 暖褐 mid      Y .110
+  { c1: "#307d98", c2: "#28786b" }, // 湖青 peak     Y .175
+  { c1: "#796811", c2: "#825913" }, // 黄   mid-high Y .140(暗金)
+  { c1: "#7a42ab", c2: "#863783" }, // 藤紫 mid      Y .110
+  { c1: "#9a5816", c2: "#a93e24" }, // 橙   mid-high Y .140(焦橙)
+  { c1: "#225441", c2: "#234b55" }, // 松墨 trough   Y .070
+  { c1: "#b2262f", c2: "#9a3424" }, // 红   mid      Y .110(深红)
 ];
 const IDLE_GROUP_COUNT = IDLE_GROUPS.length;
 
 // 强调色(图标 / 进度条 / 选中态)仍跟随主题:auto 取 HA --primary-color 派生;
-// 预设只固定强调色色相,不再影响底色(底色恒为上面 5 组固定配色)。
+// 预设只固定强调色色相,不再影响底色(底色恒为上面那 8 组固定配色)。
 const IDLE_THEMES = {
   auto: null, // 运行时从 HA 主题 --primary-color 派生
   twilight: { color: "#5b6fa8" },
@@ -134,8 +143,8 @@ const IDLE_THEMES = {
   mono: { color: "#8a919c" },
 };
 const IDLE_SPEED_FACTOR = { slow: 1.6, normal: 1, fast: 0.6, off: 0 }; // 速度档(周期倍率)
-// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 5s/组、一轮 25s(数值越小越快)
-const IDLE_SWAP_BASE = 5;
+// 换色节奏:idle_speed 缩放「每组停留秒数」,normal = 7s/组、一轮 56s(数值越小越快)
+const IDLE_SWAP_BASE = 7;
 
 // CSS 颜色 → [r,g,b]:支持 #rgb / #rrggbb / rgb(a,b,c)。解析失败返回 null。
 function parseCssColor(str) {
@@ -633,7 +642,7 @@ class MusicFlowRemoteCard extends LitElement {
     return !(this._ui.song && this._ui.song.coverArt);
   }
 
-  // 配色:底色恒为 IDLE_GROUPS 的 5 组固定配色(见常量注释),不在这里算。
+  // 配色:底色恒为 IDLE_GROUPS 那 8 组固定配色(见常量注释),不在这里算。
   // 这里只产出:cycle(一轮秒数)/ swap(每组秒数)/ acc(强调色 RGB 三通道)。
   // 结果按「主题 + 主色 + 速度」缓存,只在变化时重算一次。
   _idlePalette() {
@@ -1513,7 +1522,7 @@ class MusicFlowRemoteCard extends LitElement {
     const idleOn = this._idleAmbientOn();
     const pal = idleOn ? this._idlePalette() : null;
     const acc = u.accentRgb || (pal ? pal.acc : "255, 255, 255");
-    // idle 底色是 5 组固定深色渐变(收尾 #14182a),一律按"暗底浅字"渲染,与 HA 明暗模式无关。
+    // idle 底色是 8 组固定深色渐变(收尾 #14182a),一律按"暗底浅字"渲染,与 HA 明暗模式无关。
     const cardCls = pal ? "light" : (u.coverLightText ? "light" : "dark");
 
     return html`
@@ -2706,9 +2715,9 @@ class MusicFlowRemoteCard extends LitElement {
       .coverbg-veil { position: absolute; inset: 0;
         background: linear-gradient(180deg, rgba(0,0,0,0.30) 0%, rgba(0,0,0,0.40) 55%, rgba(0,0,0,0.50) 100%); }
       /* 未播放态固定配色底色(idle ambient):无封面时接管整卡底色。
-         5 层整卡对角渐变原地交叉淡入 —— 只动 opacity(合成属性),无位移 / 无重绘 / 无滤镜。
-         5 层相位均匀错开 1/5 周期(mf-cyc:0~10% 全亮 → 10~20% 淡出 → 90~100% 淡入),
-         任一时刻各层 opacity 之和恒为 1,交叉区必然一层在降、另一层在升,亮度不塌。
+         N 层整卡对角渐变原地交叉淡入 —— 只动 opacity(合成属性),无位移 / 无重绘 / 无滤镜。
+         各层相位均匀错开 1/N 周期(mf-cyc:0~10% 全亮 → 10~20% 淡出 → 90~100% 淡入),
+         交叉区必然一层在升、另一层在降;每层都是全不透明渐变,over 合成自动归一不会叠加变亮。
          contain 把重绘锁在本层内,不影响 HA 整页合成。 */
       .idlebg { position: absolute; inset: 0; z-index: 0; overflow: hidden;
         contain: layout paint style;
