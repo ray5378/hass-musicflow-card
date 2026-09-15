@@ -34,6 +34,18 @@ jobs:
             exit 1;
           }
 
+      - name: Remove any pre-existing release for this tag
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "::notice::existing release for ${{ github.ref_name }} found - deleting it so the current notes are applied"
+            gh release delete "${{ github.ref_name }}" --yes
+          else
+            echo "no existing release for ${{ github.ref_name }}"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
