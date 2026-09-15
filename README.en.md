@@ -121,26 +121,36 @@ transport: direct   # always connect straight to the backend
 
 ### Idle background (idle ambient)
 
-When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a "5-palette rotation" flowing colour instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
+When there is **no cover art to show** (stopped / queue cleared / no media), the card fills the background with a rotating set of **5 fixed palettes** instead of going colourless. Whenever a cover is available it always wins — the two are mutually exclusive.
 
-Under the hood is **a 5-cell sprite strip**: `background-size: 500%` makes one cell exactly the card width, and sliding `background-position` by one cell swaps to the next palette. `background-position` joins `transform` / `opacity` as a compositor-only property, so the whole animation triggers **zero Paint / Raster / Layout** — no main-thread work.
+The implementation is **five full-card diagonal gradients cross-fading in place**: each layer paints `linear-gradient(140deg, c1, c2 62%, #14182a 100%)`, starts at `opacity: 0`, and runs the same keyframes with a **negative `animation-delay`** that staggers the five layers evenly by 1/5 of a cycle.
 
-Three layers:
+The keyframes pin the "hold" and the "cross" to fixed slots within a cycle:
 
-- `base`: a low-saturation colour derived from the HA theme's `--primary-color`. It **never moves** and carries the white-text contrast; because the base layer never changes colour, there is no brightness dip during palette swaps.
-- `sprite`: the 5-palette strip, sliding cell-by-cell at the `idle_speed` cadence. Adjacent palettes differ by only 22° of hue and wrap around after a full cycle; all derive from a single base hue.
-- `breath`: a soft glow that slowly drifts / scales / brightens (`transform` + `opacity`), independent of the swap cadence.
+```css
+@keyframes mf-cyc {
+  0%, 10%  { opacity: 1; }  /* first 1/10: full opacity, holding */
+  20%, 90% { opacity: 0; }  /* 10%~20% cross-fade out, then fully clear */
+  100%     { opacity: 1; }  /* last 1/10: fade back in */
+}
+```
+
+Because the five phases are staggered by exactly 20%, **the per-layer opacity sums to exactly 1 at every instant**: inside a transition window one layer is always falling while another rises, so there is no brightness dip and no "dark then bright" gap. Only `opacity` is animated (a compositor-only property) — **no movement, no repaint, no filters, zero main-thread work**.
+
+> 2.3.0 used a **5-cell sprite strip shifted via `background-position`**; that transition is a spatial interpolation between two cells, so the colour literally slides sideways rather than swapping in place. **2.3.1 switched to the A+ in-place cross-fade.**
 
 ```yaml
 type: custom:hass-musicflow-card
 idle_background: true    # default true; set false for the original static gradient
-idle_theme: auto         # fallback palette, only used before any song has played
-idle_speed: normal       # slow | normal | fast | off (static, no animation)
+idle_speed: normal       # slow | normal | fast | off (static, rests on the first palette)
+idle_theme: auto         # tints the accent colour only; no longer affects the background
 ```
 
-- `idle_theme` is only a **fallback** for a cold start (HA restarted and nothing has played yet): `auto` (default) derives from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`, now fixing the hue only. After the first song plays it no longer has any effect.
-- `idle_speed` now drives **both** the breathing and the palette swap: `slow` 32s / `normal` 20s / `fast` 12s / `off` holds on the first palette (a full cycle is 160s / 100s / 60s respectively). **The `off` behaviour changed**: the old build still showed 3 drifting spots when paused; the new build rests on the first palette.
-- Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static gradient under `prefers-reduced-motion`.
+- The 5 fixed palettes are **dusk blue / warm brown / moss / violet grey / teal**, hard-coded in the card and independent of the theme.
+- `idle_speed` scales the **seconds each palette holds**: `slow` 32s / `normal` 20s / `fast` 12s, i.e. a full cycle of 160s / 100s / 60s; `off` rests on the first palette. **The `off` behaviour changed**: the old build still showed 3 drifting spots when paused; the new build rests on the first palette.
+- `idle_theme` now controls **only** the hue of the accent colour (icons / progress bar / active pill): `auto` (default) derives it from the HA theme's `--primary-color`; you can also pin `twilight` / `ocean` / `ember` / `forest` / `mono`.
+- The background is a fixed dark gradient (ending on `#14182a`), so the idle state is always rendered as *light-on-dark* and no longer flips to a light base in HA light mode.
+- Animation is paused when the card scrolls out of view, the tab goes to the background, or the queue/media-browser panel is open, and it degrades to a static palette under `prefers-reduced-motion`.
 
 ## How it works
 
