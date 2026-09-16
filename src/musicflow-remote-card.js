@@ -2931,7 +2931,7 @@ class MusicFlowRemoteCard extends LitElement {
       .err { color: #f05672; padding: 12px; }
       .warnbar { padding: 5px 12px; font-size: 12px; color: #b8860b; background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid rgba(255, 180, 0, 0.25); }
       .warnbar.bad { color: #f05672; background: rgba(240, 86, 114, 0.12); border-bottom-color: rgba(240, 86, 114, 0.25); }
-      /* 切换播放器按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
+      /* 流转播放按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
          避免相邻按钮放大后贴在一起。 */
       .outputs { display: flex; flex-wrap: wrap; gap: 12px; }
       .out { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
