@@ -1,0 +1,50 @@
+name: Seek Contract Guard
+
+# 拖动进度条（seek）契约守卫（blocking）。
+#
+# 背景：`_seek` 曾是 `@input` 逐像素直发 POST（一次拖拽数十个 seek，DLNA 在
+# TRANSITIONING 窗内乱序/丢弃）；拖拽中 tick/轮询覆盖手指值；设备型 peer 无
+# reportedAt 导致 2s 轮询必回跳；duration 未知时 seek(0)；尾部越界被拒收。
+# 修完后同样是**静默退化**体质（显示不对、手测易当网络卡），必须在 CI 钉死。
+#
+# 守卫脚本：tools/guard-seek-contract.mjs（已做变异验证：恢复直发形态，
+# 对应用例转红；只查函数在不在不够，要查调用点接线 + dist 产物同步）。
+#
+# 另：构建产物 dist/hass-musicflow-card.js 入仓，守卫同时校验 dist，
+# 防止重演「src 修了、dist 没重建」。
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: seek-contract-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  seek-contract-guard:
+    name: seek contract guard (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 必须先构建：守卫同时校验 dist 产物，防止重演「src 有修复、dist 没重建」。
+      - name: Build dist
+        run: npm run build
+
+      - name: "Guard - 拖动进度条 seek 契约 (src + dist)"
+        run: node tools/guard-seek-contract.mjs
