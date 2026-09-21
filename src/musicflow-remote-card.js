@@ -695,13 +695,14 @@ class MusicFlowRemoteCard extends LitElement {
     if (typeof status.position === "number") {
       // 刚发起过 seek 时跳过"比 seek 更早采样"的上报:客户端此刻上报的仍是**旧位置**
       // (要等它下一个上报周期才回新位置),采纳它会把进度条拽回 seek 之前,过两秒再跳回去
-      // —— 表现为"拖完进度又跳回原位"。窗口上限 6s;无 reportedAt 的设备型 peer 不参与
-      // (它们走实时查询,seek 后立刻就能读到新值,不受影响)。
-      const stale = this._seekIssuedAt > 0
-        && Date.now() - this._seekIssuedAt <= 6000
-        && typeof status.reportedAt === "number"
-        && status.reportedAt < this._seekIssuedAt;
-      if (!stale) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
+      // —— 表现为"拖完进度又跳回原位"。窗口上限 6s。
+      // 设备型 peer 无 reportedAt(走实时查询,旧注释曾认为"seek 后立刻能读新值") ——
+      // 实测 DLNA Seek 生效慢(1s+),2s 轮询读回的仍是旧值,同样回跳;故无 reportedAt 时
+      // 按 6s 时间窗保护(与 local 同窗)。拖拽中(seekDragging)一律不覆盖手指值。
+      const inSeekWindow = this._seekIssuedAt > 0 && Date.now() - this._seekIssuedAt <= 6000;
+      const stale = inSeekWindow &&
+        (typeof status.reportedAt !== "number" || status.reportedAt < this._seekIssuedAt);
+      if (!stale && !this._ui.seekDragging) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
     }
     // 客户端本机实例(local)经 /status 回传的 duration 来自它本地上报,真实可用;
     // 若上报 duration 为 0(旧端/上报空窗),回退到队列快照里当前曲的时长,避免进度条分母恒为 0。
@@ -965,6 +966,8 @@ class MusicFlowRemoteCard extends LitElement {
       }
     }, 2000);
     this._tickTimer = setInterval(() => {
+      // 拖拽 seek 中手指值优先,tick 不推进(否则边拖边涨,跟手打架;对标 volDragging)。
+      if (this._ui.seekDragging) return;
       if (this._ui.isPlaying && this._ui.duration > 0 && this._ui.currentTime < this._ui.duration) {
         this._ui.currentTime = Math.min(this._ui.duration, this._ui.currentTime + 0.25);
         this._updateLyric();
@@ -1275,11 +1278,22 @@ class MusicFlowRemoteCard extends LitElement {
   _seek(e) {
     const pid = this._ui.currentPeerId;
     if (!pid) return;
+    const dur = this._ui.duration || 0;
+    // 分母未知时不发 seek 0(否则「点哪都回开头」):等队列/状态把时长带回来再拖。
+    if (!(dur > 0)) return;
     const pct = Number(e.target.value);
-    const t = (pct / 100) * (this._ui.duration || 0);
+    if (!isFinite(pct)) return;
+    // 越界钳位:拖到 100% 四舍五入超 duration 会让 DLNA 拒收/跳开头,留 0.5s 余量。
+    const t = Math.min(Math.max(0, (pct / 100) * dur), dur - 0.5 > 0 ? dur - 0.5 : dur);
     this._ui.currentTime = t;
-    this._seekIssuedAt = Date.now(); // 丢弃 seek 前采样的上报,避免进度条被拽回
-    this._client.seek(pid, t).catch((err2) => err("seek failed", err2));
+    this._ui.seekDragging = true; // 拖拽中:tick/轮询不覆盖手指值(对标 volDragging)
+    if (this._seekTimer) clearTimeout(this._seekTimer);
+    this._seekTimer = setTimeout(() => {
+      this._seekTimer = null;
+      this._ui.seekDragging = false;
+      this._seekIssuedAt = Date.now(); // 丢弃 seek 前采样的上报,避免进度条被拽回
+      this._client.seek(pid, t).catch((err2) => err("seek failed", err2));
+    }, 250);
     this._updateLyric();
     this.requestUpdate();
   }
