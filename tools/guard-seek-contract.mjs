@@ -112,11 +112,29 @@ check(
 );
 
 // 4) 分母未知时不发 seek（否则点哪都是 seek 0 = 回开头）。
-check(
+// 走 checkFn 而非字面正则：这条早退路径**允许先打一行诊断日志再 return**
+// ——「拖了没反应」最常见的成因就是分母还是 0，静默早退不可观测才是真问题，
+// 所以不能把 `if (!(dur > 0)) return;` 这种排版钉死。要钉的是语义：
+// 「条件成立 → 首个 return」这段路径上不得出现 seek 调用。
+checkFn(
   "duration 未知时直接 return，不发 seek",
   "队列/状态未到就拖 = 无论拖哪都回开头",
-  /if\s*\(!\(dur\s*>\s*0\)\)\s*return;/,
-  /if\(!\(\w+>0\)\)return/,
+  (srcText, distText) => {
+    // 截取「条件判断 → 首个 return」之间的一段，这段即早退路径本体。
+    const earlyExitPath = (text, re) => {
+      const m = text.match(re);
+      if (!m) return null;
+      const seg = text.slice(m.index);
+      const retIdx = seg.indexOf("return");
+      return retIdx < 0 ? null : seg.slice(0, retIdx);
+    };
+    const s = earlyExitPath(srcText, /if\s*\(!\(dur\s*>\s*0\)\)/);
+    const d = earlyExitPath(distText, /if\(!\(\w+>0\)\)/);
+    // 必须真有 return，且它之前不得出现方法调用形态的 seek（`.seek(` 兼容
+    // dist 压缩后 this._client 被重命名的情形）。
+    const ok = (seg) => seg !== null && !seg.includes(".seek(");
+    return { src: ok(s), dist: ok(d) };
+  },
 );
 
 // 5) 尾部钳位：目标不得超过 duration - 0.5s（越界被渲染器拒收/跳开头）。
