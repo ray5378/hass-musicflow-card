@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.5";
+const CARD_VERSION = "2.4.6";
 
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
@@ -268,6 +268,7 @@ class MusicFlowRemoteCard extends LitElement {
     };
     this._tickTimer = null;
     this._pollTimer = null;
+    this._lastFetchStartedAtMs = 0; // 最近一次状态拉取的发起时刻(ms):与 _seekAckAtMs 比较判因果
     this._refreshTimer = null; // 起播强制刷新信号去抖/重试定时器(见 _onPlayerRefresh)
     this._heartbeatTimer = null;
     this._volumeDebounce = null;
@@ -279,6 +280,8 @@ class MusicFlowRemoteCard extends LitElement {
     this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
+    this._seekAckAtMs = 0; // seek REST 响应返回时刻(ms)。服务端 seek 同步语义:响应=锚点已落位,
+    // 故「在此之前发起」的状态拉取数据可能早于 seek → 丢弃(MA 因果判定,无固定窗口)
     this._volumeIssuedAt = 0; // 最近一次下发**音量类**命令(volume / mute)的时刻(ms)
     this._transportIssuedAt = 0; // 最近一次下发**传输类**命令(play / pause)的时刻(ms)
     this._coverObserver = null; // 视口懒加载封面的 IntersectionObserver
@@ -712,15 +715,20 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.isPlaying = transportStale ? this._ui.isPlaying : (statePlaying || advancing);
     if (typeof status.position === "number") this._lastPos = status.position;
     if (typeof status.position === "number") {
-      // 刚发起过 seek 时跳过"比 seek 更早采样"的上报:客户端此刻上报的仍是**旧位置**
-      // (要等它下一个上报周期才回新位置),采纳它会把进度条拽回 seek 之前,过两秒再跳回去
-      // —— 表现为"拖完进度又跳回原位"。窗口上限 6s。
-      // 设备型 peer 无 reportedAt(走实时查询,旧注释曾认为"seek 后立刻能读新值") ——
-      // 实测 DLNA Seek 生效慢(1s+),2s 轮询读回的仍是旧值,同样回跳;故无 reportedAt 时
-      // 按 6s 时间窗保护(与 local 同窗)。拖拽中(seekDragging)一律不覆盖手指值。
-      const inSeekWindow = this._seekIssuedAt > 0 && Date.now() - this._seekIssuedAt <= 6000;
-      const stale = inSeekWindow &&
-        (typeof status.reportedAt !== "number" || status.reportedAt < this._seekIssuedAt);
+      // MA 对齐(2026-09-22 去掉固定 6s 窗):位置陈旧只用两个精确判据 ——
+      // ①因果:seek REST 响应返回(服务端同步语义=锚点已落位)**之前发起**的状态拉取,
+      //   数据可能早于 seek → 丢弃。设备型 peer(DLNA/AirPlay/Sendspin,无 reportedAt)
+      //   只靠这一条:精确、无窗口、无魔法数字。
+      // ②采样:带 reportedAt 的客户端实例,采样时刻早于 seek 下发 → 该上报未含 seek 结果。
+      //   时钟 sanity:reportedAt 与本机偏差 >120s 视为不可信,只按 ① 判定。
+      // 拖拽中(seekDragging)一律不覆盖手指值。
+      const fetchStale = this._seekAckAtMs > 0 && this._lastFetchStartedAtMs > 0 &&
+        this._lastFetchStartedAtMs < this._seekAckAtMs;
+      const sampleStale = this._seekIssuedAt > 0 &&
+        typeof status.reportedAt === "number" &&
+        Math.abs(Date.now() - status.reportedAt) < 120000 &&
+        status.reportedAt < this._seekIssuedAt;
+      const stale = fetchStale || sampleStale;
       if (stale) {
         // debug:被 seek 保护窗挡下的陈旧上报 —— 「拖完进度又跳回原位」的现场。
         // 有这一行 = 上报确实是 seek 之前采的样(正常防护,该挡);
@@ -730,6 +738,10 @@ class MusicFlowRemoteCard extends LitElement {
           reported: status.position,
           reportedAt: status.reportedAt,
           seekIssuedAt: this._seekIssuedAt,
+          seekAckAtMs: this._seekAckAtMs,
+          fetchStartedAtMs: this._lastFetchStartedAtMs,
+          fetchStale,
+          sampleStale,
           ageMs: Date.now() - this._seekIssuedAt,
         });
       } else if (this._ui.seekDragging) {
@@ -950,7 +962,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (!pid) return false;
     try {
       const [status, queue] = await Promise.all([
-        this._client.getStatus(pid),
+        (this._lastFetchStartedAtMs = Date.now(), this._client.getStatus(pid)),
         this._client.getQueue(pid, { size: CHUNK }), // 分块:只同步元数据,队列内容按需窗口化拉取
       ]);
       this._applyStatus(status);
@@ -989,7 +1001,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._pollTimer = setInterval(async () => {
       try {
         const [status, queue] = await Promise.all([
-          this._client.getStatus(pid),
+          (this._lastFetchStartedAtMs = Date.now(), this._client.getStatus(pid)),
           this._client.getQueue(pid, { size: CHUNK }), // 分块:只同步 total/currentIndex,不全量拉
         ]);
         this._applyStatus(status);
@@ -1339,8 +1351,15 @@ class MusicFlowRemoteCard extends LitElement {
       // 说明防抖窗口没吃住最后一次 input。
       dbg("下发 seek", { peer: pid, 目标秒: t, issuedAt: this._seekIssuedAt });
       this._client.seek(pid, t)
-        .then(() => dbg("seek 返回成功", { peer: pid, 目标秒: t, 耗时ms: Date.now() - this._seekIssuedAt }))
-        .catch((err2) => err("seek failed", { peer: pid, 目标秒: t }, err2));
+        .then(() => {
+          this._seekAckAtMs = Date.now(); // 因果屏障:此后发起的拉取必含 seek 结果
+          dbg("seek 返回成功", { peer: pid, 目标秒: t, 耗时ms: Date.now() - this._seekIssuedAt });
+        })
+        .catch((err2) => {
+          this._seekIssuedAt = 0; // seek 失败:服务端未落位,旧位置上报依然有效
+          this._seekAckAtMs = 0;
+          err("seek failed", { peer: pid, 目标秒: t }, err2);
+        });
     }, 250);
     this._updateLyric();
     this.requestUpdate();
