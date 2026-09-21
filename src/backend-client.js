@@ -35,6 +35,23 @@ function error(...args) {
   console.error("[MusicFlow card]", ...args);
 }
 
+/* 调试日志开关(与 musicflow-remote-card.js 同款,共用同一个 localStorage 键)。
+   默认 info:不打 dbg。控制台执行 `localStorage.mfLog = "debug"` 后刷新即打开,
+   或在 URL 后加 `?mfLog=debug`。用于确认 REST 命令(尤其 seek)有没有真的发出去、
+   走的哪种传输(direct/proxy)、后端返回什么 —— 「拖了没反应」的第一手证据。 */
+const MF_LOG_LEVEL = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get("mfLog");
+    if (q) return String(q).toLowerCase();
+    return String(localStorage.getItem("mfLog") || "info").toLowerCase();
+  } catch (_e) {
+    return "info";
+  }
+})();
+function dbg(...args) {
+  if (MF_LOG_LEVEL === "debug") console.debug("[MusicFlow card][dbg]", ...args);
+}
+
 export class BackendClient {
   constructor(opts = {}) {
     this.hass = opts.hass || null;
@@ -158,6 +175,10 @@ export class BackendClient {
         init.body = JSON.stringify(body);
       }
       log("proxy REST", method, path);
+      // debug:命令类请求(POST,如 seek/play/pause)把 body 与耗时一起打出来 ——
+      // 这是「拖动到底有没有到服务端」的第一手证据,和卡片侧 [MF card][dbg] 下发 seek 行配对看。
+      const t0 = Date.now();
+      if (method !== "GET") dbg("REST →", { mode: "proxy", method, path, body });
       let res;
       try {
         res = await this.hass.fetchWithAuth(url, init);
@@ -170,6 +191,7 @@ export class BackendClient {
         error("proxy REST failed", method, path, res.status, text.slice(0, 200));
         throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
       }
+      if (method !== "GET") dbg("REST ←", { mode: "proxy", method, path, status: res.status, ms: Date.now() - t0 });
       this._emit("rest_ok"); // 任何一次 REST 成功都证明"能和服务器通信"
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) {
@@ -187,6 +209,9 @@ export class BackendClient {
       init.body = JSON.stringify(body);
     }
     log("REST", method, url.replace(/token=[^&]+/, "token=***"));
+    // debug:与 proxy 分支同构,直连模式的命令类请求也记录 body/耗时。
+    const t0 = Date.now();
+    if (method !== "GET") dbg("REST →", { mode: "direct", method, path, body });
     let res;
     try {
       res = await fetch(url, init);
@@ -207,6 +232,7 @@ export class BackendClient {
       error("REST failed", method, path, res.status, text.slice(0, 200));
       throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
     }
+    if (method !== "GET") dbg("REST ←", { mode: "direct", method, path, status: res.status, ms: Date.now() - t0 });
     this._emit("rest_ok"); // 任何一次 REST 成功都证明"能和服务器通信"
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) {

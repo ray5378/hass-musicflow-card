@@ -73,6 +73,25 @@ const MF_ICONS = {
 function log(...args) { console.log("[MF card]", ...args); }
 function err(...args) { console.error("[MF card]", ...args); }
 
+/* 调试日志开关(与后端「设置 → 日志等级」对应的前端侧开关)。
+   默认 info:只保留 log/err(控制台干净,等同旧行为)。
+   打开方式(二选一,无需改代码):
+     - 浏览器控制台执行 `localStorage.mfLog = "debug"`,然后刷新页面;
+     - 或在 URL 后加 `?mfLog=debug`(优先级更高,方便临时抓一次)。
+   关闭:`localStorage.removeItem("mfLog")` 后刷新。
+   打开后 dbg() 会打印 seek / 进度回退 / 陈旧上报丢弃等链路细节 —— 拖动进度条
+   出问题时的第一手证据都在这几行里。 */
+const MF_LOG_LEVEL = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get("mfLog");
+    if (q) return String(q).toLowerCase();
+    return String(localStorage.getItem("mfLog") || "info").toLowerCase();
+  } catch (_e) {
+    return "info";
+  }
+})();
+function dbg(...args) { if (MF_LOG_LEVEL === "debug") console.debug("[MF card][dbg]", ...args); }
+
 // HSL → RGB,供封面取色(accent)用:返回 [r,g,b] 0-255。
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -702,6 +721,20 @@ class MusicFlowRemoteCard extends LitElement {
       const inSeekWindow = this._seekIssuedAt > 0 && Date.now() - this._seekIssuedAt <= 6000;
       const stale = inSeekWindow &&
         (typeof status.reportedAt !== "number" || status.reportedAt < this._seekIssuedAt);
+      if (stale) {
+        // debug:被 seek 保护窗挡下的陈旧上报 —— 「拖完进度又跳回原位」的现场。
+        // 有这一行 = 上报确实是 seek 之前采的样(正常防护,该挡);
+        // 拖动后进度仍跳回却**没有**这一行 = 保护窗太短/被绕过,才是真 bug。
+        dbg("丢弃 seek 前陈旧上报", {
+          peer: this._ui.currentPeerId,
+          reported: status.position,
+          reportedAt: status.reportedAt,
+          seekIssuedAt: this._seekIssuedAt,
+          ageMs: Date.now() - this._seekIssuedAt,
+        });
+      } else if (this._ui.seekDragging) {
+        dbg("拖拽中:不覆盖手指值", { peer: this._ui.currentPeerId, finger: this._ui.currentTime, reported: status.position });
+      }
       if (!stale && !this._ui.seekDragging) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
     }
     // 客户端本机实例(local)经 /status 回传的 duration 来自它本地上报,真实可用;
@@ -1013,8 +1046,12 @@ class MusicFlowRemoteCard extends LitElement {
     if (!pid) return;
     if (this._ui.currentTime > 3) {
       this._seekIssuedAt = Date.now(); // 同 _seek:回退到 0 也要丢弃 seek 前采样的上报
-      this._client.seek(pid, 0).then(() => { this._ui.currentTime = 0; this.requestUpdate(); }).catch((e) => err("seek failed", e));
+      // debug:「上一首」在播放 >3s 时退化为 seek 0(而非切歌)—— 这是有意行为,
+      // 用户常误报成「点了上一首没换歌」,日志里要能看到走的是哪条分支。
+      dbg("上一首 → 回退到本曲开头(>3s)", { peer: pid, 位置: this._ui.currentTime });
+      this._client.seek(pid, 0).then(() => { this._ui.currentTime = 0; this.requestUpdate(); }).catch((e) => err("seek failed", { peer: pid, 目标秒: 0 }, e));
     } else {
+      dbg("上一首 → 切歌(≤3s)", { peer: pid, 位置: this._ui.currentTime });
       this._client.prev(pid).catch((e) => err("prev failed", e));
     }
   }
@@ -1280,11 +1317,17 @@ class MusicFlowRemoteCard extends LitElement {
     if (!pid) return;
     const dur = this._ui.duration || 0;
     // 分母未知时不发 seek 0(否则「点哪都回开头」):等队列/状态把时长带回来再拖。
-    if (!(dur > 0)) return;
+    if (!(dur > 0)) {
+      dbg("seek 忽略:时长未知(分母为 0)", { peer: pid, pct: e.target.value });
+      return;
+    }
     const pct = Number(e.target.value);
     if (!isFinite(pct)) return;
     // 越界钳位:拖到 100% 四舍五入超 duration 会让 DLNA 拒收/跳开头,留 0.5s 余量。
     const t = Math.min(Math.max(0, (pct / 100) * dur), dur - 0.5 > 0 ? dur - 0.5 : dur);
+    // debug:手指落点 vs 实际下发值(钳位后)。两者不一致时,说明是尾部余量在起作用 ——
+    // 用户会感觉「拖到最右却没到最后」,这不是 bug 而是有意为之,日志里要能看出来。
+    dbg("拖动", { peer: pid, pct, duration: dur, 手指秒: (pct / 100) * dur, 钳位后: t });
     this._ui.currentTime = t;
     this._ui.seekDragging = true; // 拖拽中:tick/轮询不覆盖手指值(对标 volDragging)
     if (this._seekTimer) clearTimeout(this._seekTimer);
@@ -1292,7 +1335,12 @@ class MusicFlowRemoteCard extends LitElement {
       this._seekTimer = null;
       this._ui.seekDragging = false;
       this._seekIssuedAt = Date.now(); // 丢弃 seek 前采样的上报,避免进度条被拽回
-      this._client.seek(pid, t).catch((err2) => err("seek failed", err2));
+      // debug:实际下发的一刻(250ms 防抖收敛后)。连拖时这行的 t 若与手指终点不符,
+      // 说明防抖窗口没吃住最后一次 input。
+      dbg("下发 seek", { peer: pid, 目标秒: t, issuedAt: this._seekIssuedAt });
+      this._client.seek(pid, t)
+        .then(() => dbg("seek 返回成功", { peer: pid, 目标秒: t, 耗时ms: Date.now() - this._seekIssuedAt }))
+        .catch((err2) => err("seek failed", { peer: pid, 目标秒: t }, err2));
     }, 250);
     this._updateLyric();
     this.requestUpdate();
