@@ -39,6 +39,23 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
 const CARD_VERSION = "2.4.7";
 
+// 拖动 seek 目标的精度契约 ——「最小粒度 1 秒」(2026-09-22 事故沉淀)。
+//
+// 服务端 sendspin 流式引擎按 **25ms 帧栅格**取帧(lo = floor(pos/25) * 2400 样点),而
+// 滑动窗口的基准是「毫秒 → 样本」换算。**只有目标落在 25ms 整数倍上两者才严格相等**;
+// 否则子进程每轮取帧都判淘汰、游标却不前进 → 纯微任务自旋 → 事件循环饿死 → 心跳超时
+// 被 65s 看门狗 SIGKILL(现场:拖动进度条后播放静默死掉,而客户端正常 —— 因为客户端
+// 下发的是 Duration.inSeconds(整秒),1000 / 25 = 40,整秒必然是 25ms 的整数倍)。
+//
+// 故卡片所有拖拽 seek 目标一律整秒,与客户端 inSeconds 同语义(向下取整)。服务端
+// /v1/peers/:peerId/seek 入口另有兜底,但契约要求**这里就发整秒**(最外层守卫)。
+// 守卫:tools/guard-seek-contract.mjs 的「精度」规则(同时校验 src 与 dist)。
+const SEEK_GRANULARITY_SEC = 1;
+function alignSeekSeconds(seconds) {
+  if (!Number.isFinite(seconds)) return 0;
+  return Math.max(0, Math.floor(seconds / SEEK_GRANULARITY_SEC) * SEEK_GRANULARITY_SEC);
+}
+
 // lucide 24x24 图标内容(stroke 风格,与 MusicFlow 主项目 MfIcon 同源)
 const MF_ICONS = {
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
@@ -1341,10 +1358,14 @@ class MusicFlowRemoteCard extends LitElement {
     const pct = Number(e.target.value);
     if (!isFinite(pct)) return;
     // 越界钳位:拖到 100% 四舍五入超 duration 会让 DLNA 拒收/跳开头,留 0.5s 余量。
-    const t = Math.min(Math.max(0, (pct / 100) * dur), dur - 0.5 > 0 ? dur - 0.5 : dur);
-    // debug:手指落点 vs 实际下发值(钳位后)。两者不一致时,说明是尾部余量在起作用 ——
-    // 用户会感觉「拖到最右却没到最后」,这不是 bug 而是有意为之,日志里要能看出来。
-    dbg("拖动", { peer: pid, pct, duration: dur, 手指秒: (pct / 100) * dur, 钳位后: t });
+    const clamped = Math.min(Math.max(0, (pct / 100) * dur), dur - 0.5 > 0 ? dur - 0.5 : dur);
+    // ★ 精度守卫(最小粒度 1 秒):见 alignSeekSeconds 的硬约束。乐观值 _ui.currentTime
+    //   必须与下发值同源 —— 否则轮询一回就比手指值小,进度条会被拽回。
+    const t = alignSeekSeconds(clamped);
+    // debug:手指落点 vs 实际下发值。三者不一致时,前两段差值是尾部 0.5s 余量在起作用,
+    // 后两段差值是 1 秒粒度在起作用 —— 用户会感觉「拖到最右却没到最后」,有意为之,
+    // 日志里要能一眼分清是哪一层。
+    dbg("拖动", { peer: pid, pct, duration: dur, 手指秒: (pct / 100) * dur, 钳位后: clamped, 下发: t });
     this._ui.currentTime = t;
     this._ui.seekDragging = true; // 拖拽中:tick/轮询不覆盖手指值(对标 volDragging)
     if (this._seekTimer) clearTimeout(this._seekTimer);

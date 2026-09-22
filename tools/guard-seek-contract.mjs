@@ -10,6 +10,11 @@
  * 它们的共同点和 client-link 一样是**静默退化**：不报错，只是拖不动/跳变，
  * 手测易当成"网络卡"，所以在 CI 钉死。只查"函数在不在"不够，要查调用点接线。
  *
+ * 追加(2026-09-22):「精度」规则 —— 下发目标必须整秒(最小粒度 1 秒)。
+ *   非整秒目标会让服务端 sendspin 子进程按 25ms 帧栅格取帧时与窗口的毫秒基准
+ *   错位，陷入纯微任务自旋被 65s 看门狗 SIGKILL(拖完进度条播放静默死掉，
+ *   而客户端(下发整秒)一直正常)。
+ *
  * 用法：node tools/guard-seek-contract.mjs
  * （先 npm run build，dist 同步校验，防止 src 修了 dist 没重建。）
  */
@@ -159,6 +164,39 @@ check(
   "不清 = 新歌开头被旧 seek 窗屏蔽,进度冻住不动",
   /if\s*\(changed\s*&&\s*song\.songId\)\s*\{[^}]*_seekIssuedAt\s*=\s*0/s,
   /_seekIssuedAt=0,this\._seekAckAtMs=0/,
+);
+
+// 7) 精度(最小粒度 1 秒,2026-09-22 事故):下发目标必须是整秒。
+//
+// 背景:服务端 sendspin 流式引擎按 25ms 帧栅格取帧(lo = floor(pos/25)*2400),
+// 窗口基准却是「毫秒 → 样本」换算 —— 只有目标为 25ms 整数倍时两者相等。整秒必然
+// 满足(1000 / 25 = 40);而卡片下发的是 (pct/100)*duration 的浮点值(如 31.178),
+// 会让子进程每轮取帧都判淘汰、游标却不前进 → 纯微任务自旋 → 事件循环饿死 →
+// 心跳超时被 65s 看门狗 SIGKILL(现场=「拖完进度条播放静默死掉,客户端却正常」)。
+//
+// 已做变异验证:把 `const t = alignSeekSeconds(clamped)` 改回 `= clamped`,本用例转红。
+checkFn(
+  "seek 下发目标经整秒对齐(最小粒度 1 秒)",
+  "非整秒目标 = 子进程微任务自旋被看门狗强杀(拖完进度条播放静默死掉,手测易当网络卡)",
+  (srcText, distText) => {
+    // src:① 对齐函数在,且实现为向下取整;② _seek 里的目标值由它产出
+    // (乐观值 _ui.currentTime 与下发值同源,否则轮询一回就把手指值拽回)。
+    const srcFn = srcText.match(/_seek\(e\)\s*\{[\s\S]*?\n  \}/);
+    const src = !!srcFn
+      && /function alignSeekSeconds\s*\(/.test(srcText)
+      && /SEEK_GRANULARITY_SEC\s*=\s*1\b/.test(srcText)
+      && /const t = alignSeekSeconds\(/.test(srcFn[0]);
+    // dist:rollup+terser 会把对齐器内联折叠(常量 1 折叠后只剩 Math.floor),
+    // 名字也被 mangle,故这里查**形态**而不是名字:
+    //   ① 钳位之后的目标值必须是**某个函数调用**的返回值(不是裸的钳位值);
+    //   ② 产物里存在整秒对齐的折叠体(Math.max(0, Math.floor(...)))。
+    // 目的:挡住「src 修了、dist 没重建」—— 该仓库 dist 入仓,漏重建会静默退化。
+    const distFn = distText.match(/_seek\(e\)\{[\s\S]*?\},250\)/);
+    const dist = !!distFn
+      && /=\s*Math\.min\(Math\.max\(0,[\s\S]{0,80}?\),\w+=\w+\(\w+\)/.test(distFn[0])
+      && /Math\.max\(0,Math\.floor\(/.test(distText);
+    return { src, dist };
+  },
 );
 
 let failed = 0;
