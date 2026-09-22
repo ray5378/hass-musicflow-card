@@ -102,13 +102,20 @@ check(
   /!this\._ui\.seekDragging/,
 );
 
-// 3) 设备型 peer 回跳：无 reportedAt 时按时间窗保护（DLNA Seek 生效慢，
-//    实时查询读回的仍是旧值；旧实现要求 reportedAt<number> 才保护 = 设备永不保护）。
+// 3) seek 保护用 MA 因果判定(无固定窗口,2026-09-22 改制):
+// ①fetchStale:seek 响应返回之前发起的拉取一律丢弃(设备型 peer 唯一判据);
+// ②sampleStale:reportedAt 早于下发时刻的采样丢弃。拖拽中一律不覆盖。
 check(
-  "seek 保护窗覆盖无 reportedAt 的设备型 peer",
-  "只保 local = DLNA 拖后 2s 内必回跳一次",
-  /typeof\s+status\.reportedAt\s*!==\s*"number"\s*\|\|/,
-  /typeof\s+\w+\.reportedAt\s*!=\s*"number"\s*\|\|/,
+  "fetchStale:响应返回前发起的拉取丢弃(设备型 peer 判据)",
+  "无此条 = DLNA 拖后,响应前的在途拉取把旧位置写回来",
+  /_lastFetchStartedAtMs\s*<\s*this\._seekAckAtMs/,
+  /_lastFetchStartedAtMs\s*<\s*\w+\._seekAckAtMs/,
+);
+check(
+  "sampleStale:reportedAt 早于下发时刻的采样丢弃",
+  "无此条 = 客户端实例的滞后上报把手指值顶回去",
+  /status\.reportedAt\s*<\s*this\._seekIssuedAt/,
+  /reportedAt<this\._seekIssuedAt/,
 );
 
 // 4) 分母未知时不发 seek（否则点哪都是 seek 0 = 回开头）。
@@ -143,6 +150,15 @@ check(
   "拖到 100% 四舍五入超 duration = DLNA 拒收或跳开头",
   /dur\s*-\s*0\.5/,
   /-\.5>0\?/,
+);
+
+// 6) 换歌清 seek 标记:旧目标/窗口属于上一首,新歌开头的正常 0 采样若被
+// 旧窗口屏蔽会冻住进度。新歌与 seek 紧邻到达时必现,属高频回归点。
+check(
+  "换歌时清 seek 标记(issued/ack/dragging)",
+  "不清 = 新歌开头被旧 seek 窗屏蔽,进度冻住不动",
+  /if\s*\(changed\s*&&\s*song\.songId\)\s*\{[^}]*_seekIssuedAt\s*=\s*0/s,
+  /_seekIssuedAt=0,this\._seekAckAtMs=0/,
 );
 
 let failed = 0;

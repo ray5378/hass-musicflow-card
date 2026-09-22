@@ -932,6 +932,11 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.song = song;
     if (changed && song.songId) {
       this._lastPos = -1; // 换歌重置前进基线,避免沿用上一首进度误判播放态
+      // 换歌清 seek 标记:旧目标/窗口属于上一首,否则新歌开头的正常 0 采样会被
+      // 当成"未落位"屏蔽(进度冻住)或旧目标污染显示。失败路径同理已清零。
+      this._seekIssuedAt = 0;
+      this._seekAckAtMs = 0;
+      this._ui.seekDragging = false;
       this._ui.accentRgb = null; // 换歌重置强调色,新封面加载后自动更新
       this._ui.lyrics = [];
       this._ui.currentLyric = "";
