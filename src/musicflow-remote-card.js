@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.8";
+const CARD_VERSION = "2.4.9";
 
 // 拖动 seek 目标的精度契约 ——「最小粒度 1 秒」(2026-09-22 事故沉淀)。
 //
@@ -1048,6 +1048,48 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
   }
 
+  // 进度百分比:进度条的**填充**(内联 linear-gradient)与**小圆点**(range 的 thumb)
+  // 必须同源。两处各算一遍就会各自跑偏 —— 这正是 2026-09-23 那次事故的形态,
+  // 故这里收敛成唯一来源,渲染与回写都调它。
+  _progressPct() {
+    const dur = this._ui.duration || 0;
+    if (!(dur > 0)) return 0;
+    return (this._ui.currentTime / dur) * 100;
+  }
+
+  // 进度小圆点回写(2026-09-23 事故修复)。
+  //
+  // 事故:拖/点过进度条之后,**填充条继续前进,小圆点却永远停在手指松开的位置**。
+  // 根因:模板写的是 `<input type=range value="${prog}">` —— 这是**属性**绑定,属性只
+  //   写 defaultValue。按 HTML 规范,value 内容属性**仅在脏值标志(dirty value flag)
+  //   为假时**才同步到控件的当前值,而 range 一经用户交互(拖动/点击)即置位该标志,
+  //   于是此后所有属性写入被忽略 ⇒ 小圆点冻结;填充条走的是内联 style 渐变(不受脏值
+  //   标志影响)⇒ 两者分道扬镳。真实 Chromium 实测三连:
+  //     ①全新元素 + 只改属性 60 → 60(首次渲染生效,故平时看不出问题)
+  //     ②拖过一手 + 改属性 60   → 仍停在 40(失效 = 事故现场)
+  //     ③拖过一手 + 改 property 60 → 60(改用 property 即恢复)
+  // 修法:渲染后把**同一个** _progressPct() 用 **property** 写回 input(不走属性),
+  //   让填充与圆点恒同源。注解:属性绑定留在模板里做首帧默认值,无冲突 —— 对脏元素
+  //   它是 no-op,真正的驱动是这里这次 property 回写。
+  // 拖拽中不写:手指即权威(_seek 已把 _ui.currentTime 同步成手指值),此时回写零收益,
+  //   反而可能与指针抢位(部分浏览器拖动中回写会重置拖拽基准)。
+  _syncSeekThumb() {
+    const el = this.shadowRoot && this.shadowRoot.querySelector(".seek");
+    if (!el) return;
+    if (this._ui.seekDragging) return; // 手指优先,见上方说明
+    const prog = this._progressPct();
+    // range 会按 step 归一化(step=0.1),字符串不等不代表位置不同 → 用数值比较,
+    // 差值小于半个 step 就不写,避免每 250ms tick 都做一次无意义的 DOM 写入。
+    const cur = Number(el.value);
+    if (Number.isFinite(cur) && Math.abs(cur - prog) <= 0.05) return;
+    el.value = String(prog);
+    // 静默退化的可观测性:差值明显(>1%,约 1.5s 画面)才记一行 —— 正常跟随时不刷屏,
+    // 真出问题时这行会指认「圆点与期望值脱节」,而不是让用户当成画面卡顿。
+    if (Math.abs(cur - prog) > 1) {
+      dbg("进度圆点回写", { 圆点: cur, 期望: prog, currentTime: this._ui.currentTime, duration: this._ui.duration });
+    }
+  }
+
   // 心跳:卡片是「遥控器」,自身不会注册成 local peer,故无需对任何 peer 发心跳。
   // 关键:绝不能为当前选中的客户端本机实例代发心跳 —— 在线状态由客户端自身上报维持;
   // 卡片代发等于「保活」一台可能已挂掉的客户端,使其一直被误显示为在线、无法自动下线。
@@ -1372,6 +1414,10 @@ class MusicFlowRemoteCard extends LitElement {
     this._seekTimer = setTimeout(() => {
       this._seekTimer = null;
       this._ui.seekDragging = false;
+      // 拖拽结束立刻重渲染一次,让 _syncSeekThumb 把圆点对齐到权威值(整秒对齐后可能与
+      // 手指终点差不到 1s)。不写这行也能跟上,但要等下一个 tick/轮询(最差 2s),期间
+      // 圆点停在手指处 —— 观感与本次事故一样,不留这个窗口。
+      this.requestUpdate();
       this._seekIssuedAt = Date.now(); // 丢弃 seek 前采样的上报,避免进度条被拽回
       // debug:实际下发的一刻(250ms 防抖收敛后)。连拖时这行的 t 若与手指终点不符,
       // 说明防抖窗口没吃住最后一次 input。
@@ -1777,6 +1823,9 @@ class MusicFlowRemoteCard extends LitElement {
     this._updatedMiniWatch();
     // 未播放态流动底色:同步暂停态(不可见 / 后台 tab / 面板打开)。
     this._syncIdleAmbient();
+    // 进度小圆点跟随(2026-09-23):range 的 value 属性绑定首次交互后即失效,必须每次
+    // 渲染后用 property 回写同一个百分比 —— 否则「填充条在动、圆点留在原地」。
+    this._syncSeekThumb();
   }
 
   render() {
@@ -1788,7 +1837,8 @@ class MusicFlowRemoteCard extends LitElement {
     }
     const u = this._ui;
     const song = u.song;
-    const prog = u.duration > 0 ? (u.currentTime / u.duration) * 100 : 0;
+    // 填充与圆点共用同一百分比来源(_progressPct),不得各算一遍(见 _syncSeekThumb)。
+    const prog = this._progressPct();
     // 未播放态固定配色底色:无封面时接管底色(与 .coverbg 互斥),并让 --acc 落到柔色,
     // 使图标/进度条/选中态与底色同一色系,而不是突兀的纯白。
     const idleOn = this._idleAmbientOn();
@@ -1839,6 +1889,8 @@ class MusicFlowRemoteCard extends LitElement {
 
             <div class="progress-row">
               <span class="t">${this._fmtTime(u.currentTime)}</span>
+              <!-- value= 只作首帧默认值:range 一经用户交互,属性写入即被忽略(脏值标志),
+                   实时跟随由 _syncSeekThumb() 在 updated() 里按 property 回写,勿改回属性驱动 -->
               <input class="seek" type="range" min="0" max="100" step="0.1" value="${prog}"
                 style="background: linear-gradient(90deg, rgb(var(--acc)) ${prog}%, var(--seek-bg) ${prog}%)"
                 @input=${this._seek} />

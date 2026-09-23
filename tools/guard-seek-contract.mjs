@@ -15,6 +15,11 @@
  *   错位，陷入纯微任务自旋被 65s 看门狗 SIGKILL(拖完进度条播放静默死掉，
  *   而客户端(下发整秒)一直正常)。
  *
+ * 追加(2026-09-23):「跟手可见性」规则 —— 进度小圆点必须按 property 回写。
+ *   `value="${prog}"` 是**属性**绑定,属性只写 defaultValue;range 一经用户交互即置位
+ *   脏值标志,此后属性写入被忽略 ⇒ 拖动之后小圆点永久冻结,而填充条(内联 style 渐变)
+ *   照常前进。真实 Chromium 复现见下方用例 8 注释。属纯静默回归,故入 CI。
+ *
  * 用法：node tools/guard-seek-contract.mjs
  * （先 npm run build，dist 同步校验，防止 src 修了 dist 没重建。）
  */
@@ -195,6 +200,61 @@ checkFn(
     const dist = !!distFn
       && /=\s*Math\.min\(Math\.max\(0,[\s\S]{0,80}?\),\w+=\w+\(\w+\)/.test(distFn[0])
       && /Math\.max\(0,Math\.floor\(/.test(distText);
+    return { src, dist };
+  },
+);
+
+// 8) 滑块圆点必须与填充条同源(2026-09-23 事故):拖过进度条后小圆点冻结。
+//
+// 背景:模板 `value="${prog}"` 是**属性**绑定,属性只写 defaultValue;按 HTML 规范,
+// value 内容属性**仅在脏值标志(dirty value flag)为假时**才同步到控件当前值,而
+// range 一经用户交互(拖动/点击)即置位该标志 ⇒ 首次交互之后所有属性写入被忽略,
+// 小圆点永远停在手指松开处;填充条走内联 style 渐变(不受脏值标志影响)⇒ 现场即
+// 「填充条在动、小圆点留在原地」。真实 Chromium 实测三连:
+//   ①全新元素 + 只改属性 60 → 60(首次渲染本来就生效,故平时看不出问题)
+//   ②拖过一手 + 改属性 60   → 仍停在 40(失效 = 事故现场)
+//   ③拖过一手 + 改 property 60 → 60(改用 property 即恢复)
+//
+// 该回归同样是**纯静默**体质(不报错、不跳变,只是不动),手测极易当成渲染卡顿,
+// 故在 CI 钉死四件事:
+//   ① 渲染后按 **property** 回写(只在模板里改属性 = 没修);
+//   ② 回写在 updated() 生命周期里接线(定义了不调用 = 等于没修);
+//   ③ 拖拽中不回写(与指针抢位);
+//   ④ 填充与圆点取自**同一个**百分比函数(两处各算一遍就会再次走偏)。
+checkFn(
+  "进度圆点按 property 回写,且与填充条同源",
+  "range 的 value 属性绑定在首次交互后失效 = 圆点冻结、填充条独走(纯静默,手测易当渲染卡顿)",
+  (srcText, distText) => {
+    const fn = srcText.match(/_syncSeekThumb\(\)\s*\{[\s\S]*?\n  \}/);
+    // ④ 同源函数在,且**渲染侧**确实调它 —— 必须锚在 render() 里:
+    //    _syncSeekThumb 体内也有一行同样的取值,不锚住就会把「渲染侧退回各算一遍」
+    //    误判成通过(变异验证时发现的假绿)。区域取 render() 到下一个方法之间。
+    const rs = srcText.indexOf("\n  render() {");
+    const re = srcText.indexOf("\n  _renderOutputs()");
+    const renderRegion = rs >= 0 && re > rs ? srcText.slice(rs, re) : "";
+    const src = !!fn
+      && /_progressPct\(\)\s*\{/.test(srcText)
+      && !!renderRegion && /const prog = this\._progressPct\(\)/.test(renderRegion)
+      // ① 回写走的是 property(给 input 的 .value 赋值),不是 setAttribute
+      && /\.value\s*=\s*String\(/.test(fn[0])
+      // ④b 回写侧的值也必须取自同一个 _progressPct(自己再算一遍 = 又埋一个真相)
+      && /this\._progressPct\(\)/.test(fn[0])
+      // ③ 拖拽中直接 return,不写
+      && /if\s*\(this\._ui\.seekDragging\)\s*return;/.test(fn[0])
+      // ② updated() 里有接线
+      && /updated\(\)\s*\{[\s\S]*?this\._syncSeekThumb\(\)/.test(srcText);
+    // dist:esbuild minify 只 mangle 局部变量,成员名(属性)保留 → 可按名字查形态;
+    // 局部变量名会被 mangle,故 property 回写只查形态 `.value=`。
+    // 渲染侧同源用**出现次数**判:定义 + 渲染调用 + 回写调用 = 3 处,少一处即说明
+    // 有人把其中一侧改回各算一遍(名字被 mangle,无法按上下文定位)。
+    const at = distText.indexOf("_syncSeekThumb(){");
+    const win = at >= 0 ? distText.slice(at, at + 800) : "";
+    const pctUses = (distText.match(/_progressPct/g) || []).length;
+    const dist = !!distText
+      && at >= 0                                   // 方法本体在产物里
+      && /this\._syncSeekThumb\(\)/.test(distText)  // 且被调用(接线)
+      && pctUses >= 3                               // 同源:定义 + 渲染侧 + 回写侧
+      && /\.value=/.test(win);                      // property 回写在方法体内
     return { src, dist };
   },
 );
