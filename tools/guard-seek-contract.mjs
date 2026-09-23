@@ -83,7 +83,9 @@ checkFn(
   (srcText, distText) => {
     const srcFn = srcText.match(/_seek\(e\)\s*\{[\s\S]*?\n  \}/);
     const srcHead = srcFn ? srcFn[0].split("setTimeout")[0] : "";
-    const distFn = distText.match(/_seek\(e\)\{[\s\S]*?\},250\)/);
+    // dist 侧参数名是 terser **按需分配**的(曾恒为 e,新增方法后漂到 t):
+    // 钉死 `e` 会因无关代码增删而假红 ⇒ 只约束「单参数」这一形态。
+    const distFn = distText.match(/_seek\(\w+\)\{[\s\S]*?\},250\)/);
     const distHead = distFn ? distFn[0].split("setTimeout")[0] : "";
     return {
       src: srcHead.length > 0 && !srcHead.includes("_client.seek"),
@@ -196,7 +198,9 @@ checkFn(
     //   ① 钳位之后的目标值必须是**某个函数调用**的返回值(不是裸的钳位值);
     //   ② 产物里存在整秒对齐的折叠体(Math.max(0, Math.floor(...)))。
     // 目的:挡住「src 修了、dist 没重建」—— 该仓库 dist 入仓,漏重建会静默退化。
-    const distFn = distText.match(/_seek\(e\)\{[\s\S]*?\},250\)/);
+    // dist 侧参数名是 terser **按需分配**的(曾恒为 e,新增方法后漂到 t):
+    // 钉死 `e` 会因无关代码增删而假红 ⇒ 只约束「单参数」这一形态。
+    const distFn = distText.match(/_seek\(\w+\)\{[\s\S]*?\},250\)/);
     const dist = !!distFn
       && /=\s*Math\.min\(Math\.max\(0,[\s\S]{0,80}?\),\w+=\w+\(\w+\)/.test(distFn[0])
       && /Math\.max\(0,Math\.floor\(/.test(distText);
