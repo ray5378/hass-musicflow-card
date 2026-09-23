@@ -34,25 +34,46 @@ jobs:
             exit 1;
           }
 
+      # 版本号**只从 tag 解析**,不用 github.ref_name 当版本号:
+      # ref_name 在分支推送时等于 "main",直接拿它当版本会把分支名发成版本号。
+      # 这里强制必须由 vX.Y.Z 数字 tag 触发,并二次校验三段数字。
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::发布必须由数字版本 tag (vX.Y.Z) 触发,当前 ref=$GITHUB_REF(拒绝 main/分支名版本)"
+            exit 1
+          fi
+          tag="${GITHUB_REF#refs/tags/}"
+          ver="${tag#v}"
+          if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '$tag' 不是数字版本号(vX.Y.Z)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "::notice::本次发布版本 $tag"
+
       - name: Remove any pre-existing release for this tag
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            echo "::notice::existing release for ${{ github.ref_name }} found - deleting it so the current notes are applied"
-            gh release delete "${{ github.ref_name }}" --yes
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::notice::existing release for $RELEASE_TAG found - deleting it so the current notes are applied"
+            gh release delete "$RELEASE_TAG" --yes
           else
-            echo "no existing release for ${{ github.ref_name }}"
+            echo "no existing release for $RELEASE_TAG"
           fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
           body: |
-            ## MusicFlow 卡片 ${{ github.ref_name }} — 进度条小圆点跟随修复
+            ## MusicFlow 卡片 ${{ steps.ver.outputs.tag }} — 进度条小圆点跟随修复
 
             本版修复：**拖动 / 点击进度条之后，填充条继续前进，但小圆点永远停在手指松开的位置**。
 
