@@ -41,6 +41,8 @@ const en = {
   "outputs.selfDevice": "This device",
   "outputs.client": "MusicFlow client",
   "outputs.device": "Playback device",
+  "outputs.groupJoin": "Join this group",
+  "outputs.groupLeave": "Leave this group",
   "errors.likeFailed": "Like operation failed (possible proxy channel issue or not connected), please retry.",
   "card.description": "External controller for the MusicFlow server: realtime sync of playback, queue, lyrics, playlists and favorites.",
   "browser.search": "Search…",

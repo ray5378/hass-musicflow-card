@@ -245,6 +245,8 @@ class MusicFlowRemoteCard extends LitElement {
   constructor() {
     super();
     this._client = null;
+    // 群组管理模式下被选群组的成员键集合(sendspin:<clientId> / 裸 dlna id)。
+    this._groupMembers = new Set();
     this._ready = false;
     this._ui = {
       error: "",
@@ -252,6 +254,9 @@ class MusicFlowRemoteCard extends LitElement {
       serverOk: false,
       peers: [],
       currentPeerId: "",
+      // 群组管理模式:被点选的群组 peerId(null = 未进入)。进入后每个设备
+      // output 旁出现 +/− 徽标(组内 − / 组外 +),点击即加入/退出该组。
+      groupManage: null,
       queue: { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false },
       // 队列虚拟滚动状态:稀疏缓存(Map idx→item)+ 已加载/加载中块集合 + 渲染窗口
       qCache: new Map(),
@@ -403,7 +408,7 @@ class MusicFlowRemoteCard extends LitElement {
       .then((res) => {
         this._ui.serverOk = true;
         this._ui.wsState = "rest"; // WS 断但 REST 通:兜底模式
-        const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false);
+        const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false || p.kind === "group");
         if (peers.length) {
           this._ui.peers = peers;
           this._ensurePeerSelected();
@@ -460,15 +465,18 @@ class MusicFlowRemoteCard extends LitElement {
   // 本卡片控制后端驱动的播放器:DLNA 设备、AirPlay 设备、Sendspin 客户端,以及
   // MusicFlow 客户端本机实例(安卓 / Windows,kind==="local" 且非 web 平台)。
   // 服务端 decoratePeersForClient 已对其它端隐藏 web 行(Web 不再作为被遥控目标),
-  // 这里再以 platform!=="web" 保险一次;group 暂不在卡片播放器列表展示。
+  // 这里再以 platform!=="web" 保险一次;group 是「容器」型播放器,照常展示
+  // (点它进群组管理模式加减成员)。
   _isControllablePeer(p) {
     if (!p) return false;
     if (typeof p.peerId === "string") {
+      if (p.peerId.startsWith("group:")) return true;
       if (p.peerId.startsWith("dlna:") || p.peerId.startsWith("airplay:") || p.peerId.startsWith("sendspin:")) return true;
       if (p.peerId.startsWith("local:")) return p.platform !== "web";
       return false;
     }
     const k = p.kind || "";
+    if (k === "group") return true;
     if (k === "dlna" || k === "airplay" || k === "sendspin") return true;
     if (k === "local") return p.platform !== "web";
     return false;
@@ -477,10 +485,26 @@ class MusicFlowRemoteCard extends LitElement {
     return (peers || []).filter((p) => this._isControllablePeer(p));
   }
 
+  /** 展示序(与客户端 / Web 同一口径):**正在播的排前面**;同为在播或同为闲置时
+   *  按 **客户端本机 > 群组 > 独立播放器**;再相同按名称。
+   *  「正在播」取服务端 queue.isActive —— 多台设备一起响时,在播的先看得到。 */
+  _sortPeersForDisplay(list) {
+    const playing = (p) => ((p && p.queue && p.queue.isActive) ? 0 : 1);
+    const rank = (p) => (p && p.kind === "local" ? 0 : p && p.kind === "group" ? 1 : 2);
+    return [...(list || [])].sort((a, b) => {
+      const d = playing(a) - playing(b);
+      if (d) return d;
+      const k = rank(a) - rank(b);
+      if (k) return k;
+      return String((a && a.name) || "").localeCompare(String((b && b.name) || ""));
+    });
+  }
+
   _applyPeerSnapshot(peers) {
     // 只显示在线可控播放器(DLNA 设备 + 客户端本机实例;离线由 _upsertPeer 移除,此处过滤兜底)。
-    const list = this._filterControllable(peers).filter((p) => p.available !== false);
-    this._ui.peers = list;
+    // 群组是「容器」:成员全离线也不剪掉,否则管理模式入口消失、空组没法加减成员。
+    const list = this._filterControllable(peers).filter((p) => p.available !== false || p.kind === "group");
+    this._ui.peers = this._sortPeersForDisplay(list);
     const pinned = this._resolveDefaultPeerId(list);
     if (!this._ui.currentPeerId || pinned) {
       const preferred = pinned && list.find((p) => p.peerId === pinned);
@@ -970,9 +994,10 @@ class MusicFlowRemoteCard extends LitElement {
 
   _refreshPeers() {
     this._client.getPeers().then((res) => {
-      const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false);
+      // 群组是容器:成员全离线也不剪(与 _applyPeerSnapshot 同口径)。
+      const peers = this._filterControllable(res?.peers || []).filter((p) => p.available !== false || p.kind === "group");
       if (peers.length) {
-        this._ui.peers = peers;
+        this._ui.peers = this._sortPeersForDisplay(peers);
         this._ensurePeerSelected();
         this.requestUpdate();
       }
@@ -1908,21 +1933,94 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _renderOutputs() {
-    // 兜底过滤:任何路径进来的离线设备都不渲染。
-    const peers = (this._ui.peers || []).filter((p) => p.available !== false);
+    // 兜底过滤:任何路径进来的离线设备都不渲染;群组是「容器」,成员全离线也保留
+    // (否则管理模式入口消失,空组没法加减成员)。
+    const peers = (this._ui.peers || []).filter((p) => p.available !== false || p.kind === "group");
     if (!peers.length) return html`<div class="outputs"><span class="hint">${this._t("browser.noPlayer")}</span></div>`;
+    const managing = this._ui.groupManage;
     return html`
       <div class="outputs">
-        ${peers.map((p) => html`
-          <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"}"
-            title="${this._peerTitle(p)}"
-            @click=${() => this._selectPeer(p.peerId)}>
-            ${this._icon(this._peerIcon(p), 16)} ${this._peerLabel(p)}
-          </button>
-        `)}
+        ${peers.map((p) => {
+          const isGroup = p.kind === "group";
+          // 管理模式下,设备型成员(dlna/sendspin)底下出现 +/− 徽标;
+          // 本机/airplay/其它不参与(服务端组成员只有 dlna/sendspin 命名空间)。
+          const showBadge = !!managing && !isGroup && (p.kind === "dlna" || p.kind === "sendspin");
+          const member = this._isGroupMember(p);
+          // 勾选圈:始终渲染 ✓ 字形,未加入时着色为透明(仅留空心圈),
+          // 加入后 accent 实心 + 白色 ✓ —— 与 Web / 客户端一致。
+          return html`
+            <div class="out-wrap">
+              <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"} ${managing === p.peerId ? "managing" : ""}"
+                title="${this._peerTitle(p)}"
+                @click=${() => (isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId))}>
+                ${this._icon(this._peerIcon(p), 16)} ${this._peerLabel(p)}
+              </button>
+              ${showBadge ? html`
+                <button class="out-badge ${member ? "in" : ""}"
+                  title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
+                  @click=${(e) => { e.stopPropagation(); this._toggleGroupMember(p); }}>✓</button>` : null}
+            </div>
+          `;
+        })}
       </div>
     `;
   }
+
+  // ============ 群组管理模式(点群组 output → 每个设备旁出现 +/−) ============
+
+  async _toggleGroupManage(p) {
+    // 再点同一个群组 = 退出管理模式;点另一个群组 = 切换管理目标。
+    if (this._ui.groupManage === p.peerId) {
+      this._ui.groupManage = null;
+      this.requestUpdate();
+      return;
+    }
+    this._ui.groupManage = p.peerId;
+    this._groupMembers = new Set();
+    this.requestUpdate();
+    const gid = p.peerId.startsWith("group:") ? p.peerId.slice("group:".length) : p.peerId;
+    try {
+      const res = await this._client.getGroups();
+      const hit = (res?.groups || []).find((g) => g.id === gid);
+      this._groupMembers = new Set((hit?.memberIds || []).map(String));
+    } catch {
+      // 拉取失败:成员集留空,徽标全部显示 +,点一下以服务端返回为准。
+    }
+    this.requestUpdate();
+  }
+
+  // 服务端成员命名空间写法:sendspin = `sendspin:<clientId>`(与 peerId 同形);
+  // DLNA = 裸设备 id(历史数据约定,去掉 peerId 的 `dlna:` 前缀)。
+  _memberKeyFor(p) {
+    return p.kind === "sendspin" ? p.peerId : p.peerId.replace(/^dlna:/, "");
+  }
+  _isGroupMember(p) {
+    if (!this._ui.groupManage) return false;
+    const k = this._memberKeyFor(p);
+    return this._groupMembers.has(k) || this._groupMembers.has(p.peerId);
+  }
+
+  async _toggleGroupMember(p) {
+    if (!this._ui.groupManage || !this._client) return;
+    const gid = this._ui.groupManage.startsWith("group:") ? this._ui.groupManage.slice("group:".length) : this._ui.groupManage;
+    const key = this._memberKeyFor(p);
+    const join = !this._isGroupMember(p);
+    try {
+      const res = await this._client.updateGroupMembers(gid, join ? [key] : [], join ? [] : [key]);
+      const ids = res?.group?.memberIds;
+      if (Array.isArray(ids)) {
+        this._groupMembers = new Set(ids.map(String));
+      } else {
+        // 响应缺 memberIds:本地反转兜底(下一轮拉取会纠正)。
+        if (join) { this._groupMembers.add(key); this._groupMembers.add(p.peerId); }
+        else { this._groupMembers.delete(key); this._groupMembers.delete(p.peerId); }
+      }
+    } catch {
+      // 失败保持原状,下次打开管理模式重新拉取。
+    }
+    this.requestUpdate();
+  }
+
 
   // 客户端本机实例与 DLNA 设备用不同图标区分,一眼看出是「客户端播放器」还是「设备」。
   _peerIcon(p) {
@@ -3097,6 +3195,18 @@ class MusicFlowRemoteCard extends LitElement {
         border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
       .out .ic { display: inline-flex; }
+      /* 群组管理模式:每个 output 外包一层纵向 wrap,设备底下挂 +/− 徽标
+         (组内 − / 组外 +),与客户端流转页同款语义。 */
+      .out-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
+      /* 加入/退出群组的**可勾选小圆圈**(与 Web 流转列表行尾、客户端同款视觉):
+         未加入 = 空心圈(边框 + 透明底,勾不着色);已加入 = accent 实心圈 + 白色 ✓。 */
+      .out-badge { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid rgba(var(--ctl), 0.45);
+        background: transparent; color: transparent; font-size: 12px; line-height: 1;
+        display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+        transition: background .18s ease, border-color .18s ease, color .18s ease; }
+      .out-badge:hover { border-color: rgba(var(--acc), 0.85); }
+      .out-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff; }
+      .out.managing { border-color: rgba(var(--acc), 0.85); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影。
          选中播放器(.active)恒保持放大状态(等同悬停效果),切换后才缩小;
          未选中仅悬停放大、移走恢复。 */

@@ -538,6 +538,15 @@ export class BackendClient {
   }
   getStatus(peerId) { return this.rest(this.peerPath(peerId, "/status")); }
   getPeers() { return this.rest("/api/v1/peers"); }
+  // 播放器群组:列出全部(含 memberIds)/ 增删成员(幂等原子口)。
+  // 成员为命名空间写法:sendspin:<clientId> / 裸 id ≡ DLNA(历史数据约定)。
+  getGroups() { return this.rest("/api/v1/groups"); }
+  updateGroupMembers(groupId, add, remove) {
+    return this.rest(`/api/v1/groups/${encodeURIComponent(groupId)}/members`, {
+      method: "POST",
+      body: { add: add || [], remove: remove || [] },
+    });
+  }
 
   // ============ Subsonic endpoints ============
   async search(query, { songCount = 20, songOffset = 0, albumCount = 20, albumOffset = 0, artistCount = 20, artistOffset = 0 } = {}) {

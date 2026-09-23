@@ -41,6 +41,8 @@ const zh = {
   "outputs.selfDevice": "本机",
   "outputs.client": "MusicFlow 客户端",
   "outputs.device": "播放设备",
+  "outputs.groupJoin": "加入该群组",
+  "outputs.groupLeave": "退出该群组",
   "errors.likeFailed": "喜欢操作失败(可能代理通道异常或未连通),请重试",
   "card.description": "MusicFlow 服务器的外部控制器:实时同步播放/队列/歌词/歌单/喜欢。",
   "browser.search": "搜索…",
