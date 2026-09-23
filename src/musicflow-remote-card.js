@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.10";
+const CARD_VERSION = "2.4.11";
 
 // 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
 // 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
