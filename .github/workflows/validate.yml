@@ -50,4 +50,4 @@ jobs:
       # HACS validation job 已永久移除(2026-09-24):hacs/action 只认 main 分支版本,
       # 与本仓「拒绝 main 版本发布、只认 vX.Y.Z 数字 tag」直接冲突 —— 装上它等于
       # 每次都要为 HACS 的 main 语义破例。卡片发布改为纯 tag 体系,
-      # 校验由 version-guard(版本号守卫) + seek/client-link 契约守卫 + 本文件覆盖。
+      # 校验由 version-guard(版本号守卫) + seek / client-link / card-ui 契约守卫 + 本文件覆盖。

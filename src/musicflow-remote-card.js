@@ -39,6 +39,11 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
 const CARD_VERSION = "2.4.10";
 
+// 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
+// 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
+// 管理态内的任何操作(勾选圈 / 点群组 chip)都会重新计时,不会挑设备挑到一半被踢出。
+const GROUP_MANAGE_IDLE_MS = 10000;
+
 // 拖动 seek 目标的精度契约 ——「最小粒度 1 秒」(2026-09-22 事故沉淀)。
 //
 // 服务端 sendspin 流式引擎按 **25ms 帧栅格**取帧(lo = floor(pos/25) * 2400 样点),而
@@ -344,6 +349,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (this._pauseTimer) { clearTimeout(this._pauseTimer); this._pauseTimer = null; }
+    if (this._gmTimer) { clearTimeout(this._gmTimer); this._gmTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
     if (this._idleVisHandler) { document.removeEventListener("visibilitychange", this._idleVisHandler); this._idleVisHandler = null; }
     if (this._idleObserver) { this._idleObserver.disconnect(); this._idleObserver = null; }
@@ -1225,6 +1231,17 @@ class MusicFlowRemoteCard extends LitElement {
       this.requestUpdate();
       return;
     }
+    // 群组「增减成员」管理态:点空白处 = 退出管理,回到普通选中态(群组仍是被遥控的那个)。
+    // 点群组 chip / 勾选圈都不算空白:chip 自带开关语义、勾选圈是本态唯一操作目标
+    // (它自身已 stopPropagation,这里再兜一层)。管理态不该「粘」在界面上。
+    if (this._ui.groupManage) {
+      const keep = ["out", "out-badge"];
+      const onControl = path.some((n) => {
+        const cls = n && n.classList;
+        return !!(cls && Array.from(cls).some((c) => keep.includes(c)));
+      });
+      if (!onControl) this._exitGroupManage();
+    }
   }
 
   // ============ 极简歌词模式(auto-hide) ============
@@ -1962,22 +1979,28 @@ class MusicFlowRemoteCard extends LitElement {
             </div>
           `;
         })}
+        ${managing ? html`<div class="gm-hint">${this._t("outputs.groupManageHint")}</div>` : null}
       </div>
     `;
   }
 
   // ============ 群组管理模式(点群组 output → 每个设备旁出现 +/−) ============
 
+  // 点群组 chip = **两件事一起做**:①把遥控目标切到该群组(与 Web / 客户端一致 —— 否则
+  // 「进管理模式调完成员,遥控却还停在别的设备上」);②进入「增减成员」管理模式,设备 chip
+  // 底下出现勾选圈。管理态是**临时浮层**:点空白处或 10s 无操作自动退出,回到普通选中态
+  // (群组仍是被遥控的那个,只是勾选圈收起来)。
   async _toggleGroupManage(p) {
+    this._selectPeer(p.peerId); // 已选中时内部早退,零副作用
     // 再点同一个群组 = 退出管理模式;点另一个群组 = 切换管理目标。
     if (this._ui.groupManage === p.peerId) {
-      this._ui.groupManage = null;
-      this.requestUpdate();
+      this._exitGroupManage();
       return;
     }
     this._ui.groupManage = p.peerId;
     this._groupMembers = new Set();
     this.requestUpdate();
+    this._armGroupManageTimeout();
     const gid = p.peerId.startsWith("group:") ? p.peerId.slice("group:".length) : p.peerId;
     try {
       const res = await this._client.getGroups();
@@ -1987,6 +2010,24 @@ class MusicFlowRemoteCard extends LitElement {
       // 拉取失败:成员集留空,徽标全部显示 +,点一下以服务端返回为准。
     }
     this.requestUpdate();
+  }
+
+  // 退出管理模式 = 回到普通选中态(currentPeerId 不动,群组仍是遥控目标)。
+  _exitGroupManage() {
+    if (this._gmTimer) { clearTimeout(this._gmTimer); this._gmTimer = null; }
+    if (!this._ui.groupManage) return;
+    this._ui.groupManage = null;
+    this._groupMembers = new Set();
+    this.requestUpdate();
+  }
+
+  // 空闲计时:管理态内每次操作(勾选圈 / 点群组 chip)都重新计时。
+  // 不这么做的话,用户正一个个挑设备时会被 10s 闹钟打断。
+  _armGroupManageTimeout() {
+    if (this._gmTimer) clearTimeout(this._gmTimer);
+    this._gmTimer = this._ui.groupManage
+      ? setTimeout(() => { this._gmTimer = null; this._exitGroupManage(); }, GROUP_MANAGE_IDLE_MS)
+      : null;
   }
 
   // 服务端成员命名空间写法:sendspin = `sendspin:<clientId>`(与 peerId 同形);
@@ -2018,6 +2059,7 @@ class MusicFlowRemoteCard extends LitElement {
     } catch {
       // 失败保持原状,下次打开管理模式重新拉取。
     }
+    this._armGroupManageTimeout(); // 连着挑多个设备时不让 10s 闹钟提前收摊
     this.requestUpdate();
   }
 
@@ -3119,6 +3161,9 @@ class MusicFlowRemoteCard extends LitElement {
         --fg-dim: rgba(255, 255, 255, 0.6);
         --fg-faint: rgba(255, 255, 255, 0.5);
         --ctl: rgba(255, 255, 255, 0.85);
+        /* --ctl 的「三元组」形态(r,g,b):只有它能塞进 rgba(var(--x), alpha)。
+           完整色值(--ctl/--fg 这类)写进 rgba() 是无效值,计算值阶段整条声明作废。 */
+        --ctl-rgb: 255, 255, 255;
         --ctl-hover: rgba(255, 255, 255, 0.10);
         --seek-bg: rgba(255, 255, 255, 0.18);
         --panel-bg: rgba(255, 255, 255, 0.04);
@@ -3139,6 +3184,7 @@ class MusicFlowRemoteCard extends LitElement {
         --fg-dim: rgba(0, 0, 0, 0.6);
         --fg-faint: rgba(0, 0, 0, 0.5);
         --ctl: rgba(0, 0, 0, 0.78);
+        --ctl-rgb: 20, 20, 24;
         --ctl-hover: rgba(0, 0, 0, 0.08);
         --seek-bg: rgba(0, 0, 0, 0.18);
         --panel-bg: rgba(0, 0, 0, 0.06);
@@ -3199,13 +3245,36 @@ class MusicFlowRemoteCard extends LitElement {
          (组内 − / 组外 +),与客户端流转页同款语义。 */
       .out-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
       /* 加入/退出群组的**可勾选小圆圈**(与 Web 流转列表行尾、客户端同款视觉):
-         未加入 = 空心圈(边框 + 透明底,勾不着色);已加入 = accent 实心圈 + 白色 ✓。 */
-      .out-badge { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid rgba(var(--ctl), 0.45);
-        background: transparent; color: transparent; font-size: 12px; line-height: 1;
+         未加入 = 空心圈(边框 + 半透明底,勾不着色);已加入 = accent 实心圈 + 白色 ✓。
+         底色会随封面强调色(--acc)/ idle 渐变 / 明暗主题整体变化 ⇒ 圆圈必须自带对比度:
+         ① 边框与底走 --ctl-rgb(随主题翻转:深底白圈 / 浅底黑圈),不用固定色;
+         ② 外面再套一圈暗色阴影,把圆从亮封面里「抠」出来,任何底色上都有轮廓;
+         ③ 已加入态 accent 实心 + 白 ✓ + accent 光晕,是三态里最亮的一档(「要亮眼」)。
+         ⚠️ 必须用 --ctl-rgb,不能写 rgba(var(--ctl), x):--ctl 是完整色值(rgba(...)),
+         套进 rgba() 属无效值 ⇒ 计算值阶段整条 border 变 unset(border-style:none)
+         ⇒ 未加入的圆圈直接消失(2026-09-24 现场:点了群组看不到设备圆圈)。 */
+      .out-badge { width: 22px; height: 22px; box-sizing: border-box; border-radius: 50%;
+        border: 2px solid rgba(var(--ctl-rgb), 0.9);
+        background: rgba(var(--ctl-rgb), 0.14);
+        color: transparent; font-size: 13px; font-weight: 700; line-height: 1;
         display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
-        transition: background .18s ease, border-color .18s ease, color .18s ease; }
-      .out-badge:hover { border-color: rgba(var(--acc), 0.85); }
-      .out-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff; }
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.40), 0 2px 6px rgba(0, 0, 0, 0.30);
+        animation: mf-badge-in 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+        transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease,
+          transform 0.18s ease, box-shadow 0.18s ease; }
+      .out-badge:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.22);
+        transform: scale(1.14);
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.42), 0 0 10px rgba(var(--acc), 0.6); }
+      .out-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff;
+        box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55), 0 0 12px rgba(var(--acc), 0.7), 0 2px 6px rgba(0, 0, 0, 0.35); }
+      .out-badge:focus-visible { outline: 2px solid rgb(var(--acc)); outline-offset: 2px; }
+      /* 进场只做一次弹入(scale + opacity,GPU 合成):管理态是临时出现的,得被看见。
+         fill-mode 用 backwards 而非 both —— both 会把末帧 transform 钉住,让 :hover 的
+         transform 失效(动画优先级高于普通声明)。 */
+      @keyframes mf-badge-in { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .out-badge { animation: none; } }
+      /* 管理态提示行:明说出口在哪(点空白 / 10s 自动),flex-basis:100% 独占一行。 */
+      .gm-hint { flex-basis: 100%; margin-top: 2px; font-size: 11px; color: var(--fg-faint); }
       .out.managing { border-color: rgba(var(--acc), 0.85); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影。
          选中播放器(.active)恒保持放大状态(等同悬停效果),切换后才缩小;

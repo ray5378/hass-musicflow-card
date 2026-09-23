@@ -43,6 +43,7 @@ const zh = {
   "outputs.device": "播放设备",
   "outputs.groupJoin": "加入该群组",
   "outputs.groupLeave": "退出该群组",
+  "outputs.groupManageHint": "点设备下方圆圈加入 / 退出该群组 · 点空白处或 10 秒后自动退出",
   "errors.likeFailed": "喜欢操作失败(可能代理通道异常或未连通),请重试",
   "card.description": "MusicFlow 服务器的外部控制器:实时同步播放/队列/歌词/歌单/喜欢。",
   "browser.search": "搜索…",

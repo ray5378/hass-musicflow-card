@@ -1,0 +1,48 @@
+name: Card UI Guard
+
+# 卡片 UI 契约守卫（blocking）。
+#
+# A. CSS 自定义属性类型：完整色值塞进 rgb()/rgba() 是**无效值** —— CSS 不报错，
+#    只在计算值阶段把整条声明作废。现场(2026-09-24)：`.out-badge` 的
+#    `border: 1.5px solid rgba(var(--ctl), .45)` 整条失效 ⇒ 点进群组后设备底下
+#    的「加入/退出」圆圈**直接消失**（已加入态因 accent 实心才看得见）。
+#    同体质的问题手测极易当成「没做这个功能」，必须钉死。
+#
+# B. 群组管理态可用性：点群组=同时切遥控、勾选圈不改遥控、有出口
+#    （点空白退出 + 10s 自动退出 + 操作重置计时）。
+#
+# 守卫脚本：tools/guard-card-ui.mjs（已做变异验证：7 处修复各自改回 bug 形态，
+# 对应用例逐条转红）。
+#
+# ⚠️ 本 job **故意不构建**：dist/hass-musicflow-card.js 入仓，守卫要校验的是
+# **已提交的产物**。若只在 src 修了而忘记 npm run build，dist 里仍是旧 CSS ⇒ 判红
+# （重演「src 修了、dist 没重建」是这套守卫的一半价值）。validate.yml 另有一条
+# 「dist is committed and up to date」做产物新鲜度兜底。
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: card-ui-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  card-ui-guard:
+    name: card UI guard (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: "Guard - 卡片 UI 契约 (CSS 变量类型 + 群组管理态, src + dist)"
+        run: node tools/guard-card-ui.mjs

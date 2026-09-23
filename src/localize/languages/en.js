@@ -43,6 +43,7 @@ const en = {
   "outputs.device": "Playback device",
   "outputs.groupJoin": "Join this group",
   "outputs.groupLeave": "Leave this group",
+  "outputs.groupManageHint": "Tap the circle under a player to join / leave · tap blank space or wait 10s to exit",
   "errors.likeFailed": "Like operation failed (possible proxy channel issue or not connected), please retry.",
   "card.description": "External controller for the MusicFlow server: realtime sync of playback, queue, lyrics, playlists and favorites.",
   "browser.search": "Search…",
