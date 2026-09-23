@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.9";
+const CARD_VERSION = "2.4.10";
 
 // 拖动 seek 目标的精度契约 ——「最小粒度 1 秒」(2026-09-22 事故沉淀)。
 //

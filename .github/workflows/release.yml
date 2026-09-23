@@ -73,42 +73,40 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
           body: |
-            ## MusicFlow 卡片 ${{ steps.ver.outputs.tag }} — 进度条小圆点跟随修复
+            ## MusicFlow 卡片 ${{ steps.ver.outputs.tag }} — 播放器群组可在卡片里直接遥控与增减成员
 
-            本版修复：**拖动 / 点击进度条之后，填充条继续前进，但小圆点永远停在手指松开的位置**。
-
-            ### 根因
-            进度条写的是 `<input type="range" value="${prog}">` —— 这是**属性**绑定，属性只写
-            `defaultValue`。按 HTML 规范，`value` 内容属性**仅在脏值标志（dirty value flag）为假时**
-            才同步到控件的当前值，而 range 一经用户交互（拖动 / 点击）就会置位该标志 ⇒ 此后所有
-            属性写入被忽略，小圆点冻结；填充条走的是内联 `style` 渐变（不受脏值标志影响）
-            ⇒ 两者分道扬镳，现场即「填充条在动、小圆点留在原地」。
-
-            真实 Chromium 实测三连（本次回归的证据链）：
-
-            | 场景 | 结果 |
-            | --- | --- |
-            | 全新元素 + 只改属性 60 | `value=60`（首次渲染本来就生效 → 平时看不出问题） |
-            | 拖过一手 + 改属性 60 | `value=40`（**失效 = 事故现场**） |
-            | 拖过一手 + 改 property 60 | `value=60`（改用 property 即恢复） |
+            本版把**播放器群组**接进卡片的播放器列表：点群组即进入管理模式，每个设备行下方
+            出现勾选小圆圈，点一下即加入 / 退出该群组 —— 与 Web 端、MusicFlow 客户端
+            完全一致的交互口径。
 
             ### 本版改动
-            - 渲染后按 **property** 把同一个进度百分比回写给小圆点，填充与圆点恒同源
-              （新增 `_progressPct()` 收敛为唯一来源，`_syncSeekThumb()` 负责回写）。
-            - 拖拽中不回写（手指即权威，避免与指针抢位）；拖拽结束立刻重渲染一次，
-              圆点立即对齐权威值，不留「停在手指处」的窗口。
-            - 新增 CI 契约守卫规则 8：**进度圆点必须按 property 回写且与填充条同源**
-              （`tools/guard-seek-contract.mjs`，同时校验 `src` 与已提交的 `dist`）。
-            - 诊断开关（`localStorage.mf_log_level = debug`）下可见一行「进度圆点回写」，
-              仅当圆点与期望值差值 >1% 时打出，正常跟随不刷屏。
+            - **群组进播放器列表**：群组是「容器」型播放器 —— 成员全离线、甚至空组也不再从
+              列表里剪掉（否则管理模式入口消失，空组根本没法加成员）。
+            - **勾选圈加入 / 退出**：点群组进入管理模式后，DLNA / Sendspin 设备行下方出现
+              20px 勾选圈（组内 = accent 实心 + 白色 ✓，组外 = 空心圈），点击即调
+              `POST /v1/groups/:id/members {add,remove}`（幂等原子口）；
+              成员键按命名空间书写：`sendspin:<clientId>` / DLNA 裸 id。
+            - **展示序与 Web / 客户端统一**：正在播的排前面；同为在播或同为闲置时按
+              「客户端本机 > 群组 > 独立播放器」，再按名称。
+            - 新增 i18n `outputs.groupJoin` / `outputs.groupLeave`（中 / 英）。
+
+            ### 工程与发布链
+            - 新增**版本号守卫** `tools/check-version-guard.mjs` + `version-guard.yml`：
+              版本号必须是数字（vX.Y.Z），`main` / `master` / `latest` 等分支名一律判红；
+              并静态禁止把 `github.ref_name` 当版本号（推分支时它等于 `main`）。
+              监听 `tags: ["*"]` —— 只听 `v*` 的话，误打的 `main` tag 根本不会触发检查。
+            - **移除 HACS validation**：`hacs/action` 只认 main 分支版本，与「拒绝 main
+              版本发布」直接冲突，永久不再启用；发布改为纯 **v\* tag** 体系。
+            - seek 契约守卫修复：dist 侧不再钉死压缩后的参数名（新增类方法会让 terser 把
+              `_seek(e)` 分配成 `_seek(t)`），改为按形态匹配，避免无关改动引发假红。
 
             ### 影响面
-            - 纯前端显示层修复：**服务端 / HA 集成 / 客户端无需任何改动**，seek 下发与去抖逻辑未变。
-            - 音量滑轨不受影响（它由 `style="left:…%"` 驱动，本来就是同源绘制）。
+            - 纯卡片前端改动 + 发布链改动，**服务端 / HA 集成 / 客户端无需配合升级**。
+            - 群组接口需要服务端 ≥ v4.0.16。
 
             ### 升级步骤
-            1. HACS 中更新本卡片
+            1. HACS 中更新本卡片（或手动替换 `dist/hass-musicflow-card.js`）
             2. 浏览器 `Ctrl+Shift+R`，或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v2.4.9`
+            3. F12 Console 确认 `[musicflow-remote-card] v${{ steps.ver.outputs.ver }}`
           draft: false
           prerelease: false

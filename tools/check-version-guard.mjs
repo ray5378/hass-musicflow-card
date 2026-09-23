@@ -97,10 +97,14 @@ if (fs.existsSync(WF_DIR)) {
     const raw = read(rel);
     if (raw == null) continue;
     // 先剥掉 YAML 注释再判(注释里写「已移除 hacs/action」不该被判红)。
-    const lines = raw.split("\n").map((l) => l.replace(/(^|\s)#.*$/, ""));
+    const lines = raw.split("\n").map((l) => {
+      const i = l.indexOf("#");
+      return i >= 0 ? l.slice(0, i) : l;
+    });
     const txt = lines.join("\n");
     // ① HACS 校验永久禁用:它只认 main 分支版本,与「拒绝 main 版本」冲突。
-    if (/hacs\/action/i.test(txt)) {
+    //    只认 `uses:` 行 —— release notes 正文里提到 hacs/action 不算命中。
+    if (/uses:\s*["']?hacs\/action/i.test(txt)) {
       fail(`R3 ${rel} 使用了 hacs/action —— HACS 校验只认 main 分支版本,与本仓「拒绝 main 版本发布」冲突,永久禁用。`);
     }
     // ② 禁止把 ref_name 当版本号赋值:推 main 时它等于 "main"。
