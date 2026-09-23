@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 卡片 UI 契约守卫 —— 两组「静默退化」体质的问题,手测极易漏,钉死在 CI。
+ * 卡片 UI 契约守卫 —— 三组「静默退化」体质的问题,手测极易漏,钉死在 CI。
  *
  * A. CSS 自定义属性**类型**契约
  *    自定义属性是字面量替换:`rgb(var(--x))` / `rgba(var(--x), a)` 要求 --x 的值是
@@ -20,6 +20,14 @@
  *    ② 勾选圈只改成员,**不得**改遥控目标(挑成员时不该顺手把遥控切走);
  *    ③ 管理态必须有出口:点空白处退出 + 10s 无操作自动退出,且管理态内的操作要重新
  *       计时(否则连着挑设备会被闹钟打断)。管理态是**临时浮层**,不是常驻模式。
+ *
+ * C. 播放端展示序契约(三端同一口径:**在播优先 → 类别 → 名称**)
+ *    第一维度是「正在播」(服务端 queue.isActive),第二维度才是「类别」
+ *    (本机 > 群组 > 独立播放器),最后按名称。这条口径在客户端与卡片之间
+ *    **反复横跳过**:① 曾把「类别」提到最前变成「类别优先」(群组恒压过在播设备,
+ *    用户明确否掉);② 曾两端各写一份比较器,改了一处就漂移。
+ *    这类错误编译不报错、单看某一端也说得通 ⇒ 只能靠守卫静态钉住键序。
+ *    (客户端侧同口径由 `tool/check-peer-order.mjs` + peer_order 单测锁。)
  *
  * 用法：node tools/guard-card-ui.mjs
  * （先 npm run build —— A 组同时校验 dist 产物,防止重演「src 修了、dist 没重建」。）
@@ -173,6 +181,71 @@ record(
   "不重置 ⇒ 连着挑第二个设备时被 10s 闹钟打断",
   /_armGroupManageTimeout\(\)/.test(toggleMember),
   true,
+);
+
+// ============ C. 播放端展示序(在播优先 → 类别 → 名称) ============
+
+/** 取「方法**定义**」的函数体(src / dist 通用)。
+ *  ⚠️ 不能用行首锚点:dist 是单行压缩产物,`^` 永远匹配不到;
+ *  也不能用 `indexOf(name+"(")`:会先命中 `this._x(...)` 调用点。
+ *  用「名字前没有 `.`」+ 紧跟参数表与 `{` 定位定义。 */
+function defBody(text, name) {
+  const re = new RegExp(`(?<![\\w.])${name}\\s*\\([^)]*\\)\\s*\\{`);
+  const m = re.exec(text);
+  if (!m) return "";
+  const start = text.indexOf("{", m.index);
+  if (start < 0) return "";
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return text.slice(start, i + 1); }
+  }
+  return text.slice(start);
+}
+
+/** 键序契约:在播(playing) → 类别(rank) → 名称(localeCompare)。
+ *  ⚠️ 必须查 **sort() 回调里的调用顺序**,不能查 lambda 的声明顺序 ——
+ *  两个 lambda 都声明在 sort 之前,声明序恒为「在播在前」,调换回调里的比较
+ *  照样会把口径变成「类别优先」而声明序不变(第一版就漏了这个)。
+ *  只查**形态**:terser 会把 playing→e、rank→s,所以先解析出实际名字再比位置。 */
+function orderOk(text) {
+  const b = defBody(text, "_sortPeersForDisplay");
+  if (!b) return false;
+  // ⚠️ 不能用 `const\s+(\w+)` 找第二个 lambda:terser 把 `const a=…,b=…` 合并成
+  //    一个 const,第二个名字前面没有 const。且 `[^;]*` 会跨逗号把第一个 lambda
+  //    也匹配上 ⇒ 用不依赖 const、且不跨 `,` / `;` 的写法。
+  const playingVar = /(\w+)\s*=\s*\(?\w*\)?\s*=>[^;,]*?\.isActive/.exec(b)?.[1];
+  const kindVar = /(\w+)\s*=\s*\(?\w*\)?\s*=>[^;,]*?kind\s*===\s*"local"/.exec(b)?.[1];
+  if (!playingVar || !kindVar || playingVar === kindVar) return false; // 形态不认识 ⇒ 保守判红
+  const sortAt = b.indexOf(".sort(");
+  if (sortAt < 0) return false;
+  const cmp = b.slice(sortAt);
+  const iPlaying = cmp.indexOf(`${playingVar}(`);
+  const iKind = cmp.indexOf(`${kindVar}(`);
+  const iName = cmp.indexOf("localeCompare");
+  return iPlaying >= 0 && iKind > iPlaying && iName > iKind;
+}
+record(
+  "C1 展示序键序:在播 → 类别 → 名称",
+  "把「类别」提到最前 = 「类别优先」⇒ 群组恒压过在播设备(已被用户否掉的口径)",
+  orderOk(src),
+  orderOk(dist),
+);
+
+/** 类别权重:本机 0 < 群组 1 < 独立播放器 2。 */
+function rankOk(text) {
+  const b = defBody(text, "_sortPeersForDisplay");
+  return (
+    /kind\s*===\s*"local"\s*\?\s*0/.test(b) &&
+    /kind\s*===\s*"group"\s*\?\s*1\s*:\s*2/.test(b)
+  );
+}
+record(
+  "C2 类别权重:本机 0 < 群组 1 < 独立播放器 2",
+  "权重写错 ⇒ 群组/本机位置不对,且与客户端不同序",
+  rankOk(src),
+  rankOk(dist),
 );
 
 // ============ 汇总 ============
