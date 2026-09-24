@@ -253,6 +253,7 @@ class MusicFlowRemoteCard extends LitElement {
     // 群组管理模式下被选群组的成员键集合(sendspin:<clientId> / 裸 dlna id)。
     this._groupMembers = new Set();
     this._ready = false;
+    this._peerRestoreDone = false; // 一次性:刷新后从 localStorage 恢复上次选中的遥控目标
     this._ui = {
       error: "",
       connected: false,
@@ -512,6 +513,19 @@ class MusicFlowRemoteCard extends LitElement {
     const list = this._filterControllable(peers).filter((p) => p.available !== false || p.kind === "group");
     this._ui.peers = this._sortPeersForDisplay(list);
     const pinned = this._resolveDefaultPeerId(list);
+
+    // 刷新 / 卡片重挂载后,恢复上次选中的遥控目标,避免每次都跳回默认(排序最前的独立播放器)。
+    // 一次性:仅当没有显式默认(pinned)且快照里确实还有这个 peer 时才采纳;否则清空交自动选。
+    if (!this._peerRestoreDone) {
+      this._peerRestoreDone = true;
+      const stored = !pinned ? this._loadStoredPeerId() : null;
+      if (stored && list.some((p) => p.peerId === stored)) this._ui.currentPeerId = stored;
+    }
+    // restored / pinned 指向的 peer 已不在快照里(被删 / 离线移除)⇒ 清空,交给下方自动选。
+    if (this._ui.currentPeerId && !list.some((p) => p.peerId === this._ui.currentPeerId)) {
+      this._ui.currentPeerId = "";
+    }
+
     if (!this._ui.currentPeerId || pinned) {
       const preferred = pinned && list.find((p) => p.peerId === pinned);
       const first = preferred || list.find((p) => p.available) || list[0];
@@ -523,6 +537,21 @@ class MusicFlowRemoteCard extends LitElement {
     // 设备经 _upsertPeer 上线时会由 _ensurePeerSelected 补选,这里也再保一次。
     this._ensurePeerSelected();
     this.requestUpdate();
+  }
+
+  // 选中的遥控目标持久化到 localStorage(按实体配置分桶),刷新 / 重挂载后由
+  // _applyPeerSnapshot 一次性恢复 —— 否则每次刷新都会跳回排序最前的独立播放器。
+  _peerStorageKey() {
+    const entity = this._config && this._config.entity;
+    return entity ? `musicflow-remote-peer:${entity}` : "musicflow-remote-peer";
+  }
+  _storePeerId(peerId) {
+    // 只持久化有效选择,不写空(离线清空时保留上次有效值,不要被 null 覆盖)。
+    if (!peerId) return;
+    try { localStorage.setItem(this._peerStorageKey(), peerId); } catch {}
+  }
+  _loadStoredPeerId() {
+    try { return localStorage.getItem(this._peerStorageKey()) || null; } catch { return null; }
   }
 
   _applySnapshot(devices) {
@@ -1030,6 +1059,7 @@ class MusicFlowRemoteCard extends LitElement {
   _selectPeer(peerId, silent) {
     if (peerId === this._ui.currentPeerId) return;
     this._ui.currentPeerId = peerId;
+    this._storePeerId(peerId); // 持久化选中目标,刷新后不再跳回默认(独立播放器)
     this._stopTracking();
     this._ui.queue = { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false };
     this._ui.currentIndex = -1;
