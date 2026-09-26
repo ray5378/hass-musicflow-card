@@ -37,7 +37,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.12";
+const CARD_VERSION = "2.4.13";
 
 // 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
 // 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
@@ -507,6 +507,20 @@ class MusicFlowRemoteCard extends LitElement {
     });
   }
 
+  /** 该 peer 是否被某个**活跃组**托管(服务端出口层 `managedByGroup` 标记)。
+   *  返回托管组的 peerId(`group:<gid>`);不在托管关系中返回 null。 */
+  _managedGroupPeerId(peerId) {
+    const p = (this._ui.peers || []).find((x) => x.peerId === peerId);
+    const gid = p && p.managedByGroup;
+    return gid ? `group:${gid}` : null;
+  }
+
+  /** 把「用户想选的 peer」解析成**真正可遥控的目标**:被活跃组托管的成员设备收敛到
+   *  该组,其余原样返回。判定依据全部来自服务端出口层,卡片不自造口径。 */
+  _resolveControlPeerId(peerId) {
+    return this._managedGroupPeerId(peerId) || peerId;
+  }
+
   _applyPeerSnapshot(peers) {
     // 只显示在线可控播放器(DLNA 设备 + 客户端本机实例;离线由 _upsertPeer 移除,此处过滤兜底)。
     // 群组是「容器」:成员全离线也不剪掉,否则管理模式入口消失、空组没法加减成员。
@@ -519,7 +533,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (!this._peerRestoreDone) {
       this._peerRestoreDone = true;
       const stored = !pinned ? this._loadStoredPeerId() : null;
-      if (stored && list.some((p) => p.peerId === stored)) this._ui.currentPeerId = stored;
+      // 存的是成员设备、但它此刻被活跃组托管 ⇒ 恢复成该组(见 _resolveControlPeerId)。
+      // 否则重开页面会回到「选中的是一台已被组接管的设备」= 0:00/0:00、进度不走。
+      if (stored && list.some((p) => p.peerId === stored)) {
+        this._ui.currentPeerId = this._resolveControlPeerId(stored);
+      }
     }
     // restored / pinned 指向的 peer 已不在快照里(被删 / 离线移除)⇒ 清空,交给下方自动选。
     if (this._ui.currentPeerId && !list.some((p) => p.peerId === this._ui.currentPeerId)) {
@@ -531,6 +549,12 @@ class MusicFlowRemoteCard extends LitElement {
       const first = preferred || list.find((p) => p.available) || list[0];
       if (first) this._selectPeer(first.peerId, true);
     } else {
+      // 恢复态:追踪(2s 轮询 + 250ms 插值 tick)**只在 _selectPeer() 末尾挂载**,
+      // 这条分支绕过了它 —— 过去只做一次性刷新 ⇒ 卡片冻结在「拉过一次」的快照上,
+      // 进度条不走、歌词不滚,直到用户手动切一次设备。
+      // 真机现场(2026-09-26):重开 HA 客户端后 _pollTimer/_tickTimer 均为 null、
+      // 8 秒内 0 次状态拉取;手动点设备再点回来立刻正常。故此处补一次幂等的补挂。
+      this._ensureTracking();
       this._refreshCurrentPeerView();
     }
     // 兜底:snapshot 列表为空(设备尚未注册完)时本次可能未选中,后续
@@ -573,7 +597,11 @@ class MusicFlowRemoteCard extends LitElement {
     const pid = this._ui.currentPeerId;
     if (pid) {
       const cur = (this._ui.peers || []).find((p) => p.peerId === pid);
-      if (cur && cur.available !== false) return; // 已选中且在线,无需动作
+      if (cur && cur.available !== false) {
+        // 已选中且在线:只补追踪(恢复路径的第二次兜底),不重置界面、不换台。
+        this._ensureTracking();
+        return;
+      }
       // 选中设备已离线:解除选中,交给下方重新选一台
       this._ui.currentPeerId = null;
       this._stopTracking();
@@ -608,7 +636,10 @@ class MusicFlowRemoteCard extends LitElement {
     this._maybeFollowDevice(deviceId);
     const pid = this._ui.currentPeerId;
     if (!pid) return;
-    if (pid !== `dlna:${deviceId}` && pid !== `airplay:${deviceId}` && pid !== `sendspin:${deviceId}` && pid !== `group:${deviceId}`) return;
+    // 命中条件:①目标就是这台设备 / 这个组;②目标是「这台设备所属的活跃组」——
+    // 卡片此刻的目标往往是组,成员设备的起播事件必须放大到该组,不能直接丢掉。
+    const direct = [`dlna:${deviceId}`, `airplay:${deviceId}`, `sendspin:${deviceId}`, `group:${deviceId}`];
+    if (!direct.includes(pid) && !direct.some((x) => this._managedGroupPeerId(x) === pid)) return;
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
     this._refreshTimer = setTimeout(() => {
       this._refreshTimer = null;
@@ -1057,6 +1088,12 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   _selectPeer(peerId, silent) {
+    // 被活跃组托管的成员设备 ⇒ 遥控目标收敛到该组(服务端唯一出口 decoratePeersForClient
+    // 的 `managedByGroup` 口径,注释写明「三端据此把成员渲染成『跟随某组』」)。理由:
+    // 成员的 /status 恒 STOPPED、position/duration 恒 0、/queue 恒空 ⇒ 选中它只会显示
+    // 0:00/0:00 且进度不走;而对成员下发 play/pause/next 又会经服务端
+    // detachFromActiveGroups 把它从组里摘掉 ⇒ 对成员的「遥控」语义根本不成立。
+    peerId = this._resolveControlPeerId(peerId);
     if (peerId === this._ui.currentPeerId) return;
     this._ui.currentPeerId = peerId;
     this._storePeerId(peerId); // 持久化选中目标,刷新后不再跳回默认(独立播放器)
@@ -1077,6 +1114,21 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // ============ Real-time progress tracking ============
+  /** 保证「已选中的在线目标」有活跃追踪(2s 轮询 + 250ms 插值 tick)。幂等:**缺才挂**。
+   *
+   *  选中态有两条来路:①`_selectPeer()`(手动点 chip / 自动选 / 跟随设备)—— 它末尾就挂好;
+   *  ②**不经过 `_selectPeer` 的恢复路径**:`_applyPeerSnapshot` 的 localStorage 恢复分支、
+   *  `_ensurePeerSelected()` 的「已选中且在线」早退分支(以及 `_refreshPeers` / `_probeServer`
+   *  的兜底刷新)。② 过去只做一次性 `_refreshCurrentPeerView()`,于是卡片冻结在首次读数上 ——
+   *  重开 HA 客户端后进度条纹丝不动,直到手动切一次设备。 */
+  _ensureTracking() {
+    const pid = this._ui.currentPeerId;
+    if (!pid) return;
+    const cur = (this._ui.peers || []).find((p) => p.peerId === pid);
+    if (cur && cur.available === false) return; // 目标已离线:交给 _ensurePeerSelected 换台
+    if (!this._pollTimer || !this._tickTimer) this._startTracking();
+  }
+
   _startTracking() {
     this._stopTracking();
     const pid = this._ui.currentPeerId;
@@ -2105,11 +2157,19 @@ class MusicFlowRemoteCard extends LitElement {
     return p.peerId;
   }
   _peerTitle(p) {
+    // 被活跃组托管的成员设备:点它实际控的是那个组(见 _resolveControlPeerId),
+    // 标题点明,避免「明明点的设备、高亮却跳到组」的疑惑。
+    const mg = p && p.managedByGroup
+      ? (this._ui.peers || []).find((x) => x.kind === "group" && x.groupId === p.managedByGroup)
+      : null;
+    const managed = p && p.managedByGroup
+      ? ` · ${this._t("outputs.managedBy", { group: (mg && mg.name) || p.managedByGroup })}`
+      : "";
     if (p.kind === "local") {
       const base = p.self ? this._t("outputs.selfDevice") : this._t("outputs.client");
-      return p.platform ? `${base} · ${p.platform}` : base;
+      return (p.platform ? `${base} · ${p.platform}` : base) + managed;
     }
-    return this._t("outputs.device");
+    return this._t("outputs.device") + managed;
   }
 
   // 歌词滚动:视口固定 LYRIC_VIEW_LINES 行高,整条歌词轨道按当前行整体上移,

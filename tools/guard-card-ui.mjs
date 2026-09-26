@@ -248,6 +248,73 @@ record(
   rankOk(dist),
 );
 
+// ============ D. 遥控目标解析 + 追踪启动(2026-09-26 真机现场) ============
+//
+// 两条「静默退化」:都不报错、单看代码也说得通,只在真机上表现为「卡片不灵」。
+//
+// D-a 恢复选中态不启动追踪
+//    `_pollTimer` / `_tickTimer` **只在 `_startTracking()` 里创建**,而 `_startTracking()`
+//    原本全仓只有**一个**调用点 —— `_selectPeer()` 末尾。于是所有**不经过 `_selectPeer`**
+//    的选中态来路都拿不到追踪:`_applyPeerSnapshot()` 的 localStorage 恢复分支、
+//    `_ensurePeerSelected()` 的「已选中且在线」早退分支(`_refreshPeers` / `_probeServer`
+//    的兜底刷新都走它)。
+//    真机现场(192.168.10.249 上跑 2.4.12,重开 HA 客户端):恢复成本地存的设备后
+//    `_pollTimer`/`_tickTimer` 均为 null、8 秒内 **0** 次状态拉取 ⇒ 进度条纹丝不动;
+//    手动切一次设备再切回来立刻正常 —— 与用户描述的三条现象完全吻合。
+//    修法:`_ensureTracking()`(幂等,缺才挂),在上述两条路径补调。
+//
+// D-b 被活跃组托管的成员设备没有收敛到组
+//    服务端唯一出口 `decoratePeersForClient`(backend `src/services/access.ts`)已经给出
+//    口径:成员设备行带 `managedByGroup: <groupId>`、且自身 `queue.isActive` 被强制 false,
+//    注释写明「三端据此把成员渲染成『跟随某组』而不是『自己在放某首』」。
+//    但**四个消费端一个都没消费它**(卡片 / Web / Flutter / 集成 grep 全空)⇒ 卡片仍允许
+//    选中成员设备,而成员自身 `/status` 恒 STOPPED、position/duration 恒 0、`/queue` 恒空
+//    ⇒ 只显示 0:00/0:00、进度不走;且对成员下发 play/pause/next 会经服务端
+//    `detachFromActiveGroups` 把它从组里摘掉 ⇒ 对成员的「遥控」语义根本不成立。
+//    修法:`_resolveControlPeerId()` 把被托管成员解析成它的组;`_selectPeer()` 入口与
+//    `_applyPeerSnapshot()` 的恢复分支都过这道解析。
+
+/** D-a:恢复路径必须补挂追踪,且 `_ensureTracking` 自身是「缺才挂」的精确形态。
+ *  ⚠️ 曾一度只验 `_startTracking()` **调用在场** —— 变异验证立刻打脸:把调用改成
+ *  `if (… && false) this._startTracking()`(文本仍在、行为已死)可静默通过。
+ *  故这里钉**条件式本身**:`if (!this._pollTimer || !this._tickTimer) this._startTracking();`
+ *  (dist 是 minify 产物,空白用 `\s*` 吸收;方法名/property 名不被 terser 改名。) */
+const trackingWired = (text) =>
+  /_ensureTracking\(\)/.test(defBody(text, "_applyPeerSnapshot")) &&
+  /_ensureTracking\(\)/.test(defBody(text, "_ensurePeerSelected"));
+/** src:钉**精确条件式** —— 能抓住「调用仍在场、却被 `&& false` 短路」这类变异
+ *  (只验「_startTracking 出现过」的话,变异验证立刻打脸:文本在场、行为已死,静默通过)。 */
+const trackStartStrict = (text) =>
+  /if\s*\(\s*!this\._pollTimer\s*\|\|\s*!this\._tickTimer\s*\)\s*this\._startTracking\(\)\s*;/.test(
+    defBody(text, "_ensureTracking"),
+  );
+/** dist:terser 会把 `if (x) return; if (y) z;` 折成短路表达式,实测产物是
+ *  `t&&t.available===!1||(!this._pollTimer||!this._tickTimer)&&this._startTracking()`,
+ *  精确形态不复存在。故 dist 只钉「缺计时器这个条件确实门控着 _startTracking」;
+ *  若变异把它短路成死代码,terser 会直接删掉这个调用 ⇒ 仍判红。 */
+const trackStartLoose = (text) =>
+  /_pollTimer\s*\|\|\s*!this\._tickTimer[\s\S]{0,80}?this\._startTracking\(\)/.test(
+    defBody(text, "_ensureTracking"),
+  );
+record(
+  "D1 恢复/兜底选中态必须补挂追踪(缺才挂的精确形态)",
+  "追踪只在 _selectPeer() 挂载 ⇒ 恢复分支绕过它:重开客户端后 poll/tick 均 null、8s 内 0 次拉取、进度冻结",
+  trackingWired(src) && trackStartStrict(src),
+  trackingWired(dist) && trackStartLoose(dist),
+);
+
+/** D-b:被托管成员 ⇒ 目标收敛到组。 */
+const managedWired = (text) =>
+  /managedByGroup/.test(defBody(text, "_managedGroupPeerId")) &&
+  /_managedGroupPeerId\(/.test(defBody(text, "_resolveControlPeerId")) &&
+  /_resolveControlPeerId\(/.test(defBody(text, "_selectPeer"));
+record(
+  "D2 被活跃组托管的成员设备必须收敛为控组",
+  "成员 status 恒 STOPPED、queue 恒空 ⇒ 选中它只显示 0:00/0:00;对它下发 play/pause 还会经 detachFromActiveGroups 把它从组里摘掉",
+  managedWired(src),
+  managedWired(dist),
+);
+
 // ============ 汇总 ============
 let failed = 0;
 for (const r of results) {
