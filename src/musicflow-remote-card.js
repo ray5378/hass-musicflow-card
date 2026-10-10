@@ -381,7 +381,9 @@ class MusicFlowRemoteCard extends LitElement {
     this._client = new BackendClient({
       hass,
       url: cfg.url || null,
-      apiKey: cfg.api_key || null,
+      username: cfg.username || null,
+      password: cfg.password || null,
+      apiKey: cfg.api_key || null, // 旧 YAML 兜底静态 token
       transport: cfg.transport || "auto", // auto | direct | proxy
     });
     try {

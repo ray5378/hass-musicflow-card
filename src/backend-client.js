@@ -56,7 +56,11 @@ export class BackendClient {
   constructor(opts = {}) {
     this.hass = opts.hass || null;
     this.url = opts.url || null;
-    this.apiKey = opts.apiKey || null;
+    this.apiKey = opts.apiKey || null;        // 旧 YAML 兜底静态 token(直接用,不登录)
+    this.username = opts.username || null;
+    this.password = opts.password || null;
+    this.token = null;                          // 用户名+密码登录换取的 JWT(24h 过期)
+    this._tokenExpiry = 0;                     // JWT 过期时间戳(ms)
     this.transport = opts.transport || "auto"; // auto | direct | proxy
     this.mode = null; // resolved: "direct" | "proxy"
     this.proxySupported = false;
@@ -90,6 +94,9 @@ export class BackendClient {
   get connected() { return this._connected; }
 
   async init() {
+    // 显式给定地址 + 用户名 + 密码(卡片 YAML 直配):直连模式由 _ensureToken 自行登录。
+    if (this.url && this.username && this.password) return;
+    // 显式给定地址 + 兜底 api_key(旧 YAML):直接当静态 token 用,不登录。
     if (this.url && this.apiKey) return;
     if (!this.hass) throw new Error("MusicFlow 卡片: 缺少后端地址,且未提供 hass 以自动获取");
     if (this._pendingInit) return this._pendingInit;
@@ -100,11 +107,57 @@ export class BackendClient {
       if (!backends.length) throw new Error("MusicFlow 集成未配置后端连接");
       const b = backends[0];
       this.url = b.url;
-      this.apiKey = b.api_key;
+      this.username = b.username || null;
+      this.password = b.password || null;
+      this.apiKey = b.api_key || null; // 兼容旧集成下发的 api_key(若有)
       this.proxySupported = !!b.proxySupported;
       log("backend_config ok", this.url, "proxySupported:", this.proxySupported);
     })();
     await this._pendingInit;
+  }
+
+  // ============ 认证:用户名+密码 → JWT(后端 24h 过期) ============
+  // 直连模式:卡片自己登录持有 JWT,并自动续期(过期前 5 分钟 / 401 重试)。
+  // 代理模式:浏览器连不上后端,卡片绝不登录,完全由 HA 集成代理补 Bearer 鉴权。
+  async login() {
+    const url = (this.url || "").replace(/\/+$/, "") + "/rest/api/v1/auth/login";
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: this.username, password: this.password }),
+        signal: ctrl.signal,
+      });
+      if (res.status === 401) throw new Error("用户名或密码错误");
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`登录失败 ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      this.token = data.token || null;
+      this._tokenExpiry = Date.now() + 24 * 60 * 60 * 1000; // 后端 JWT 24h
+      return this.token;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async _ensureToken() {
+    // 旧 YAML 兜底静态 token:直接用,不登录。
+    if (this.apiKey) return this.apiKey;
+    // 代理模式:浏览器连不上后端,卡片不登录(由 HA 集成代理鉴权)。
+    if (this.mode === "proxy") return null;
+    // 已有未过期(<24h)的 JWT:直接复用(留 5 分钟缓冲避免临界过期)。
+    if (this.token && this._tokenExpiry && Date.now() < this._tokenExpiry - 5 * 60 * 1000) {
+      return this.token;
+    }
+    if (!this.url || !this.username || !this.password) {
+      throw new Error("MusicFlow 卡片: 缺少用户名/密码,无法登录");
+    }
+    await this.login();
+    return this.token;
   }
 
   _restBase() {
@@ -113,22 +166,27 @@ export class BackendClient {
   _wsUrl() {
     const u = new URL(this.url);
     const proto = u.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${u.host}/ws?token=${encodeURIComponent(this.apiKey)}`;
+    const token = this.token || this.apiKey || "";
+    return `${proto}//${u.host}/ws?token=${encodeURIComponent(token)}`;
   }
   _withToken(path, qs) {
     const base = this._restBase();
+    const token = this.token || this.apiKey;
+    const parts = [];
+    if (token) parts.push(`token=${encodeURIComponent(token)}`);
+    if (qs) parts.push(qs);
     const sep = path.includes("?") ? "&" : "?";
-    const token = `token=${encodeURIComponent(this.apiKey)}`;
-    const extra = qs ? `${sep}${token}&${qs}` : `${sep}${token}`;
-    return `${base}${path}${extra}`;
+    const q = parts.length ? sep + parts.join("&") : "";
+    return `${base}${path}${q}`;
   }
 
   // ============ transport mode ============
   // 直连可达性探测:局域网内直连延迟最低,探测成功就保持直连;
   // 外网/跨网段(混合内容、PNA、私有 IP 不可路由)会抛网络错误 -> 走 HA 代理。
   async _probeDirect() {
-    if (!this.url || !this.apiKey) return false;
+    if (!this.url || !(this.token || this.apiKey)) return false;
     try {
+      await this._ensureToken();
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT);
       let ok = false;
@@ -155,20 +213,11 @@ export class BackendClient {
     return "direct";
   }
 
-  async rest(path, { method = "GET", body } = {}) {
+  async rest(path, { method = "GET", body, _retried = false } = {}) {
     if (this.mode === "proxy") {
-      // 代理模式下仍带上卡片自己的 api_key 作为 ?token= 兜底。
-      // 集成代理补的 `Authorization: Bearer <api_key>` 头依赖后端 v1.1.7+ 的
-      // "Bearer->apiKey 回退";较旧后端(或 :latest 镜像滞后)或某些反向代理
-      // 剥离自定义头时该头认证失败,导致 star 等需要用户身份的操作在外网代理
-      // 模式 401。卡片从 backend_config 拿到的 api_key 是经 HA 校验过的同一把
-      // 钥匙,用 ?token= 走与直连完全相同的契约(后端各版本均支持),使收藏等
-      // 操作在外网代理下稳定可用——这才是"之前只显示失败"那次修复真正该做的。
+      // 代理模式:浏览器连不上后端,所有请求经 HA 集成转发;集成补
+      // `Authorization: Bearer`(用集成登录所得的 JWT)完成鉴权,卡片不登录也不带 token。
       let url = "/api/musicflow/rest" + path;
-      if (this.apiKey) {
-        const sep = url.includes("?") ? "&" : "?";
-        url += `${sep}token=${encodeURIComponent(this.apiKey)}`;
-      }
       const init = { method, headers: {} };
       if (body !== undefined) {
         init.headers["Content-Type"] = "application/json";
@@ -202,6 +251,8 @@ export class BackendClient {
       return res;
     }
 
+    // 直连模式:卡片用用户名+密码登录拿 JWT,并自动续期/401 重试。
+    await this._ensureToken();
     const url = this._withToken(path);
     const init = { method, headers: {} };
     if (body !== undefined) {
@@ -228,6 +279,13 @@ export class BackendClient {
       throw e;
     }
     if (!res.ok) {
+      // JWT 过期(或凭据失效):清掉后重新登录一次再重试。
+      if (res.status === 401 && !_retried) {
+        this.token = null;
+        this._tokenExpiry = 0;
+        await this.login();
+        return this.rest(path, { method, body, _retried: true });
+      }
       const text = await res.text().catch(() => "");
       error("REST failed", method, path, res.status, text.slice(0, 200));
       throw new Error(`MusicFlow REST ${method} ${path} -> ${res.status}`);
@@ -264,8 +322,14 @@ export class BackendClient {
   }
 
   // ============ direct transport (WebSocket) ============
-  _connectWS() {
+  async _connectWS() {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    // 连前确保 JWT 有效(后端 JWT 24h 过期),否则握手被拒 → 无限重连。
+    try {
+      await this._ensureToken();
+    } catch (e) {
+      error("pre-connect login failed", e);
+    }
     let ws;
     try {
       ws = new WebSocket(this._wsUrl());
@@ -749,11 +813,15 @@ export class BackendClient {
     if (!coverId) return null;
     const path = `/getCoverArt?id=${encodeURIComponent(coverId)}&size=${COVER_SIZE}`;
     if (this.mode === "proxy") {
-      // 经 HA 同源代理:路径走 /api/musicflow/rest,并把 token 一并带在 query 里。
-      // path 本身已含 '?',必须按 separator 用 '&' 追加,否则出现两个 '?' 会让
-      // token 落到第二个 '?' 之后而失效,且 size 被污染 → 代理模式封面全失败。
-      const sep = path.includes("?") ? "&" : "?";
-      return `/api/musicflow/rest${path}${sep}token=${encodeURIComponent(this.apiKey)}`;
+      // 经 HA 同源代理:路径走 /api/musicflow/rest。代理鉴权由集成补的 Bearer 完成,
+      // 仅在旧 YAML 给了 api_key 兜底时再把 token 一并带在 query 里。path 本身已含
+      // '?',必须按 separator 用 '&' 追加,否则出现两个 '?' 会让 token 失效。
+      let url = `/api/musicflow/rest${path}`;
+      if (this.apiKey) {
+        const sep = url.includes("?") ? "&" : "?";
+        url += `${sep}token=${encodeURIComponent(this.apiKey)}`;
+      }
+      return url;
     }
     return this._withToken(path);
   }
