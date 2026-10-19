@@ -8,7 +8,9 @@
     "build": "rollup -c",
     "dev": "rollup -c --watch",
     "lint": "eslint src/",
-    "guard:client-link": "node tools/guard-client-link.mjs"
+    "guard:client-link": "node tools/guard-client-link.mjs",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
   },
   "keywords": [
     "home-assistant",
@@ -27,9 +29,12 @@
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
+    "@vitest/coverage-v8": "^5.0.5",
     "esbuild": "^0.28.1",
+    "happy-dom": "^21.0.3",
     "rollup": "^4.62.4",
-    "rollup-plugin-esbuild": "^6.2.1"
+    "rollup-plugin-esbuild": "^6.2.1",
+    "vitest": "^5.0.5"
   },
   "repository": {
     "type": "git",

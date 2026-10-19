@@ -1,0 +1,40 @@
+name: Unit Tests
+
+# 单元测试 + 覆盖率门禁（blocking）。
+#
+# 目标:src/**(卡片源码、后端客户端、本地化包)四维覆盖率
+# (lines / functions / branches / statements)全部 ≥ 60%。
+# 任一维度低于阈值时 vitest 以非零码退出,本 job 判红。
+#
+# ⚠️ 本 job **不构建产物**:dist/hass-musicflow-card.js 入仓,测试只跑 src 源码,
+# 绝不改动 dist。产物新鲜度由 validate.yml 的「dist is committed and up to date」兜底。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: card-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unit tests + coverage gate (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 单元测试 + 覆盖率门禁(≥60%)
+        run: npm run test:cov
