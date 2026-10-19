@@ -29,6 +29,12 @@
  *    这类错误编译不报错、单看某一端也说得通 ⇒ 只能靠守卫静态钉住键序。
  *    (客户端侧同口径由 `tool/check-peer-order.mjs` + peer_order 单测锁。)
  *
+ * E. 首页「打开速度」契约(2026-10-18)
+ *    首页原为 5 路 Promise.all 齐等,慢两路(平台精选/本地随机,冷启动 2.5s+)不回就整屏不出
+ *    (用户现象:「卡片加载了、封面迟迟不显示」)。现改为「阶段一只等快三路 + 慢两路 .then 后台
+ *    追加」,并给首屏前 8 行封面 fetchpriority=high。纯体感提速改动,退化不报错、不红动态用例,
+ *    故静态钉住:阶段一不含慢两路、慢两路非 await、回包比对 vSeq、首屏行封面优先。
+ *
  * 用法：node tools/guard-card-ui.mjs
  * （先 npm run build —— A 组同时校验 dist 产物,防止重演「src 修了、dist 没重建」。）
  */
@@ -313,6 +319,101 @@ record(
   "成员 status 恒 STOPPED、queue 恒空 ⇒ 选中它只显示 0:00/0:00;对它下发 play/pause 还会经 detachFromActiveGroups 把它从组里摘掉",
   managedWired(src),
   managedWired(dist),
+);
+
+// ============ E. 首页两阶段加载 + 首屏封面优先(2026-10-18 打开提速) ============
+//
+// 用户现场:「卡片加载了,封面迟迟不显示」。根因是首页 `_fetchHomeItems` 把 5 路请求塞进
+// 一个 Promise.all **齐等** —— 歌单/计数/固定卡(快)与平台精选/本地随机(冷启动 2.5s+)
+// 一起 await,慢两路不回就整屏不出。改法与客户端发现页同思路:
+//   E-a 阶段一只 await 快三路;慢两路另起一个 **非 await** 的 Promise.all,放 `.then` 后台追加
+//       (复用虚拟滚动「失效首块 + 重载」就地补齐,不白屏)。
+//   E-b 慢两路回包必须比对 level.vSeq 序号,不一致直接丢弃 —— 否则期间切 agent / 刷新 /
+//       搜索会用旧数据覆盖新状态。
+//   E-c 前 VS_PRIO_ROWS(=8) 行封面 fetchpriority=high,其余保持 loading=lazy —— 让浏览器
+//       先取首屏可见的 8 张,而不是把视口附近的百来张同源封面一起排队(与 Web 首页同策略)。
+//
+// 这一整组是纯「体感提速」改动:退化回「5 路齐等 / 不比对序号 / 全 lazy」**不报错、
+// 不红任何动态用例**,只会让首页悄悄变慢 —— 正是本守卫存在的理由。
+
+const HOME_FETCH = "_fetchHomeItems";
+
+/** 阶段一 Promise.all 只许含快三路;必须存在第二个(阶段二)Promise.all。 */
+function homeStage1FastOnly(text) {
+  const b = defBody(text, HOME_FETCH);
+  if (!b) return false;
+  const p1 = b.indexOf("Promise.all");
+  if (p1 < 0) return false;
+  const p2 = b.indexOf("Promise.all", p1 + 1);
+  if (p2 < 0) return false; // 阶段二缺失 = 退回齐等
+  const seg = b.slice(p1, p2); // 阶段一的内容
+  return (
+    /getPlaylistsV2/.test(seg) &&
+    /getHomePlaylistCount/.test(seg) &&
+    /getHomeCards/.test(seg) &&
+    !/getRecommend\(/.test(seg) &&
+    !/getLocalRecommend\(/.test(seg)
+  );
+}
+
+/** 慢两路必须 defer 到 `.then`(不得 await),追加走 _appendHomeSections + _homeAll。 */
+function homeStage2Deferred(text) {
+  const b = defBody(text, HOME_FETCH);
+  if (!b) return false;
+  const p1 = b.indexOf("Promise.all");
+  const p2 = p1 < 0 ? -1 : b.indexOf("Promise.all", p1 + 1);
+  if (p2 < 0) return false;
+  const tail = b.slice(p2);
+  // 阶段二那个 Promise.all 的**前面**不得是 await(否则又变回阻塞首屏)
+  const before = b.slice(Math.max(0, p2 - 16), p2);
+  return (
+    !/await\s*$/.test(before) &&
+    /\.then\(/.test(tail) &&
+    /_appendHomeSections\(/.test(tail) &&
+    /_homeAll\s*=/.test(tail)
+  );
+}
+
+/** 慢两路回包序号比对:不一致必须 return(src/dist 同为 `!== (x.vSeq || 0)) return`)。 */
+function homeSeqGuard(text) {
+  const b = defBody(text, HOME_FETCH);
+  return /!==\s*\(\s*[\w$]+\.vSeq\s*\|\|\s*0\s*\)\s*\)\s*return/.test(b) && /_homeSlowSeq/.test(b);
+}
+
+/** 首屏封面优先:prio 输出 high + prio 透传到 _coverImgTag + 前 N 行按行号取优先。 */
+function coverPriority(text) {
+  const imgBody = defBody(text, "_coverImgTag");
+  const rowBody = defBody(text, "_renderBrowserItem");
+  return (
+    /fetchpriority=\$\{[^}]*\?\s*["']high["']\s*:\s*[^}]*\}/.test(imgBody) &&
+    /_coverImgTag\([^)]*,[^)]*\)/.test(rowBody) &&
+    /_renderBrowserItem\([^,]+,\s*[\w$]+\s*<\s*[\w$]+\s*\)/.test(text)
+  );
+}
+
+record(
+  "E1 首页阶段一只等快三路(歌单/计数/固定卡),慢两路不得进首屏 Promise.all",
+  "5 路齐等 ⇒ 冷启动时慢请求(2.5s+)不回,整屏不出(用户现象「卡片加载了、封面迟迟不显示」)",
+  homeStage1FastOnly(src),
+  homeStage1FastOnly(dist),
+);
+record(
+  "E2 慢两路 defer 到 .then 后台追加(_appendHomeSections + _homeAll),不得 await",
+  "回到 await 齐等 = 首屏重新被慢请求阻塞",
+  homeStage2Deferred(src),
+  homeStage2Deferred(dist),
+);
+record(
+  "E3 慢两路回包比对 vSeq 序号,不一致丢弃",
+  "不比对 ⇒ 期间切 agent/刷新/搜索会被旧回包覆盖新状态(列表错位、刷新回退)",
+  homeSeqGuard(src),
+  homeSeqGuard(dist),
+);
+record(
+  "E4 首屏前 N 行封面 fetchpriority=high,其余保持 lazy",
+  "全部 lazy ⇒ 视口附近百来张同源封面一起排队,首屏封面迟迟不显示",
+  coverPriority(src),
+  coverPriority(dist),
 );
 
 // ============ 汇总 ============

@@ -2,7 +2,7 @@
 // controller for a MusicFlow server. It connects directly to the backend's
 // real-time /ws channel + REST API (via the `musicflow/backend_config` HA WS
 // command), so it is an equal peer to the Web/App clients.
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { BackendClient, childToQueueItem, parseLyrics } from "./backend-client.js";
 import { localize } from "./localize/localize.js";
@@ -24,6 +24,9 @@ const CHUNK = 200;
 const ROW_STEP = 50;
 const VS_OVERSCAN = 6;
 const VS_CONCURRENCY = 2;
+// 首屏行数(px 高度 ≥ 一屏):这些行的封面给 fetchpriority=high 提前拉,加快首屏观感;
+// 其余行保持懒加载,不设高优先级。
+const VS_PRIO_ROWS = 8;
 
 // 歌词滚动:单行高度(px)。必须与 CSS .lyricbox-line 的 height/line-height 一致,
 // 因为轨道位移是按「行数 x 行高」算的。视口高 = LYRIC_VIEW_LINES x 该值(见 CSS .lyricbox)。
@@ -37,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.4.13";
+const CARD_VERSION = "2.5.1";
 
 // 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
 // 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
@@ -1752,9 +1755,9 @@ class MusicFlowRemoteCard extends LitElement {
   // 直连模式返回可缓存直链;代理模式经 fetchWithAuth 拉 blob(objectURL)。
   // 这里先渲染带 data-cover-id 的占位 <img>,由 IntersectionObserver 进入视口后写 src
   // (代理模式则经 requestCover 拉取),见 _loadCoverInto。
-  _coverImgTag(coverArt) {
+  _coverImgTag(coverArt, prio = false) {
     if (!coverArt) return html`<span class="bnocover">♪</span>`;
-    return html`<img class="bcover-lazy" data-cover-id="${coverArt}" alt="" loading="lazy" />`;
+    return html`<img class="bcover-lazy" data-cover-id="${coverArt}" alt="" loading="lazy" fetchpriority=${prio ? "high" : nothing} />`;
   }
 
   _loadCoverInto(img) {
@@ -2519,7 +2522,7 @@ class MusicFlowRemoteCard extends LitElement {
       case "home": {
         // 首页推荐:与 Web 首页同源、能力驱动(每日推荐/本地推荐/随机补齐 + 各平台精选)。
         // 条目数 ≤ homeCount+平台歌单,一次拉齐,不做服务端分页。
-        const { items, total } = await this._fetchHomeItems();
+        const { items, total } = await this._fetchHomeItems(level);
         return { items, total };
       }
       case "songs": {
@@ -2595,17 +2598,26 @@ class MusicFlowRemoteCard extends LitElement {
     return items || [];
   }
 
-  // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。
-  // - 顶部推荐区:各推荐插件配置(showOnHome + homePosition)聚合的固定卡,>30 首才展示,
-  //   今日漫游(combo)卡带刷新;随机补齐到 homeCount;
-  // - 各平台精选:recommend 能力插件输出(如 go-music-dl),每个 channel 一个分区。
-  async _fetchHomeItems() {
-    const [plRes, cntRes, cardRes, recRes, lcRes] = await Promise.all([
+  // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。两阶段返回:
+  // - 阶段一(快):歌单 / 固定卡计数 / 固定卡三路请求先回,顶部固定卡 + 侧栏随机立即渲染;
+  // - 阶段二(慢):平台精选 / 本地随机两路请求(冷启动可能 2.5s+)到达后,把两个分区
+  //   追加到同一列表尾,再复用虚拟滚动「失效首块 + 重载」就地补齐,不整页重载、不白屏。
+  // 最终聚合顺序/字段与旧版逐字节一致:固定卡 → 侧栏随机 → 平台精选分区 → 本地随机分区。
+  async _fetchHomeItems(level) {
+    const seq = level ? (level.vSeq || 0) : 0;
+    // 令牌命中:该 level 已完成两阶段聚合(seq 对齐),直接返回内存完整列表,重载零网络。
+    if (level && level._homeAll && level._homeAllSeq === seq) {
+      return { items: level._homeAll, total: level._homeAll.length };
+    }
+    // 阶段一同序号复用:慢半拍在途时若再次取块(如窗口回退重拉),避免重复快请求,
+    // 也保证侧栏「随机」只在同一序号下随机一次(两次调用取到同一批歌单,最终列表不抖)。
+    if (level && level._homeStage1 && level._homeStage1Seq === seq) {
+      return { items: level._homeStage1, total: level._homeStage1.length };
+    }
+    const [plRes, cntRes, cardRes] = await Promise.all([
       this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
       this._client.getHomePlaylistCount().catch(() => null),
       this._client.getHomeCards().catch(() => null),
-      this._client.getRecommend().catch(() => null),
-      this._client.getLocalRecommend().catch(() => null),
     ]);
     const pls = plRes?.items || [];
     let homeCount = 8;
@@ -2623,12 +2635,47 @@ class MusicFlowRemoteCard extends LitElement {
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
     const items = [];
-    const pushPl = (id, name, coverArt, songCount, badge) => items.push({
+    cards.forEach((c) => this._pushHomePlaylist(items, c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name)));
+    side.forEach((p) => this._pushHomePlaylist(items, p.id, p.name, p.coverArt, p.songCount, ""));
+    if (level) { level._homeStage1 = items; level._homeStage1Seq = seq; }
+    // 阶段二:同一 seq 只补一次慢请求;到达后合并 + 失效重载。期间若 level 被重置/刷新/搜索
+    // (vSeq 变化)则整段丢弃,绝不覆盖更新的状态(复用 _vsReset 的序号令牌纪律)。
+    if (level && level._homeSlowSeq !== seq) {
+      level._homeSlowSeq = seq;
+      Promise.all([
+        this._client.getRecommend().catch(() => null),
+        this._client.getLocalRecommend().catch(() => null),
+      ]).then(([recRes, lcRes]) => {
+        if (seq !== (level.vSeq || 0)) return;
+        const full = items.slice();
+        this._appendHomeSections(full, recRes, lcRes);
+        level._homeAll = full;
+        level._homeAllSeq = level.vSeq || 0;
+        // 复用虚拟滚动「失效 + 重载」:作废首块(缓存条目仍在,故顶部不闪),
+        // 再用内存完整列表重新落盘,并按窗口补齐渲染。
+        if (level.vLoaded) level.vLoaded.delete(0);
+        level.total = full.length;
+        this._vsFetchChunk(level, 0).finally(() => {
+          if (seq !== (level.vSeq || 0)) return;
+          this._vsEnsureLoaded(level);
+          this.requestUpdate();
+        });
+      });
+    }
+    return { items, total: items.length };
+  }
+
+  // 首页推荐:固定卡 / 侧栏随机 / 本地随机 共用的歌单行(字段与旧版 pushPl 逐字节一致)。
+  _pushHomePlaylist(items, id, name, coverArt, songCount, badge) {
+    items.push({
       kind: "playlist", id: String(id), name: name || this._t("common.unnamedPlaylist"),
       coverArt, songCount: songCount || 0, badge,
     });
-    cards.forEach((c) => pushPl(c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name)));
-    side.forEach((p) => pushPl(p.id, p.name, p.coverArt, p.songCount, ""));
+  }
+
+  // 阶段二分区:各平台精选(recommend 插件 channels)+ 本地随机(/v1/local-recommend channels)。
+  // 追加到 items 尾部,顺序与字段与旧版一致(精选在前、本地随机在后)。
+  _appendHomeSections(items, recRes, lcRes) {
     // 各平台精选分区:channels → 分区头 + 远程歌单行(直接整播=先导入再播,与 Web playRemotePl 同流程)。
     const channels = recRes?.channels || [];
     const providerId = recRes?.providerId || "";
@@ -2659,9 +2706,8 @@ class MusicFlowRemoteCard extends LitElement {
         count: chPls.length,
         _local: true,
       });
-      chPls.forEach((pl) => pushPl(pl.id, pl.name, pl.coverArt, pl.songCount, ""));
+      chPls.forEach((pl) => this._pushHomePlaylist(items, pl.id, pl.name, pl.coverArt, pl.songCount, ""));
     }
-    return { items, total: items.length };
   }
 
   _browserPush(level) {
@@ -3088,12 +3134,12 @@ class MusicFlowRemoteCard extends LitElement {
       .catch((e) => err("playCollection failed", e));
   }
 
-  _renderBrowserItem(it) {
+  _renderBrowserItem(it, prio = false) {
     if (it.kind === "song") {
       return html`
         <div class="bitem">
           <div class="bthumb" style="cursor:pointer" title="${this._t("browser.playSong")}" @click=${() => this._browserPlaySong(it)}>
-            ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
+            ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt, prio)}
           </div>
           <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" @click=${() => this._browserItemClick(it)}>
             <div class="bt">${it.title}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
@@ -3142,7 +3188,7 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="bitem">
         <div class="bthumb" style="cursor:pointer" title="${this._t("browser.playCollection", { label: this._collLabel(it) })}" @click=${() => this._browserPlayCollection(it)}>
-          ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt)}
+          ${it._remote && it.coverArt ? html`<img class="bremote-img" src="${it.coverArt}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : this._coverImgTag(it.coverArt, prio)}
         </div>
         <div class="bmeta" style="cursor:pointer;flex:1;min-width:0" title="${this._t("browser.enter")}" @click=${() => this._browserItemClick(it)}>
           <div class="bt">${it.name}${badge}${it._remote && it.platformLabel ? html`<span class="rtag">${it.platformLabel}</span>` : ""}</div>
@@ -3233,7 +3279,7 @@ class MusicFlowRemoteCard extends LitElement {
     const it = level.vCache.get(i);
     return html`
       <div class="vs-row" style="top:${i * ROW_STEP}px">
-        ${it ? this._renderBrowserItem(it) : html`<div class="bitem vs-skel"></div>`}
+        ${it ? this._renderBrowserItem(it, i < VS_PRIO_ROWS) : html`<div class="bitem vs-skel"></div>`}
       </div>`;
   }
 
