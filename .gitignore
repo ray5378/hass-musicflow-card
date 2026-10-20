@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 .workbuddy/
 fetch_tmp/
+
+# 测试与覆盖率产物（vitest / v8 coverage）
+coverage/
