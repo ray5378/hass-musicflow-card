@@ -67,34 +67,34 @@ jobs:
             echo "no existing release for $RELEASE_TAG"
           fi
 
+      # 发布说明**按 tag 取文件**,不再写死在 workflow 里。
+      # 写死内容的旧做法会让每个新 tag 都复述上一版的功能,发布页与实际改动不符。
+      - name: Compose release notes
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          mkdir -p .release
+          if [ -f "docs/releases/$TAG.md" ]; then
+            cp "docs/releases/$TAG.md" .release/body.md
+            echo "::notice::release notes from docs/releases/$TAG.md"
+          else
+            printf '## MusicFlow 卡片 %s\n\n本版变更详见提交记录。\n' "$TAG" > .release/body.md
+            echo "::warning::docs/releases/$TAG.md 不存在,使用通用发布说明"
+          fi
+          {
+            echo
+            echo "### 升级步骤"
+            echo '1. HACS 中更新本卡片（或手动替换 `dist/hass-musicflow-card.js`）'
+            echo '2. 浏览器 `Ctrl+Shift+R`，或 Lovelace「重新加载资源」'
+            echo "3. F12 Console 确认 \`[musicflow-remote-card] v$VER\`"
+          } >> .release/body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
-          body: |
-            ## MusicFlow 卡片 ${{ steps.ver.outputs.tag }} — 补齐单元测试与覆盖率门禁
-
-            本版为**质量加固版**：卡片侧新增 vitest 单元测试、四维覆盖率硬门禁与阻塞式 CI，
-            并补齐被忽略的构建产物。**卡片功能与界面行为无变化。**
-
-            ### 新增：单元测试 + 覆盖率门禁
-            - 新增 `vitest` 单测（happy-dom 环境）：覆盖后端客户端（直连 / 代理、REST / WS、
-              封面缓存）、本地化与语言包、i18n 键位一致性、卡片主逻辑。
-            - 新增四维覆盖率门禁（语句 / 分支 / 函数 / 行，阈值 60%），以独立 `Unit Tests`
-              workflow 阻塞合并；覆盖率不达标直接判红。
-            - 既有 4 个守卫（Card UI 契约 / Client Link / Seek Contract / Version Guard）保持全绿。
-
-            ### 其他
-            - `.gitignore` 忽略 vitest 生成的 `coverage/` 目录，避免产物误入版本库。
-
-            ### 影响面
-            - 纯测试 / 工程配置改动，**卡片运行时行为、HACS 安装方式与配置项均无变化**。
-            - 服务端 / HA 集成 / 客户端无需配合升级。
-
-            ### 升级步骤
-            1. HACS 中更新本卡片（或手动替换 `dist/hass-musicflow-card.js`）
-            2. 浏览器 `Ctrl+Shift+R`，或 Lovelace「重新加载资源」
-            3. F12 Console 确认 `[musicflow-remote-card] v${{ steps.ver.outputs.ver }}`
+          body_path: .release/body.md
           draft: false
           prerelease: false
