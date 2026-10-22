@@ -40,12 +40,24 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.5.2";
+const CARD_VERSION = "2.6.0";
 
 // 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
 // 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
 // 管理态内的任何操作(勾选圈 / 点群组 chip)都会重新计时,不会挑设备挑到一半被踢出。
 const GROUP_MANAGE_IDLE_MS = 10000;
+
+// 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
+// - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
+// - TP_AUTOSCROLL_ZONE: 滚动视口**上下边缘内的隐形热区**高度(px)。热区不占布局、
+//   无可见元素;指针进入即连续滚动,越靠近边缘越快。
+// - TP_AUTOSCROLL_MIN/MAX_SPEED: 热区内缘→外缘的速度区间(px/s)。
+// - 底部热区止于滚动视口下缘:回收站在滚动区之外,越界即不滚动、只触发销毁,
+//   二者物理分界,不会误触。
+const TP_DRAG_THRESHOLD = 6;
+const TP_AUTOSCROLL_ZONE = 44;
+const TP_AUTOSCROLL_MIN_SPEED = 140;
+const TP_AUTOSCROLL_MAX_SPEED = 1100;
 
 // 拖动 seek 目标的精度契约 ——「最小粒度 1 秒」(2026-09-22 事故沉淀)。
 //
@@ -93,6 +105,11 @@ const MF_ICONS = {
   // 客户端本机实例(安卓/Windows):与 DLNA 的 speaker 区分开来,一眼看出是「客户端播放器」。
   smartphone: '<rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/>',
   monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  // 流转播放:左右箭头互换(lucide arrow-right-left),一眼看出「把播放搬到另一台设备」。
+  transfer: '<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>',
+  // 群组(多台设备的集合,lucide users)/ 回收站(lucide trash-2)
+  group: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
 };
 
 function log(...args) { console.log("[MF card]", ...args); }
@@ -266,6 +283,14 @@ class MusicFlowRemoteCard extends LitElement {
       // 群组管理模式:被点选的群组 peerId(null = 未进入)。进入后每个设备
       // output 旁出现 +/− 徽标(组内 − / 组外 +),点击即加入/退出该组。
       groupManage: null,
+      // 流转播放页:true = 用「与当前卡片同尺寸的整卡覆盖层」显示流转页(见 _renderTransfer)。
+      transferOpen: false,
+      // 流转页自己的群组管理态:**不共用首页 groupManage**(首页是 10s 自动退出的临时浮层,
+      // 流转页要一直保持到用户再点群组 / 关页)。存 group:<gid>。
+      transferGroupId: null,
+      transferBusy: false, // 流转页内任一异步操作(切换/流转/销毁/加减成员)进行中:禁止重复操作
+      transferMsg: "",     // 流转页内联提示(成功/失败)
+      transferMsgErr: false,
       queue: { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false },
       // 队列虚拟滚动状态:稀疏缓存(Map idx→item)+ 已加载/加载中块集合 + 渲染窗口
       qCache: new Map(),
@@ -297,6 +322,21 @@ class MusicFlowRemoteCard extends LitElement {
       coverLightText: true, // 封面背景融合:true=浅色文字(暗背景),false=深色文字(亮背景)
       volAnchor: null,
     };
+    // ===== 流转页运行态(非响应式)=====
+    this._transferGroupMembers = new Set(); // 流转页选中群组的成员键集合
+    this._tpMsgTimer = null;   // 内联提示自动清除
+    this._tpCloseTimer = null; // 成功后延迟关页(让「已流转/已切换」提示能被看到)
+    this._tpDrag = null;       // { src, srcEl, pointerId, x, y, startX, startY, active }
+    this._tpGhostEl = null;    // 拖拽幽灵(position:fixed, pointer-events:none)
+    this._tpAutoRAF = null;    // 自动滚动 rAF 句柄
+    this._tpLastRAFAt = null;
+    this._tpOverPeerId = null; // 当前落点(拖动经过的播放端)
+    this._tpOverTrash = false; // 指针是否已在回收站(此时不滚动)
+    this._tpSuppressClickUntil = 0; // 拖拽结束后抑制一次 click(否则会误触「切目标」)
+    this._tpSession = 0;        // 流转页会话号:关页/重开即递增,丢弃旧会话的异步回写
+    this._tpMoveHandler = null;
+    this._tpUpHandler = null;
+    this._tpCancelHandler = null;
     this._tickTimer = null;
     this._pollTimer = null;
     this._lastFetchStartedAtMs = 0; // 最近一次状态拉取的发起时刻(ms):与 _seekAckAtMs 比较判因果
@@ -306,7 +346,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._miniTimer = null; // 极简歌词模式:空闲隐藏计时器
     this._pauseTimer = null; // 极简歌词模式:暂停去抖计时器(切歌瞬间 isPlaying 短暂 false 也会触发,需去抖)
     // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
-    this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, songId: null };
+    this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, transferOpen: false, songId: null };
     this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
     this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
@@ -354,6 +394,11 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (this._pauseTimer) { clearTimeout(this._pauseTimer); this._pauseTimer = null; }
     if (this._gmTimer) { clearTimeout(this._gmTimer); this._gmTimer = null; }
+    // 流转页:拖拽监听/幽灵节点/rAF 循环与提示定时器都必须随卡片卸载清理,
+    // 否则重新挂载后 window 上会残留指向旧实例的监听。
+    this._tpEndDrag();
+    if (this._tpMsgTimer) { clearTimeout(this._tpMsgTimer); this._tpMsgTimer = null; }
+    if (this._tpCloseTimer) { clearTimeout(this._tpCloseTimer); this._tpCloseTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
     if (this._idleVisHandler) { document.removeEventListener("visibilitychange", this._idleVisHandler); this._idleVisHandler = null; }
     if (this._idleObserver) { this._idleObserver.disconnect(); this._idleObserver = null; }
@@ -1335,7 +1380,7 @@ class MusicFlowRemoteCard extends LitElement {
   // 允许进入极简的条件:播放中、无面板打开、有歌词。触屏同样生效(点按恢复)。
   _canMini() {
     const u = this._ui;
-    return !!(u.isPlaying && !u.showVolume && !u.showQueue && !u.showBrowser && u.lyrics && u.lyrics.length);
+    return !!(u.isPlaying && !u.showVolume && !u.showQueue && !u.showBrowser && !u.transferOpen && u.lyrics && u.lyrics.length);
   }
 
   _setMini(on) {
@@ -1397,18 +1442,21 @@ class MusicFlowRemoteCard extends LitElement {
     const queueChanged = w.showQueue !== u.showQueue;
     const browserChanged = w.showBrowser !== u.showBrowser;
     const volumeChanged = w.showVolume !== u.showVolume;
+    const transferChanged = w.transferOpen !== u.transferOpen;
     const lyricCountChanged = w.lyricCount !== lyricCount;
 
     if (!isPlayingChanged && !songIdChanged && !queueChanged && !browserChanged &&
-        !volumeChanged && !lyricCountChanged) return;
+        !volumeChanged && !transferChanged && !lyricCountChanged) return;
 
     const wasPlaying = w.isPlaying;
     const wasQueue = w.showQueue;
     const wasBrowser = w.showBrowser;
+    const wasTransfer = w.transferOpen;
 
     w.isPlaying = u.isPlaying; w.lyricCount = lyricCount;
     w.showVolume = u.showVolume; w.showQueue = u.showQueue;
     w.showBrowser = u.showBrowser; w.songId = songId;
+    w.transferOpen = u.transferOpen;
 
     // 暂停(isPlaying true→false)→ 去抖 500ms:切歌瞬间 isPlaying 会有短暂 false
     // (~几十~几百毫秒),持续 false 才是真暂停,短暂 false 让 mini 保持不闪。
@@ -1427,8 +1475,8 @@ class MusicFlowRemoteCard extends LitElement {
       clearTimeout(this._pauseTimer);
       this._pauseTimer = null;
     }
-    // 打开队列/媒体库面板 → 退出 mini
-    if ((!wasQueue && u.showQueue) || (!wasBrowser && u.showBrowser)) {
+    // 打开队列/媒体库/流转页面板 → 退出 mini
+    if ((!wasQueue && u.showQueue) || (!wasBrowser && u.showBrowser) || (!wasTransfer && u.transferOpen)) {
       if (this._ui.mini) this._setMini(false);
       this._resetIdleTimer();
       return;
@@ -1908,6 +1956,22 @@ class MusicFlowRemoteCard extends LitElement {
     });
   }
 
+  // 流转页封面懒加载:与媒体库/队列同一套观察器(绑定 .tp-scroll 滚动容器),
+  // 由 B 的自动滚动带出视口的圆会随滚动陆续加载。
+  _observeTransferCovers() {
+    if (!this._ui.transferOpen || !this._client) return;
+    const root = this.shadowRoot?.querySelector(".tp-scroll");
+    if (!root) return;
+    this._ensureCoverObserver(root);
+    root.querySelectorAll("img.tp-cover-lazy").forEach((img) => {
+      const id = img.getAttribute("data-cover-id");
+      if (img.dataset.loadedId !== id) {
+        img.removeAttribute("src");
+        this._coverObserver.observe(img);
+      }
+    });
+  }
+
   _fmtTime(s) {
     if (!s || s < 0) return "0:00";
     const m = Math.floor(s / 60);
@@ -1937,6 +2001,9 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.showQueue) {
       this.updateComplete.then(() => this._qEnsureLoaded()).catch(() => {});
       this.updateComplete.then(() => this._observeQueueCovers()).catch(() => {});
+    }
+    if (this._ui.transferOpen) {
+      this.updateComplete.then(() => this._observeTransferCovers()).catch(() => {});
     }
     // 播放器清晰封面 + 背景融合封面都走 mode 感知加载(代理模式裸 <img src> 不带 HA 鉴权会 401)。
     const pc = this.shadowRoot?.querySelector(".nowcover");
@@ -1987,7 +2054,7 @@ class MusicFlowRemoteCard extends LitElement {
           <div class="idlebg">
             ${IDLE_GROUPS.map((g, i) => html`<i style="--c1:${g.c1};--c2:${g.c2};--dly:${(-(i * pal.cycle) / IDLE_GROUP_COUNT).toFixed(2)}s"></i>`)}
           </div>` : ""}
-        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
+        <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser || u.transferOpen ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-h:${this._miniFullH || 250}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
           ${!u.connected && u.wsState === "rest" ? html`<div class="warnbar">${this._t("connection.restoring")}</div>` : ""}
           ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">${this._t("connection.cannotConnect")}</div>` : ""}
           ${this._renderOutputs()}
@@ -2031,6 +2098,7 @@ class MusicFlowRemoteCard extends LitElement {
 
           ${u.showQueue ? this._renderQueue() : ""}
           ${u.showBrowser ? this._renderMediaBrowser() : ""}
+          ${u.transferOpen ? this._renderTransfer() : ""}
         </div>
       </ha-card>
     `;
@@ -2042,33 +2110,643 @@ class MusicFlowRemoteCard extends LitElement {
     const peers = (this._ui.peers || []).filter((p) => p.available !== false || p.kind === "group");
     if (!peers.length) return html`<div class="outputs"><span class="hint">${this._t("browser.noPlayer")}</span></div>`;
     const managing = this._ui.groupManage;
+    // 首页 chip 行**恒为一行**:放不下的播放器一律裁掉(不换行、正常态也不给横向滚动),
+    // 要切到被裁掉的设备请点行尾「流转播放」进整卡流转页(见 _openTransfer)。
+    // 当前遥控目标提到首位,保证被裁时「正在控的那台」始终可见。
+    const cur = this._ui.currentPeerId;
+    const ordered = cur
+      ? [...peers.filter((p) => p.peerId === cur), ...peers.filter((p) => p.peerId !== cur)]
+      : peers;
     return html`
-      <div class="outputs">
-        ${peers.map((p) => {
-          const isGroup = p.kind === "group";
-          // 管理模式下,设备型成员(dlna/sendspin)底下出现 +/− 徽标;
-          // 本机/airplay/其它不参与(服务端组成员只有 dlna/sendspin 命名空间)。
-          const showBadge = !!managing && !isGroup && (p.kind === "dlna" || p.kind === "sendspin");
-          const member = this._isGroupMember(p);
-          // 勾选圈:始终渲染 ✓ 字形,未加入时着色为透明(仅留空心圈),
-          // 加入后 accent 实心 + 白色 ✓ —— 与 Web / 客户端一致。
-          return html`
-            <div class="out-wrap">
-              <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"} ${managing === p.peerId ? "managing" : ""}"
-                title="${this._peerTitle(p)}"
-                @click=${() => (isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId))}>
-                ${this._icon(this._peerIcon(p), 16)} ${this._peerLabel(p)}
-              </button>
-              ${showBadge ? html`
-                <button class="out-badge ${member ? "in" : ""}"
-                  title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
-                  @click=${(e) => { e.stopPropagation(); this._toggleGroupMember(p); }}>✓</button>` : null}
-            </div>
-          `;
-        })}
+      <div class="outputs ${managing ? "managing" : ""}">
+        <div class="out-list">
+          ${ordered.map((p) => {
+            const isGroup = p.kind === "group";
+            // 管理模式下,设备型成员(dlna/sendspin)底下出现 +/− 徽标;
+            // 本机/airplay/其它不参与(服务端组成员只有 dlna/sendspin 命名空间)。
+            const showBadge = !!managing && !isGroup && (p.kind === "dlna" || p.kind === "sendspin");
+            const member = this._isGroupMember(p);
+            // 勾选圈:始终渲染 ✓ 字形,未加入时着色为透明(仅留空心圈),
+            // 加入后 accent 实心 + 白色 ✓ —— 与 Web / 客户端一致。
+            return html`
+              <div class="out-wrap">
+                <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"} ${managing === p.peerId ? "managing" : ""}"
+                  title="${this._peerTitle(p)}"
+                  @click=${() => (isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId))}>
+                  ${this._icon(this._peerIcon(p), 16)}<span class="out-label">${this._peerLabel(p)}</span>
+                </button>
+                ${showBadge ? html`
+                  <button class="out-badge ${member ? "in" : ""}"
+                    title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
+                    @click=${(e) => { e.stopPropagation(); this._toggleGroupMember(p); }}>✓</button>` : null}
+              </div>
+            `;
+          })}
+        </div>
+        <button class="out transfer" title="${this._t("outputs.transfer")}"
+          @click=${(e) => { e.stopPropagation(); this._openTransfer(); }}>
+          ${this._icon("transfer", 16)} ${this._t("outputs.transfer")}
+        </button>
         ${managing ? html`<div class="gm-hint">${this._t("outputs.groupManageHint")}</div>` : null}
       </div>
     `;
+  }
+
+  // 打开整卡流转页:首页 chip 行只放得下一行,被裁掉的播放器在这里切换/拖拽流转。
+  // 先收起群组管理态与队列/媒体库面板,避免流转页底下残留临时浮层状态(A3 渲染页面)。
+  _openTransfer() {
+    this._exitGroupManage();
+    this._ui.showQueue = false;
+    this._ui.showBrowser = false;
+    this._ui.showVolume = false; // 音量浮层 z-index 高于 .panel,不关会遮住回收站与底部热区
+    this._tpSession += 1;        // 新会话:关页前残留的异步回写全部作废
+    if (this._tpCloseTimer) { clearTimeout(this._tpCloseTimer); this._tpCloseTimer = null; }
+    this._ui.transferOpen = true;
+    this._ui.transferGroupId = null;
+    this._ui.transferBusy = false;
+    this._ui.transferMsg = "";
+    this._ui.transferMsgErr = false;
+    this._transferGroupMembers = new Set();
+    this.requestUpdate();
+  }
+
+  // ============ 整卡流转页 ============
+  // 与队列/媒体库同款:`.panel` inset:0 铺满整张卡片(尺寸 = 打开前的卡片尺寸,不动卡高),
+  // 头部固定、内容区 .tp-scroll 独立滚动;底部回收站在滚动区之外(B3 的物理分界)。
+  // 点空白关闭:播放端圆(.tp-peer)/回收站(.tp-trash)/按钮等交互元素不触发关闭。
+  _renderTransfer() {
+    // 过滤口径与首页一致:离线设备不展示(避免拖到一台已下线的端上才失败);
+    // 群组是容器,成员全离线也保留;Web 端不出声,不是流转目标。
+    const peers = (this._ui.peers || []).filter(
+      (p) => (p.available !== false || p.kind === "group") &&
+        (p.kind !== "local" || p.platform !== "web"),
+    );
+    const ordered = this._sortPeersForDisplay(peers);
+    const busy = this._ui.transferBusy;
+    return html`
+      <div class="panel transfer ${busy ? "busy" : ""}" @click=${this._onTransferClick}>
+        <div class="panel-head">
+          <span class="tp-title">${this._t("transfer.title")}</span>
+          ${this._ui.transferMsg ? html`
+            <span class="tp-msg ${this._ui.transferMsgErr ? "err" : ""}">${this._ui.transferMsg}</span>` : null}
+          <button class="mini close" title="${this._t("control.close")}"
+            @click=${(e) => { e.stopPropagation(); this._closeTransfer(); }}>✕</button>
+        </div>
+        ${this._ui.transferGroupId ? html`
+          <div class="tp-gm-hint">${this._t("transfer.groupHint")}</div>` : null}
+        <div class="tp-scroll">
+          <div class="tp-grid">
+            ${ordered.length ? ordered.map((p) => this._renderTransferPeer(p)) : html`
+              <div class="empty tp-empty">${this._t("transfer.empty")}</div>`}
+          </div>
+        </div>
+        <div class="tp-trash ${this._tpOverTrash ? "over" : ""}" title="${this._t("transfer.trashHint")}">
+          ${this._icon("trash", 18)}
+          <span>${this._t("transfer.trash")}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // 单个播放端:圆形封面(在播曲目;没有则设备图标)+ 名称 + 状态行。
+  // 当前遥控目标带 accent 高亮与勾选角标;群组用虚线圆 + 成员数区分。
+  _renderTransferPeer(p) {
+    const isGroup = p.kind === "group";
+    const q = p.queue || {};
+    const items = Array.isArray(q.items) ? q.items : null;
+    const idx = typeof q.currentIndex === "number" ? q.currentIndex : -1;
+    const item = items && idx >= 0 && idx < items.length ? items[idx] : null;
+    const isCurrent = this._ui.currentPeerId === p.peerId;
+    // 当前目标的 peer 行可能只拿到队列摘要(items 为空),封面/曲名从卡片已镜像的
+    // 当前歌曲补全 —— 否则「正在播的那台」反而是唯一没有封面的。
+    const mirrored = isCurrent ? this._ui.song : null;
+    const playing = isGroup
+      ? !!q.isActive
+      : (!!q.isActive || (isCurrent && !!this._ui.isPlaying));
+    const coverArt = (item && item.coverArt) || (playing && mirrored && mirrored.coverArt) || null;
+    const title = (item && item.title) || (playing && mirrored && mirrored.title) || "";
+    const artist = (item && item.artist) || "";
+    const sub = isGroup
+      ? (playing && title
+        ? title
+        : this._t("transfer.members", { n: (p.memberIds || []).length }))
+      : (playing && title
+        ? (artist ? `${title} - ${artist}` : title)
+        : this._t("transfer.idle"));
+    const showBadge = !!this._ui.transferGroupId && !isGroup &&
+      (p.kind === "dlna" || p.kind === "sendspin");
+    const member = this._isTransferGroupMember(p);
+    const isDropTarget = p.peerId === this._tpOverPeerId;
+    return html`
+      <div class="tp-peer ${isCurrent ? "current" : ""} ${isDropTarget ? "drop" : ""} ${isGroup ? "group" : ""} ${p.available === false ? "off" : ""}"
+        data-peer-id="${p.peerId}" role="button" tabindex="0" title="${this._peerTitle(p)}"
+        @click=${(e) => this._tpPeerClick(e, p)}
+        @keydown=${(e) => this._tpPeerKey(e, p)}
+        @pointerdown=${(e) => this._tpPointerDown(e, p)}>
+        <div class="tp-ring">
+          <div class="tp-cover">
+            ${coverArt
+              ? html`<img class="tp-cover-lazy" data-cover-id="${coverArt}" alt="" draggable="false" />`
+              : html`<span class="tp-fallback">${this._icon(isGroup ? "group" : this._peerIcon(p), 30)}</span>`}
+          </div>
+          ${isGroup ? html`<span class="tp-dash"></span>` : null}
+          ${playing ? html`<span class="tp-live" title="${this._t("transfer.playing")}"><i></i><i></i><i></i></span>` : null}
+          ${isCurrent ? html`<span class="tp-cur" title="${this._t("transfer.current")}">${this._icon("check", 11)}</span>` : null}
+        </div>
+        <div class="tp-name">${this._peerLabel(p)}</div>
+        <div class="tp-sub">${sub}</div>
+        ${showBadge ? html`
+          <button class="tp-badge ${member ? "in" : ""}"
+            title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
+            @pointerdown=${(e) => e.stopPropagation()}
+            @click=${(e) => this._tpToggleMember(e, p)}>${member ? "−" : "+"}</button>` : null}
+      </div>
+    `;
+  }
+
+  _tpPeerKey(e, p) {
+    const path = e.composedPath ? e.composedPath() : [];
+    // 焦点在 +/− 勾选圈上按 Enter:交给按钮自己的 click,别先被这里当成「切目标」。
+    if (path.some((n) => n && n.classList && n.classList.contains("tp-badge"))) return;
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      this._tpPeerClick(e, p);
+    }
+  }
+
+  // 单击播放端 = 切遥控目标(与首页 chip 同义);点当前目标 = 直接关页;
+  // 点群组 = 切到该群组并进入成员管理模式(见 _tpToggleGroup)。
+  _tpPeerClick(e, p) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (Date.now() < this._tpSuppressClickUntil) return; // 刚结束的一次拖拽,别误当单击
+    if (this._ui.transferBusy) return;
+    this._tpCancelCloseSoon(); // 用户又操作了:撤销上一次成功后排的自动关页
+    if (p.kind === "group") { this._tpToggleGroup(p); return; }
+    const target = this._resolveControlPeerId(p.peerId);
+    if (target === this._ui.currentPeerId) { this._closeTransfer(); return; }
+    this._selectPeer(p.peerId);
+    this._tpFlash(this._t("transfer.switched", { name: this._peerLabel(p) }), false);
+    this._tpCloseSoon();
+  }
+
+  // ============ 群组管理(流转页内) ============
+  // 点群组 = ①遥控目标切到该群组;②进入成员管理模式,设备圆右上出现 +/−。
+  // 再点同一群组 = 退出管理(遥控目标不变,与首页/客户端一致)。
+  async _tpToggleGroup(p) {
+    if (this._ui.transferBusy) return;
+    this._tpCancelCloseSoon();
+    if (this._ui.transferGroupId === p.peerId) {
+      this._ui.transferGroupId = null;
+      this._transferGroupMembers = new Set();
+      this.requestUpdate();
+      return;
+    }
+    const session = this._tpSession;
+    if (this._resolveControlPeerId(p.peerId) !== this._ui.currentPeerId) {
+      this._selectPeer(p.peerId);
+    }
+    this._ui.transferGroupId = p.peerId;
+    this._transferGroupMembers = new Set();
+    this.requestUpdate();
+    try {
+      const res = await this._client.getGroups();
+      // 旧请求(已切到别的群/已关页)回来时不得覆盖当前成员集。
+      if (session !== this._tpSession || this._ui.transferGroupId !== p.peerId) return;
+      const gid = p.peerId.startsWith("group:") ? p.peerId.slice("group:".length) : p.peerId;
+      const hit = (res && res.groups || []).find((g) => g && g.id === gid);
+      if (hit) this._transferGroupMembers = new Set((hit.memberIds || []).map(String));
+    } catch (_e) {
+      // 拉取失败:全部显示 +,点一下以服务端返回的 memberIds 为准。
+    }
+    if (session !== this._tpSession || this._ui.transferGroupId !== p.peerId) return;
+    this.requestUpdate();
+  }
+
+  _isTransferGroupMember(p) {
+    if (!this._ui.transferGroupId) return false;
+    const k = this._memberKeyFor(p);
+    return this._transferGroupMembers.has(k) || this._transferGroupMembers.has(p.peerId);
+  }
+
+  async _tpToggleMember(e, p) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (!this._client || !this._ui.transferGroupId || this._ui.transferBusy) return;
+    const groupId = this._ui.transferGroupId;
+    const gid = groupId.startsWith("group:")
+      ? groupId.slice("group:".length)
+      : groupId;
+    const key = this._memberKeyFor(p);
+    const join = !this._isTransferGroupMember(p);
+    const session = this._tpSession;
+    this._ui.transferBusy = true;
+    this.requestUpdate();
+    try {
+      const res = await this._client.updateGroupMembers(gid, join ? [key] : [], join ? [] : [key]);
+      // 请求在途时关页/换了群:成员集只属于原群,丢弃本次回写。
+      if (session !== this._tpSession || this._ui.transferGroupId !== groupId) return;
+      const ids = res && res.group && res.group.memberIds;
+      if (Array.isArray(ids)) this._transferGroupMembers = new Set(ids.map(String));
+      else if (join) { this._transferGroupMembers.add(key); this._transferGroupMembers.add(p.peerId); }
+      else { this._transferGroupMembers.delete(key); this._transferGroupMembers.delete(p.peerId); }
+    } catch (e2) {
+      err("transfer group member update failed", e2);
+      if (session === this._tpSession) this._tpFlash(this._t("transfer.groupFailed"), true);
+    } finally {
+      // busy 归新会话管:旧会话的 finally 不能把新会话的忙态/页面状态改掉。
+      if (session === this._tpSession) {
+        this._ui.transferBusy = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  // ============ 流转 / 销毁 ============
+  async _tpTransfer(from, to) {
+    if (!this._client || !from || !to || from.peerId === to.peerId) return;
+    if (this._ui.transferBusy) return;
+    const session = this._tpSession;
+    this._ui.transferBusy = true;
+    this._ui.transferMsgErr = false;
+    this._ui.transferMsg = this._t("transfer.transferring", {
+      from: this._peerLabel(from), to: this._peerLabel(to),
+    });
+    this.requestUpdate();
+    let ok = false;
+    try {
+      const res = await this._client.transferFrom(to.peerId, from.peerId);
+      if (!res || res.success !== true) throw new Error("transfer-from failed");
+      // 源队列为空时服务端返回 success:true + transferred:0(见 peers.ts):
+      // 不能谎报流转成功,更不能 reset 源端(那会弹「已销毁」式副作用)。
+      if (res.transferred === 0) {
+        if (session === this._tpSession) {
+          this._tpFlash(this._t("transfer.emptyQueue", { from: this._peerLabel(from) }), true);
+        }
+        return;
+      }
+      // 源端彻底重置(停止 + 清队列 + 清运行态):搬移语义,不是复制。
+      // 失败不影响流转本身 —— 队列已在目标端起播(与客户端同口径)。
+      try { await this._client.resetPeer(from.peerId); }
+      catch (e2) { err("transfer reset source failed", e2); }
+      ok = true;
+      // 在途时关页/重开:搬运已发生,但不能再改新会话的遥控目标与提示。
+      if (session !== this._tpSession) return;
+      this._selectPeer(to.peerId); // 遥控目标跟随目的地(成员会收敛到托管组)
+      this._tpFlash(this._t("transfer.transferred", { to: this._peerLabel(to) }), false);
+      this._tpCloseSoon();
+    } catch (e2) {
+      err("transfer failed", e2);
+      if (session === this._tpSession) this._tpFlash(this._t("transfer.transferFailed"), true);
+    } finally {
+      if (session === this._tpSession) {
+        this._ui.transferBusy = false;
+        this.requestUpdate();
+        if (ok) this._refreshPeers();
+      }
+    }
+  }
+
+  // 回收站 = 销毁该端(停止 + 清空队列)。成功弹提示**不关页**,失败留页报错。
+  async _tpDestroy(p) {
+    if (!this._client || !p) return;
+    if (this._ui.transferBusy) return;
+    const session = this._tpSession;
+    this._ui.transferBusy = true;
+    this.requestUpdate();
+    try {
+      await this._client.resetPeer(p.peerId);
+      if (session !== this._tpSession) return;
+      this._tpFlash(this._t("transfer.destroyed", { name: this._peerLabel(p) }), false);
+      this._refreshPeers();
+    } catch (e2) {
+      err("destroy peer failed", e2);
+      if (session === this._tpSession) this._tpFlash(this._t("transfer.destroyFailed"), true);
+    } finally {
+      if (session === this._tpSession) {
+        this._ui.transferBusy = false;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  _tpFlash(text, isErr = false) {
+    if (this._tpMsgTimer) { clearTimeout(this._tpMsgTimer); this._tpMsgTimer = null; }
+    this._ui.transferMsg = text || "";
+    this._ui.transferMsgErr = !!isErr;
+    this.requestUpdate();
+    if (text) {
+      this._tpMsgTimer = setTimeout(() => {
+        this._tpMsgTimer = null;
+        this._ui.transferMsg = "";
+        this.requestUpdate();
+      }, 3200);
+    }
+  }
+
+  _tpCloseSoon(ms = 650) {
+    if (this._tpCloseTimer) clearTimeout(this._tpCloseTimer);
+    this._tpCloseTimer = setTimeout(() => {
+      this._tpCloseTimer = null;
+      this._closeTransfer();
+    }, ms);
+  }
+
+  // 撤销「成功后排的自动关页」:用户在等待窗口内又操作了,不能把页面从他手下关掉。
+  _tpCancelCloseSoon() {
+    if (this._tpCloseTimer) { clearTimeout(this._tpCloseTimer); this._tpCloseTimer = null; }
+  }
+
+  // ============ 流转页拖拽(指针事件:鼠标 / 触屏统一) ============
+  // 为什么不用原生 HTML5 drag:Shadow DOM + 触屏下 dragover 命中不稳定,且幽灵
+  // 样式无法完全自控。这里用 pointerdown/move/up + 自建幽灵,滚动手感与落点判定可测。
+  _tpPointerDown(e, p) {
+    if (!this._ui.transferOpen || this._ui.transferBusy) return;
+    // 已有拖拽在跑(第二根手指/鼠标与触屏混用):忽略,否则会覆盖 _tpDrag 并泄漏监听。
+    if (this._tpDrag) return;
+    if (typeof e.button === "number" && e.button !== 0) return;
+    this._tpCancelCloseSoon(); // 开始新操作:撤销成功后排的自动关页
+    // 这里**不能** preventDefault:取消 pointerdown 会抑制触屏后续补发的 click,
+    // 而「单击切目标」与群组 +/− 都挂在 click 上。滚动/选中已由 .tp-peer 的
+    // touch-action:none + user-select:none 挡住,无需再动默认行为。
+    if (e.stopPropagation) e.stopPropagation();
+    this._tpDrag = {
+      src: p, srcEl: e.currentTarget, pointerId: e.pointerId,
+      x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, active: false,
+    };
+    // 指针捕获 + blur 兜底:指针拖到窗口外/切走再松开时仍能收到 pointerup,
+    // 否则 _tpDrag 永远不清,后续拖拽全被 2456 的守卫挡死、自动滚动也会一直跑。
+    try {
+      if (e.currentTarget && e.currentTarget.setPointerCapture) {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+    } catch (_e) {}
+    this._tpLostHandler = (ev) => {
+      if (this._tpDrag && ev.pointerId === this._tpDrag.pointerId) this._tpEndDrag();
+    };
+    try {
+      if (e.currentTarget) e.currentTarget.addEventListener("lostpointercapture", this._tpLostHandler);
+    } catch (_e) {}
+    this._tpBlurHandler = () => { if (this._tpDrag) this._tpEndDrag(); };
+    window.addEventListener("blur", this._tpBlurHandler);
+    this._tpMoveHandler = (ev) => this._tpPointerMove(ev);
+    this._tpUpHandler = (ev) => this._tpPointerUp(ev);
+    this._tpCancelHandler = (ev) => this._tpPointerCancel(ev);
+    window.addEventListener("pointermove", this._tpMoveHandler, { passive: false });
+    window.addEventListener("pointerup", this._tpUpHandler);
+    window.addEventListener("pointercancel", this._tpCancelHandler);
+  }
+
+  _tpPointerMove(ev) {
+    const d = this._tpDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    if (!d.active) {
+      if (Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < TP_DRAG_THRESHOLD) return;
+      d.active = true;
+      this._tpStartGhost(d);
+      const panel = this.shadowRoot && this.shadowRoot.querySelector(".panel.transfer");
+      if (panel) panel.classList.add("dragging");
+      if (d.srcEl) d.srcEl.classList.add("drag-src");
+      this._tpFlash("", false); // 拖拽期间清掉上一条提示,避免遮挡落点
+      this._tpEnsureAutoScrollLoop();
+    }
+    if (ev.cancelable) ev.preventDefault();
+    d.x = ev.clientX;
+    d.y = ev.clientY;
+    this._tpMoveGhost(d.x, d.y);
+    this._tpUpdateHover(d.x, d.y);
+  }
+
+  _tpPointerUp(ev) {
+    const d = this._tpDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    const active = d.active;
+    const src = d.src;
+    const overPeerId = this._tpOverPeerId;
+    const overTrash = this._tpOverTrash;
+    this._tpEndDrag();
+    if (!active) return; // 没超过阈值 = 普通单击,交给 click 处理
+    this._tpSuppressClickUntil = Date.now() + 500;
+    if (overTrash) { this._tpDestroy(src); return; }
+    if (overPeerId && overPeerId !== src.peerId) {
+      const to = (this._ui.peers || []).find((p) => p.peerId === overPeerId);
+      if (to) this._tpTransfer(src, to);
+    }
+  }
+
+  _tpPointerCancel(ev) {
+    const d = this._tpDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    this._tpEndDrag();
+  }
+
+  _tpEndDrag() {
+    if (this._tpMoveHandler) { window.removeEventListener("pointermove", this._tpMoveHandler); this._tpMoveHandler = null; }
+    if (this._tpUpHandler) { window.removeEventListener("pointerup", this._tpUpHandler); this._tpUpHandler = null; }
+    if (this._tpCancelHandler) { window.removeEventListener("pointercancel", this._tpCancelHandler); this._tpCancelHandler = null; }
+    if (this._tpBlurHandler) { window.removeEventListener("blur", this._tpBlurHandler); this._tpBlurHandler = null; }
+    if (this._tpLostHandler) {
+      const el = this._tpDrag && this._tpDrag.srcEl;
+      if (el) { try { el.removeEventListener("lostpointercapture", this._tpLostHandler); } catch (_e) {} }
+      this._tpLostHandler = null;
+    }
+    if (this._tpAutoRAF) {
+      // 用排程时一并留下的取消函数:rAF 与 setTimeout 兜底不是同一对全局函数,
+      // 混用会留下一个永不停止的回调。
+      if (typeof this._tpCancelRAF === "function") { try { this._tpCancelRAF(); } catch (_e) {} }
+      else if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this._tpAutoRAF);
+      this._tpAutoRAF = null;
+    }
+    this._tpCancelRAF = null;
+    this._tpLastRAFAt = null;
+    if (this._tpGhostEl) { this._tpGhostEl.remove(); this._tpGhostEl = null; }
+    const sr = this.shadowRoot;
+    if (sr) {
+      const panel = sr.querySelector(".panel.transfer");
+      if (panel) panel.classList.remove("dragging");
+      const drop = sr.querySelector(".tp-peer.drop");
+      if (drop) drop.classList.remove("drop");
+      const trash = sr.querySelector(".tp-trash.over");
+      if (trash) trash.classList.remove("over");
+      const srcEl = this._tpDrag && this._tpDrag.srcEl;
+      if (srcEl) srcEl.classList.remove("drag-src");
+    }
+    this._tpDrag = null;
+    this._tpOverPeerId = null;
+    this._tpOverTrash = false;
+    this.requestUpdate();
+  }
+
+  // 幽灵 = 被拖圆的视觉副本:position:fixed 跟指针,pointer-events:none
+  // (否则 elementFromPoint 永远命中幽灵,落点判定全失效)。
+  _tpStartGhost(d) {
+    const sr = this.shadowRoot;
+    if (!sr || !d || !d.srcEl) return;
+    const el = document.createElement("div");
+    el.className = "tp-ghost";
+    const ring = document.createElement("div");
+    ring.className = "tp-ring";
+    const cover = document.createElement("div");
+    cover.className = "tp-cover";
+    const srcImg = d.srcEl.querySelector(".tp-cover img");
+    const srcIcon = d.srcEl.querySelector(".tp-fallback");
+    if (srcImg && srcImg.getAttribute("src")) {
+      const img = document.createElement("img");
+      img.src = srcImg.getAttribute("src");
+      img.alt = "";
+      cover.appendChild(img);
+    } else if (srcIcon && srcIcon.firstElementChild) {
+      cover.appendChild(srcIcon.firstElementChild.cloneNode(true));
+    }
+    ring.appendChild(cover);
+    const name = document.createElement("div");
+    name.className = "tp-name";
+    name.textContent = this._peerLabel(d.src);
+    el.appendChild(ring);
+    el.appendChild(name);
+    sr.appendChild(el);
+    this._tpGhostEl = el;
+    this._tpMoveGhost(d.x, d.y);
+  }
+
+  _tpMoveGhost(x, y) {
+    if (!this._tpGhostEl) return;
+    this._tpGhostEl.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
+  }
+
+  // 落点命中:用 ShadowRoot.elementFromPoint(全局 elementFromPoint 在 Shadow DOM
+  // 里只返回宿主节点,拿不到内部圆)。幽灵 pointer-events:none 不会抢命中。
+  _tpUpdateHover(x, y) {
+    const sr = this.shadowRoot;
+    if (!sr || typeof sr.elementFromPoint !== "function") return;
+    const el = sr.elementFromPoint(x, y);
+    const peerEl = el && el.closest ? el.closest(".tp-peer") : null;
+    const trashEl = el && el.closest ? el.closest(".tp-trash") : null;
+    const d = this._tpDrag;
+    let pid = peerEl ? peerEl.getAttribute("data-peer-id") : null;
+    // 拖回自己身上不算落点(不能自己流转给自己)。
+    if (d && pid === d.src.peerId) pid = null;
+    if (pid !== this._tpOverPeerId) {
+      sr.querySelectorAll(".tp-peer.drop").forEach((n) => n.classList.remove("drop"));
+      if (pid && peerEl) peerEl.classList.add("drop");
+      this._tpOverPeerId = pid;
+    }
+    const overTrash = !!trashEl;
+    if (overTrash !== this._tpOverTrash) {
+      const t = sr.querySelector(".tp-trash");
+      if (t) t.classList.toggle("over", overTrash);
+      this._tpOverTrash = overTrash;
+    }
+  }
+
+  // ============ 边缘自动滚动 ============
+  // 热区在滚动视口内部的上/下边缘,不占布局、无可见元素;指针进入即按 rAF 连续滚动,
+  // 越靠边越快,离开/到边界自然停。回收站在滚动视口之外 —— 指针进入回收站时
+  // _tpHotzoneVector 返回 null,只触发销毁,绝不滚动(B3 互斥)。
+  _tpEnsureAutoScrollLoop() {
+    if (this._tpAutoRAF) return;
+    // 有些测试/嵌入式环境的 requestAnimationFrame 是同步实现(回调里立刻执行),
+    // 那样「回调末尾再排下一帧」会无限递归爆栈。先探测一次,同步实现就退化为
+    // setTimeout 定时器;真实浏览器仍是 rAF(后台标签页自动降频/暂停)。
+    let syncRAF = true;
+    if (typeof requestAnimationFrame === "function") {
+      let called = false;
+      try { requestAnimationFrame(() => { called = true; }); } catch (_e) { called = false; }
+      syncRAF = called;
+    }
+    const raf = syncRAF
+      ? (cb) => setTimeout(() => cb(Date.now()), 16)
+      : (cb) => requestAnimationFrame(cb);
+    const caf = syncRAF ? clearTimeout : (id) => cancelAnimationFrame(id);
+    const step = (ts) => {
+      this._tpAutoRAF = null;
+      if (!this._tpDrag || !this._tpDrag.active || !this._ui.transferOpen) return;
+      if (this._tpLastRAFAt == null) this._tpLastRAFAt = ts;
+      const dt = Math.max(0, Math.min(80, ts - this._tpLastRAFAt));
+      this._tpLastRAFAt = ts;
+      if (dt > 0) this._tpAutoScrollTick(dt);
+      if (this._tpDrag && this._tpDrag.active) {
+        this._tpAutoRAF = raf(step);
+      }
+    };
+    this._tpLastRAFAt = null;
+    this._tpAutoRAF = raf(step);
+    // 保留取消函数,供 _tpEndDrag 用(不同环境 raf/caf 可能不是一对全局函数)。
+    this._tpCancelRAF = () => { try { caf(this._tpAutoRAF); } catch (_e) {} };
+  }
+
+  // 热区向量:返回 { dir: -1 上 / 1 下, speed: px/s } 或 null(不在热区/不可滚动)。
+  _tpHotzoneVector(sc, x, y) {
+    if (!sc || typeof sc.getBoundingClientRect !== "function") return null;
+    const rect = sc.getBoundingClientRect();
+    if (!rect || !(rect.height > 0)) return null;
+    // 视口外(含回收站,它在 .tp-scroll 下缘之外)→ 不滚动
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null;
+    const max = Math.max(0, (sc.scrollHeight || 0) - (sc.clientHeight || 0));
+    if (max <= 0) return null; // 没有可滚动空间:热区不生效,避免误滚
+    const zone = Math.min(TP_AUTOSCROLL_ZONE, rect.height / 2);
+    if (zone <= 0) return null;
+    let dir = 0;
+    let depth = 0;
+    if (y < rect.top + zone) {
+      dir = -1;
+      depth = 1 - (y - rect.top) / zone; // 0=热区内缘,1=视口外缘
+    } else if (y > rect.bottom - zone) {
+      dir = 1;
+      depth = 1 - (rect.bottom - y) / zone;
+    }
+    if (!dir) return null;
+    depth = Math.max(0, Math.min(1, depth));
+    return {
+      dir,
+      speed: TP_AUTOSCROLL_MIN_SPEED + (TP_AUTOSCROLL_MAX_SPEED - TP_AUTOSCROLL_MIN_SPEED) * depth,
+    };
+  }
+
+  // 推进一次自动滚动(供 rAF 循环调用;单测直接调用它断言滚动量与边界)。
+  _tpAutoScrollTick(dtMs) {
+    const d = this._tpDrag;
+    if (!d || !d.active) return 0;
+    const sc = this.shadowRoot && this.shadowRoot.querySelector(".tp-scroll");
+    if (!sc) return 0;
+    const v = this._tpHotzoneVector(sc, d.x, d.y);
+    if (!v) return 0;
+    const max = Math.max(0, (sc.scrollHeight || 0) - (sc.clientHeight || 0));
+    if (max <= 0) return 0;
+    const before = sc.scrollTop || 0;
+    const next = Math.max(0, Math.min(max, before + (v.dir * v.speed * dtMs) / 1000));
+    sc.scrollTop = next;
+    const moved = next - before;
+    // 滚动改变了圆相对指针的位置 ⇒ 落点高亮必须立即重算(否则松手会落到旧目标)。
+    if (moved) this._tpUpdateHover(d.x, d.y);
+    return moved;
+  }
+
+  _closeTransfer() {
+    if (!this._ui.transferOpen) return;
+    this._tpSession += 1; // 会话作废:关页前发出的异步请求回来后不得再改 UI/busy
+    this._tpEndDrag();
+    if (this._tpCloseTimer) { clearTimeout(this._tpCloseTimer); this._tpCloseTimer = null; }
+    if (this._tpMsgTimer) { clearTimeout(this._tpMsgTimer); this._tpMsgTimer = null; }
+    this._ui.transferBusy = false;
+    this._ui.transferMsg = "";
+    this._ui.transferMsgErr = false;
+    this._ui.transferGroupId = null;
+    this._transferGroupMembers = new Set();
+    this._ui.transferOpen = false;
+    this.requestUpdate();
+  }
+
+  _onTransferClick(e) {
+    // 拖拽刚结束时浏览器仍会补发一次 click:它不代表「点空白」,不能关页
+    // (含拖进回收站销毁的场景 —— 销毁成功本来就要求留在页面)。
+    if (Date.now() < this._tpSuppressClickUntil) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    const interactive = path.some((n) => {
+      if (!n || !n.classList) return false;
+      return n.classList.contains("panel-head") || n.classList.contains("tp-peer") ||
+        n.classList.contains("tp-trash") || n.classList.contains("tp-badge") ||
+        n.classList.contains("tp-msg") || n.tagName === "BUTTON";
+    });
+    if (!interactive) this._closeTransfer();
   }
 
   // ============ 群组管理模式(点群组 output → 每个设备旁出现 +/−) ============
@@ -3372,16 +4050,28 @@ class MusicFlowRemoteCard extends LitElement {
       .err { color: #f05672; padding: 12px; }
       .warnbar { padding: 5px 12px; font-size: 12px; color: #b8860b; background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid rgba(255, 180, 0, 0.25); }
       .warnbar.bad { color: #f05672; background: rgba(240, 86, 114, 0.12); border-bottom-color: rgba(240, 86, 114, 0.25); }
-      /* 流转播放按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
+      /* 播放设备切换按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
          避免相邻按钮放大后贴在一起。 */
-      .outputs { display: flex; flex-wrap: wrap; gap: 12px; }
+      /* 正常态恒单行:flex 换行按「未收缩宽度」排线 —— 列表内容再宽也会独占第一行、
+         把行尾按钮挤到第二行(2026-10-22 20+ 端实测)。故正常态 nowrap,让列表收缩裁剪。
+         管理模式要独占一行的提示行(.gm-hint),在 .outputs.managing 里单独恢复 wrap。 */
+      .outputs { display: flex; flex-wrap: nowrap; gap: 12px; align-items: center; }
+      /* 首页 chip 列表:恒单行、不换行,超出部分 overflow 裁掉(滚动也只发生在管理态)。
+         flex:1 1 auto 占满剩余宽度 ⇒ 行尾「流转播放」按钮恒定在卡片右缘,设备再多也裁不到它。 */
+      .out-list { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; overflow: hidden; padding: 4px 0 4px 4px; }
+      /* 行尾固定:被裁掉的播放器走这里进整卡流转页 */
+      .out.transfer { flex: 0 0 auto; border-color: rgba(var(--acc), 0.55); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
+      .out.transfer:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.20); }
+      /* 芯片不收缩、文字恒单行:名称再长也只省略号裁字。否则 20+ 端时每个 chip 被压到
+         59px,长设备名在 chip 内部换行,整行从 32px 撑到 95px(2026-10-22 实测)。 */
       .out { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
-        border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+        border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex: 0 0 auto; white-space: nowrap;
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
+      .out-label { min-width: 0; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .out .ic { display: inline-flex; }
       /* 群组管理模式:每个 output 外包一层纵向 wrap,设备底下挂 +/− 徽标
          (组内 − / 组外 +),与客户端流转页同款语义。 */
-      .out-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
+      .out-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto; }
       /* 加入/退出群组的**可勾选小圆圈**(与 Web 流转列表行尾、客户端同款视觉):
          未加入 = 空心圈(边框 + 半透明底,勾不着色);已加入 = accent 实心圈 + 白色 ✓。
          底色会随封面强调色(--acc)/ idle 渐变 / 明暗主题整体变化 ⇒ 圆圈必须自带对比度:
@@ -3411,6 +4101,12 @@ class MusicFlowRemoteCard extends LitElement {
          transform 失效(动画优先级高于普通声明)。 */
       @keyframes mf-badge-in { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       @media (prefers-reduced-motion: reduce) { .out-badge { animation: none; } }
+      /* 群组管理模式:要能触达每一台设备增减成员 ⇒ 唯一例外地允许单行横向滚动
+         (滚动条隐藏),并给芯片下方的勾选圈留出纵向空间;正常态仍严格单行裁剪。
+         滚动只影响「看得到哪台」,不改变首页 chip 恒单行的版式。 */
+      .outputs.managing { align-items: flex-start; flex-wrap: wrap; }
+      .outputs.managing .out-list { overflow-x: auto; overflow-y: hidden; align-items: flex-start; padding-bottom: 26px; scrollbar-width: none; }
+      .outputs.managing .out-list::-webkit-scrollbar { display: none; }
       /* 管理态提示行:明说出口在哪(点空白 / 10s 自动),flex-basis:100% 独占一行。 */
       .gm-hint { flex-basis: 100%; margin-top: 2px; font-size: 11px; color: var(--fg-faint); }
       .out.managing { border-color: rgba(var(--acc), 0.85); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
@@ -3545,6 +4241,85 @@ class MusicFlowRemoteCard extends LitElement {
       .wrap.panelmode > .lower > .progress-row { visibility: hidden; }
       .panel { position: absolute; inset: 0; z-index: 5; background: transparent; border: none; border-radius: 0;
         padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box; }
+      /* 流转播放页:沿用 .panel 的整卡 inset:0 覆盖(尺寸 = 卡片尺寸),头部固定,
+         内容区 .tp-scroll 独立滚动 —— A4 的网格与 B 的上下隐形热区都以这层滚动容器为准。 */
+      .tp-title { font-weight: 600; font-size: 14px; }
+      .panel.transfer .panel-head { flex: 0 0 auto; }
+      .tp-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px; scrollbar-width: thin; }
+      .tp-scroll::-webkit-scrollbar { width: 4px; }
+      .tp-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 2px; }
+      .tp-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+      /* 流转页网格:每格一个播放端(圆 + 名称 + 状态),窄卡自动单列。
+         颜色一律走 --ctl-rgb / --acc:深底白圈、浅底黑圈,强调色跟随封面。 */
+      .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+        gap: 10px 6px; align-items: start; }
+      .tp-peer { position: relative; display: flex; flex-direction: column; align-items: center;
+        gap: 3px; padding: 6px 2px 8px; border-radius: 12px; cursor: pointer; touch-action: none;
+        transition: background 0.15s, opacity 0.15s; -webkit-tap-highlight-color: transparent; }
+      .tp-peer:hover { background: rgba(var(--ctl-rgb), 0.08); }
+      .tp-peer:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 2px; }
+      .tp-peer.current { background: rgba(var(--acc), 0.12); }
+      .tp-peer.off { opacity: 0.45; }
+      .tp-ring { position: relative; width: 56px; height: 56px; border-radius: 50%;
+        border: 2px solid rgba(var(--ctl-rgb), 0.82); background: rgba(var(--ctl-rgb), 0.12);
+        display: flex; align-items: center; justify-content: center;
+        transition: border-color 0.15s, box-shadow 0.15s; }
+      .tp-peer.current .tp-ring { border-color: rgb(var(--acc));
+        box-shadow: 0 0 0 2px rgba(var(--acc), 0.28), 0 0 12px rgba(var(--acc), 0.4); }
+      .tp-peer.drop .tp-ring { border-color: rgb(var(--acc));
+        box-shadow: 0 0 0 3px rgba(var(--acc), 0.36), 0 0 16px rgba(var(--acc), 0.5); }
+      .tp-peer.drag-src { opacity: 0.32; }
+      .tp-cover { width: 100%; height: 100%; border-radius: 50%; overflow: hidden;
+        display: flex; align-items: center; justify-content: center; }
+      .tp-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .tp-fallback { display: flex; align-items: center; justify-content: center; color: rgba(var(--ctl-rgb), 0.85); }
+      .tp-dash { position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
+        border: 1.5px dashed rgba(var(--acc), 0.75); }
+      .tp-live { position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+        display: flex; align-items: flex-end; gap: 2px; height: 9px; padding: 1px 5px;
+        border-radius: 6px; background: rgba(var(--acc), 0.92); }
+      .tp-live i { width: 2px; height: 6px; border-radius: 1px; background: #fff;
+        animation: tp-eq 0.9s ease-in-out infinite; }
+      .tp-live i:nth-child(1) { animation-delay: -0.2s; }
+      .tp-live i:nth-child(2) { animation-delay: -0.45s; }
+      .tp-live i:nth-child(3) { animation-delay: -0.7s; }
+      @keyframes tp-eq { 0%, 100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
+      .tp-cur { position: absolute; right: -3px; top: -3px; width: 18px; height: 18px;
+        border-radius: 50%; background: rgb(var(--acc)); color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35); }
+      .tp-name { max-width: 100%; font-size: 12px; font-weight: 600; color: var(--fg);
+        text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tp-sub { max-width: 100%; font-size: 10.5px; color: var(--fg-faint);
+        text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tp-badge { position: absolute; right: 3px; top: 0; width: 20px; height: 20px; padding: 0;
+        border-radius: 50%; border: 1.5px solid rgba(var(--ctl-rgb), 0.75);
+        background: rgba(var(--ctl-rgb), 0.18); color: var(--ctl); font-size: 13px; line-height: 1;
+        display: flex; align-items: center; justify-content: center; cursor: pointer; }
+      .tp-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff; }
+      /* 回收站固定在滚动区之外:滚动视口下缘 = 热区与回收站的物理分界。 */
+      .tp-trash { flex: 0 0 auto; margin-top: 6px; display: flex; align-items: center;
+        justify-content: center; gap: 6px; height: 34px; border-radius: 10px;
+        border: 1px dashed rgba(var(--ctl-rgb), 0.4); color: var(--fg-faint);
+        font-size: 12px; transition: all 0.15s; }
+      .tp-trash.over { border-color: rgba(var(--acc), 0.95); border-style: solid;
+        color: rgb(var(--acc)); background: rgba(var(--acc), 0.16); }
+      .tp-msg { flex: 1; min-width: 0; font-size: 11.5px; color: var(--fg-faint);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tp-msg.err { color: #ff7a7a; }
+      .tp-gm-hint { flex: 0 0 auto; margin-bottom: 4px; font-size: 11px; color: var(--fg-faint); }
+      .tp-empty { grid-column: 1 / -1; }
+      /* 拖拽幽灵:fixed + pointer-events:none,elementFromPoint 才能命中真实落点。 */
+      .tp-ghost { position: fixed; left: 0; top: 0; z-index: 9999; pointer-events: none;
+        display: flex; flex-direction: column; align-items: center; gap: 3px;
+        opacity: 0.92; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45)); }
+      .tp-ghost .tp-ring { display: flex; width: 56px; height: 56px;
+        border-color: rgb(var(--acc)); background: rgba(20, 20, 24, 0.55); }
+      .tp-ghost .tp-name { max-width: 120px; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+      /* 拖拽/点选时不选中文字:pointerdown 已不再 preventDefault(见 _tpPointerDown),
+         鼠标按住拖动靠这里避免把设备名/状态文字拖成选区。 */
+      .tp-peer, .tp-trash, .tp-ghost { user-select: none; -webkit-user-select: none; }
+      .panel.transfer.busy .tp-peer { pointer-events: none; }
       .panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
       .panel-head .close { margin-left: auto; }
       .empty { color: var(--fg-faint); font-size: 13px; padding: 10px 0; text-align: center; }

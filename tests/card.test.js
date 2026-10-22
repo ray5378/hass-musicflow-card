@@ -41,6 +41,8 @@ function makeClient(over = {}) {
     removeAt: vi.fn(async () => ({})),
     clearQueue: vi.fn(async () => ({})),
     reorderQueue: vi.fn(async () => ({})),
+    transferFrom: vi.fn(async () => ({ success: true, transferred: 1 })),
+    resetPeer: vi.fn(async () => ({ success: true })),
     getStatus: vi.fn(async () => ({ state: "PLAYING", position: 1, duration: 100, volume: 50, muted: false, media: { songId: "s1", title: "歌", artist: "手", album: "辑", coverArt: "c1", duration: 100 } })),
     getQueue: vi.fn(async () => ({ items: [{ songId: "s1", title: "A", artist: "B", coverArt: "c1", duration: 100 }], total: 1, currentIndex: 0, playMode: "order", isActive: true })),
     getPeers: vi.fn(async () => ({ peers: [] })),
@@ -1665,6 +1667,109 @@ describe("渲染", () => {
     await flush();
   });
 
+  it("_renderOutputs:chip 行恒单行 + 行尾「流转播放」按钮", async () => {
+    const c = mkCard();
+    const online = PEERS.filter((p) => p.available !== false);
+    c._ui.peers = online;
+    // 当前遥控目标不在列表首位 → 渲染时应提到首位,保证被裁时仍可见
+    c._ui.currentPeerId = "dlna:d2";
+    c.requestUpdate();
+    await c.updateComplete;
+
+    const list = c.shadowRoot.querySelector(".outputs > .out-list");
+    expect(list).toBeTruthy();
+    const chips = list.querySelectorAll(".out");
+    expect(chips.length).toBe(online.length);
+    expect(chips[0].textContent).toContain("书房");
+    // 流转按钮固定在列表外(行尾),不会被 overflow 裁掉
+    const transfer = c.shadowRoot.querySelector(".outputs > .out.transfer");
+    expect(transfer).toBeTruthy();
+    expect(transfer.title).toBe("流转播放");
+    expect(c._ui.transferOpen).toBe(false);
+    transfer.click();
+    await c.updateComplete;
+    expect(c._ui.transferOpen).toBe(true);
+    await flush();
+  });
+
+  it("首页 chip 单行版式守卫(20+ 端不换行/不撑高/按钮不落行)", async () => {
+    // jsdom 无布局,这里对静态样式做守卫:曾经为了让按钮同行、chip 不换行,必须同时满足
+    // ①正常态 .outputs nowrap ②chip 不收缩 ③chip 文字单行省略 ④管理态仍 wrap(提示行独占一行)。
+    const all = [].concat(CardCtor.styles).map((x) => x.cssText || String(x)).join("\n");
+    expect(all).toMatch(/\.outputs \{[^}]*flex-wrap: nowrap/);
+    expect(all).toMatch(/\.outputs\.managing \{[^}]*flex-wrap: wrap/);
+    expect(all).toMatch(/\.out \{[^}]*flex: 0 0 auto/);
+    expect(all).toMatch(/\.out \{[^}]*white-space: nowrap/);
+    expect(all).toMatch(/\.out-wrap \{[^}]*flex: 0 0 auto/);
+    expect(all).toMatch(/\.out-label \{[^}]*text-overflow: ellipsis/);
+    expect(all).toMatch(/\.out-label \{[^}]*white-space: nowrap/);
+
+    const c = mkCard();
+    c._ui.peers = PEERS.filter((p) => p.available !== false);
+    c.requestUpdate();
+    await c.updateComplete;
+    const label = c.shadowRoot.querySelector(".outputs > .out-list > .out-wrap > .out > .out-label");
+    expect(label).toBeTruthy();
+    expect(label.textContent.length).toBeGreaterThan(0);
+    await flush();
+  });
+
+  it("_openTransfer:收起群组管理态与面板", async () => {
+    const c = mkCard();
+    c._ui.groupManage = "group:g1";
+    c._ui.showQueue = true;
+    c._ui.showBrowser = true;
+    c._openTransfer();
+    expect(c._ui.groupManage).toBe(null);
+    expect(c._ui.showQueue).toBe(false);
+    expect(c._ui.showBrowser).toBe(false);
+    expect(c._ui.transferOpen).toBe(true);
+    await c.updateComplete;
+    await flush();
+  });
+
+  it("_renderTransfer:整卡覆盖 / 内容区滚动 / 点空白与关闭按钮退出", async () => {
+    const c = mkCard();
+    c._openTransfer();
+    await c.updateComplete;
+    const panel = c.shadowRoot.querySelector(".wrap > .panel.transfer");
+    expect(panel).toBeTruthy();
+    expect(c.shadowRoot.querySelector(".wrap.panelmode")).toBeTruthy();
+    expect(panel.querySelector(".panel-head .tp-title").textContent).toBe("流转播放");
+    expect(panel.querySelector(".tp-scroll .tp-grid")).toBeTruthy();
+
+    // 点内容区空白 → 关闭,面板从 DOM 移除、退出整卡面板态
+    panel.querySelector(".tp-scroll").click();
+    await c.updateComplete;
+    expect(c._ui.transferOpen).toBe(false);
+    expect(c.shadowRoot.querySelector(".panel.transfer")).toBeFalsy();
+    expect(c.shadowRoot.querySelector(".wrap.panelmode")).toBeFalsy();
+
+    // 再开 → 右上角关闭按钮返回首页
+    c._openTransfer();
+    await c.updateComplete;
+    c.shadowRoot.querySelector(".panel.transfer .close").click();
+    await c.updateComplete;
+    expect(c._ui.transferOpen).toBe(false);
+
+    // 交互元素(播放端圆 .tp-peer)不触发「点空白关闭」
+    c._openTransfer();
+    await c.updateComplete;
+    const p2 = c.shadowRoot.querySelector(".panel.transfer");
+    const fakePeer = document.createElement("div");
+    fakePeer.className = "tp-peer";
+    p2.appendChild(fakePeer);
+    fakePeer.click();
+    await c.updateComplete;
+    expect(c._ui.transferOpen).toBe(true);
+
+    // 面板根部空白仍可关闭
+    p2.click();
+    await c.updateComplete;
+    expect(c._ui.transferOpen).toBe(false);
+    await flush();
+  });
+
   it("_renderLyricBox / _renderVolumeOverlay / _icon / _coverImgTag", async () => {
     const c = mkCard();
     c._ui.lyrics = [];
@@ -2235,5 +2340,508 @@ describe("杂项工具", () => {
     c._ui.mini = true;
     await c.updateComplete;
     c._updatedMiniWatch();
+  });
+});
+
+// ============ 整卡流转页(A4–A8 / B1–B5) ============
+const TP_PEERS = [
+  { peerId: "dlna:d1", name: "客厅", kind: "dlna", available: true,
+    queue: { isActive: true, currentIndex: 0,
+      items: [{ songId: "s1", title: "甲", artist: "乙", coverArt: "cov1" }] } },
+  { peerId: "local:l1", name: "本机", kind: "local", platform: "windows", self: true, available: true,
+    queue: { isActive: false, currentIndex: -1, items: [] } },
+  { peerId: "dlna:d2", name: "书房", kind: "dlna", available: true, queue: { isActive: false } },
+  { peerId: "group:g1", kind: "group", groupId: "g1", name: "组", available: false,
+    memberIds: ["d1", "d2"], queue: { isActive: true } },
+  { peerId: "sendspin:s1", kind: "sendspin", available: false },
+  { peerId: "web:1", kind: "local", platform: "web", available: true },
+];
+
+function openTransfer(c) {
+  c._ui.peers = TP_PEERS;
+  c._openTransfer();
+}
+
+describe("流转页:数据层与交互(A4–A8)", () => {
+  it("A4 渲染:过滤/排序/封面/当前目标/在播/群组/回收站", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    c._ui.isPlaying = true;
+    c._ui.song = { title: "镜像歌", coverArt: "mirror" };
+    openTransfer(c);
+    await c.updateComplete;
+
+    const nodes = [...c.shadowRoot.querySelectorAll(".panel.transfer .tp-grid .tp-peer")];
+    const ids = nodes.map((n) => n.getAttribute("data-peer-id"));
+    // 在播优先 → 群组 > 独立设备;离线 sendspin 与 web 端不展示
+    expect(ids).toEqual(["group:g1", "dlna:d1", "local:l1", "dlna:d2"]);
+
+    const d1 = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+    expect(d1.classList.contains("current")).toBe(true);
+    expect(d1.querySelector(".tp-cur")).toBeTruthy();
+    expect(d1.querySelector(".tp-live")).toBeTruthy();
+    expect(d1.querySelector(".tp-cover img").getAttribute("data-cover-id")).toBe("cov1");
+    expect(d1.querySelector(".tp-sub").textContent).toContain("甲 - 乙");
+
+    const g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
+    expect(g.classList.contains("group")).toBe(true);
+    expect(g.querySelector(".tp-dash")).toBeTruthy();
+    expect(g.querySelector(".tp-sub").textContent).toBe("2 个成员");
+
+    const local = c.shadowRoot.querySelector('.tp-peer[data-peer-id="local:l1"]');
+    expect(local.querySelector(".tp-fallback")).toBeTruthy();
+    expect(local.querySelector(".tp-sub").textContent).toBe("空闲");
+
+    expect(c.shadowRoot.querySelector(".panel.transfer .tp-trash")).toBeTruthy();
+    expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeFalsy();
+    await flush();
+    expect(c._coverObserverRoot).toBe(c.shadowRoot.querySelector(".tp-scroll"));
+  });
+
+  it("A5 单击:切遥控目标 + 成功提示 + 到点自动关页", async () => {
+    vi.useFakeTimers();
+    try {
+      const c = mkCard();
+      c._ui.currentPeerId = "dlna:d1";
+      openTransfer(c);
+      await c.updateComplete;
+
+      const d2 = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
+      d2.click();
+      expect(c._ui.currentPeerId).toBe("dlna:d2");
+      expect(c._ui.transferMsg).toContain("已切换到「书房」");
+      expect(c._ui.transferOpen).toBe(true);
+      expect(c._tpCloseTimer).toBeTruthy();
+
+      await vi.advanceTimersByTimeAsync(700);
+      expect(c._ui.transferOpen).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("A5 _tpTransfer:transfer-from → 源端 reset → 目标跟随 → 关页", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "local:l1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    await c._tpTransfer(TP_PEERS[0], TP_PEERS[2]);
+    expect(c._client.transferFrom).toHaveBeenCalledWith("dlna:d2", "dlna:d1");
+    expect(c._client.resetPeer).toHaveBeenCalledWith("dlna:d1");
+    expect(c._ui.currentPeerId).toBe("dlna:d2");
+    expect(c._ui.transferMsg).toContain("已流转到「书房」");
+    expect(c._ui.transferOpen).toBe(true);
+    expect(c._tpCloseTimer).toBeTruthy();
+    await flush();
+  });
+
+  it("A5 流转失败:留在页面并报错,不 reset 源端", async () => {
+    const c = mkCard({}, { transferFrom: vi.fn(async () => { throw new Error("boom"); }) });
+    c._ui.currentPeerId = "local:l1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    await c._tpTransfer(TP_PEERS[0], TP_PEERS[2]);
+    expect(c._client.resetPeer).not.toHaveBeenCalled();
+    expect(c._ui.transferMsgErr).toBe(true);
+    expect(c._ui.transferMsg).toContain("流转失败");
+    expect(c._ui.transferOpen).toBe(true);
+    expect(c._tpCloseTimer).toBeFalsy();
+    await flush();
+  });
+
+  it("A6 群组:点群组切目标 + 成员模式,+/− 调 updateGroupMembers", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "local:l1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    let g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
+    g.click();
+    await flush();
+    expect(c._ui.currentPeerId).toBe("group:g1");
+    expect(c._ui.transferGroupId).toBe("group:g1");
+    expect(c._isTransferGroupMember(TP_PEERS[0])).toBe(true);
+    await c.updateComplete;
+    expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeTruthy();
+
+    // 组内成员显示 −,组外设备显示 +
+    const inBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"] .tp-badge');
+    const outBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"] .tp-badge');
+    expect(inBadge.textContent.trim()).toBe("−");
+    expect(inBadge.classList.contains("in")).toBe(true);
+    expect(outBadge.textContent.trim()).toBe("+");
+    outBadge.click();
+    await flush();
+    expect(c._client.updateGroupMembers).toHaveBeenCalledWith("g1", ["d2"], []);
+    expect(c._isTransferGroupMember(TP_PEERS[2])).toBe(true);
+
+    // 再点群组 = 退出成员模式(遥控目标仍是该群组)
+    g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
+    g.click();
+    await flush();
+    expect(c._ui.transferGroupId).toBe(null);
+    expect(c._ui.currentPeerId).toBe("group:g1");
+    expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeFalsy();
+  });
+
+  it("A7 回收站:_tpDestroy 成功留页提示,失败报错", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+
+    await c._tpDestroy(TP_PEERS[2]);
+    expect(c._client.resetPeer).toHaveBeenCalledWith("dlna:d2");
+    expect(c._ui.transferMsg).toContain("已销毁「书房」");
+    expect(c._ui.transferMsgErr).toBe(false);
+    expect(c._ui.transferOpen).toBe(true);
+
+    const c2 = mkCard({}, { resetPeer: vi.fn(async () => { throw new Error("x"); }) });
+    openTransfer(c2);
+    await c2.updateComplete;
+    await c2._tpDestroy(TP_PEERS[2]);
+    expect(c2._ui.transferMsgErr).toBe(true);
+    expect(c2._ui.transferMsg).toContain("销毁失败");
+    expect(c2._ui.transferOpen).toBe(true);
+    await flush();
+  });
+
+  it("A8 指针拖拽:幽灵跟手 / 落点命中 / 松手流转,结束后清理现场", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "local:l1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    const srcEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+    const dstEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
+    const mkEv = (over = {}) => ({
+      pointerId: 7, button: 0, clientX: 10, clientY: 10,
+      cancelable: true, preventDefault: vi.fn(), currentTarget: srcEl, ...over,
+    });
+
+    c._tpPointerDown(mkEv(), TP_PEERS[0]);
+    expect(c._tpDrag).toBeTruthy();
+    c._tpPointerMove(mkEv({ clientX: 40, clientY: 40 })); // 超过 6px 阈值 → 起拖
+    expect(c._tpGhostEl).toBeTruthy();
+    expect(srcEl.classList.contains("drag-src")).toBe(true);
+    expect(c.shadowRoot.querySelector(".panel.transfer").classList.contains("dragging")).toBe(true);
+
+    c.shadowRoot.elementFromPoint = vi.fn(() => dstEl);
+    c._tpPointerMove(mkEv({ clientX: 44, clientY: 44 }));
+    expect(c._tpOverPeerId).toBe("dlna:d2");
+    expect(dstEl.classList.contains("drop")).toBe(true);
+
+    c._tpPointerUp(mkEv({ clientX: 44, clientY: 44 }));
+    expect(c._tpDrag).toBe(null);
+    expect(c._tpGhostEl).toBe(null);
+    expect(srcEl.classList.contains("drag-src")).toBe(false);
+    await flush();
+    expect(c._client.transferFrom).toHaveBeenCalledWith("dlna:d2", "dlna:d1");
+
+    // 拖回自己身上不算落点
+    c._tpPointerDown(mkEv(), TP_PEERS[0]);
+    c._tpPointerMove(mkEv({ clientX: 40, clientY: 40 }));
+    c.shadowRoot.elementFromPoint = vi.fn(() => srcEl);
+    c._tpPointerMove(mkEv({ clientX: 44, clientY: 44 }));
+    expect(c._tpOverPeerId).toBe(null);
+    c._tpPointerUp(mkEv({ clientX: 44, clientY: 44 }));
+    await flush();
+    // 拖回自己身上不得再发一次 transfer-from(旧目标残留会重复流转)
+    expect(c._client.transferFrom).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("流转页边缘自动滚动(B1–B5)", () => {
+  function mountScroll(c) {
+    const sc = c.shadowRoot.querySelector(".panel.transfer .tp-scroll");
+    Object.defineProperty(sc, "scrollHeight", { value: 600, configurable: true });
+    Object.defineProperty(sc, "clientHeight", { value: 200, configurable: true });
+    sc.getBoundingClientRect = () => ({ top: 0, bottom: 200, left: 0, right: 300, height: 200, width: 300 });
+    sc.scrollTop = 0;
+    return sc;
+  }
+
+  it("B1/B2 热区方向与深度调速:上/下越靠边越快,中间不滚", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+    const sc = mountScroll(c);
+
+    const top = c._tpHotzoneVector(sc, 100, 5);
+    expect(top.dir).toBe(-1);
+    const topMid = c._tpHotzoneVector(sc, 100, 22);
+    const botMid = c._tpHotzoneVector(sc, 100, 178);
+    const bottom = c._tpHotzoneVector(sc, 100, 195);
+    expect(bottom.dir).toBe(1);
+    // 越靠视口外缘(深度越大)速度越快
+    expect(top.speed).toBeGreaterThan(topMid.speed);
+    expect(bottom.speed).toBeGreaterThan(botMid.speed);
+    expect(top.speed).toBeGreaterThanOrEqual(140);
+    expect(top.speed).toBeLessThanOrEqual(1100);
+
+    expect(c._tpHotzoneVector(sc, 100, 100)).toBe(null); // 中间
+    expect(c._tpHotzoneVector(sc, -5, 100)).toBe(null); // 水平出了视口
+    await flush();
+  });
+
+  it("B3 回收站分界:指针进入滚动区之外(回收站)不滚动", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+    const sc = mountScroll(c);
+    c._tpDrag = { active: true, x: 100, y: 250, src: TP_PEERS[0] };
+
+    expect(c._tpHotzoneVector(sc, 100, 250)).toBe(null); // y 在 .tp-scroll 下缘之外
+    expect(c._tpAutoScrollTick(100)).toBe(0);
+    expect(sc.scrollTop).toBe(0);
+    await flush();
+  });
+
+  it("B1/B4 滚动推进:按 dt 累加、边界自然停、无滚动空间不生效", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+    const sc = mountScroll(c);
+    c._tpDrag = { active: true, x: 100, y: 195, src: TP_PEERS[0] };
+
+    const moved = c._tpAutoScrollTick(100);
+    expect(moved).toBeGreaterThan(0);
+    expect(sc.scrollTop).toBeGreaterThan(0);
+    expect(sc.scrollTop).toBeLessThanOrEqual(400);
+
+    sc.scrollTop = 400; // 已到最底(max = 600-200)
+    expect(c._tpAutoScrollTick(100)).toBe(0);
+    expect(sc.scrollTop).toBe(400);
+
+    // 顶部热区在顶端 → 不再往上滚
+    c._tpDrag.y = 5;
+    sc.scrollTop = 0;
+    expect(c._tpAutoScrollTick(100)).toBe(0);
+    expect(sc.scrollTop).toBe(0);
+
+    // 没有滚动空间:热区整体失效
+    Object.defineProperty(sc, "scrollHeight", { value: 200, configurable: true });
+    c._tpDrag.y = 195;
+    expect(c._tpHotzoneVector(sc, 100, 195)).toBe(null);
+    expect(c._tpAutoScrollTick(100)).toBe(0);
+
+    // 非拖拽态直接调用不产生滚动
+    c._tpDrag = null;
+    Object.defineProperty(sc, "scrollHeight", { value: 600, configurable: true });
+    expect(c._tpAutoScrollTick(16)).toBe(0);
+    await flush();
+  });
+
+  it("B5 _closeTransfer 清理拖拽监听/幽灵/定时器", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+
+    const srcEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+    const mkEv = (over = {}) => ({
+      pointerId: 9, button: 0, clientX: 10, clientY: 10,
+      cancelable: true, preventDefault: vi.fn(), currentTarget: srcEl, ...over,
+    });
+    c._tpPointerDown(mkEv(), TP_PEERS[0]);
+    c._tpPointerMove(mkEv({ clientX: 40, clientY: 40 }));
+    expect(c._tpGhostEl).toBeTruthy();
+    expect(c._tpMoveHandler).toBeTruthy();
+
+    c._closeTransfer();
+    expect(c._tpDrag).toBe(null);
+    expect(c._tpGhostEl).toBe(null);
+    expect(c._tpMoveHandler).toBe(null);
+    expect(c._tpUpHandler).toBe(null);
+    expect(c._tpCancelHandler).toBe(null);
+    expect(c._tpBlurHandler).toBe(null);
+    expect(c._tpLostHandler).toBe(null);
+    expect(c._ui.transferOpen).toBe(false);
+    await flush();
+  });
+});
+
+// ============ 落地后审查修复(D4 回归守卫) ============
+// 反馈实测链路才会暴露的两类问题,逐条钉死:
+// ① pointerdown 里 preventDefault 会抑制触屏补发的 click(单击切目标/群组 +/− 全失效);
+// ② 拖拽只挂 window 监听、无指针捕获,指针在窗口外松开 → _tpDrag 永不清,后续拖拽全废。
+describe("流转页落地后审查修复(D4 回归守卫)", () => {
+  const mkEv = (srcEl, over = {}) => ({
+    pointerId: 11, button: 0, clientX: 10, clientY: 10,
+    cancelable: true, preventDefault: vi.fn(), currentTarget: srcEl, ...over,
+  });
+
+  it("D4 指针按下不再 preventDefault(否则触屏 click 被吞)", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+    const srcEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+    const ev = mkEv(srcEl);
+    c._tpPointerDown(ev, TP_PEERS[0]);
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    c._tpPointerUp(mkEv(srcEl));
+    await flush();
+  });
+
+  it("D4 窗口失焦 / 丢失捕获时兜底结束拖拽,避免 _tpDrag 卡死", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+    const srcEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+
+    c._tpPointerDown(mkEv(srcEl), TP_PEERS[0]);
+    c._tpPointerMove(mkEv(srcEl, { clientX: 40, clientY: 40 }));
+    expect(c._tpDrag).toBeTruthy();
+    expect(c._tpGhostEl).toBeTruthy();
+    expect(c._tpBlurHandler).toBeTruthy();
+
+    window.dispatchEvent(new Event("blur"));
+    expect(c._tpDrag).toBe(null);
+    expect(c._tpGhostEl).toBe(null);
+    expect(c._tpMoveHandler).toBe(null);
+    expect(c._tpBlurHandler).toBe(null);
+    expect(c._tpLostHandler).toBe(null);
+    // 兜底结束不是落点:不得流转,页面仍在
+    expect(c._client.transferFrom).not.toHaveBeenCalled();
+    expect(c._ui.transferOpen).toBe(true);
+
+    // 结束干净后能立刻开始下一次拖拽(守卫不会误挡)
+    c._tpPointerDown(mkEv(srcEl), TP_PEERS[0]);
+    expect(c._tpDrag).toBeTruthy();
+    c._tpPointerUp(mkEv(srcEl));
+    await flush();
+  });
+
+  it("D4 源队列为空(transferred=0):不 reset 源端、不关页、报空队列提示", async () => {
+    const c = mkCard({}, {
+      transferFrom: vi.fn(async () => ({ success: true, transferred: 0 })),
+    });
+    c._ui.currentPeerId = "local:l1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    await c._tpTransfer(TP_PEERS[0], TP_PEERS[2]);
+    expect(c._client.resetPeer).not.toHaveBeenCalled();
+    expect(c._ui.currentPeerId).toBe("local:l1");
+    expect(c._ui.transferMsgErr).toBe(true);
+    expect(c._ui.transferMsg).toContain("队列为空");
+    expect(c._ui.transferOpen).toBe(true);
+    expect(c._tpCloseTimer).toBeFalsy();
+    await flush();
+  });
+});
+
+// ============ 流转页审查修复(D1 回归守卫) ============
+// 落地前审查抓到的 4 类问题,逐条钉死,防止后续重构退化:
+// ①拖拽结束后浏览器补发的 click 被当成「点空白」关页;②多指 pointerdown 覆盖
+// 进行中的拖拽;③关页/重开后旧会话的异步回写污染新会话;④音量浮层遮挡底部热区。
+describe("流转页审查修复(D1 回归守卫)", () => {
+  const blankClick = (c) => c._onTransferClick({
+    composedPath: () => [c.shadowRoot.querySelector(".panel.transfer")],
+  });
+
+  it("D1 拖拽后的补发 click 不关页,冷却结束后点空白才关", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+
+    c._tpSuppressClickUntil = Date.now() + 500;
+    blankClick(c);
+    expect(c._ui.transferOpen).toBe(true); // 拖拽尾随 click:忽略
+
+    c._tpSuppressClickUntil = 0;
+    blankClick(c);
+    expect(c._ui.transferOpen).toBe(false); // 真实点空白:关页
+    await flush();
+  });
+
+  it("D1 多指/重复 pointerdown 不覆盖进行中的拖拽", async () => {
+    const c = mkCard();
+    openTransfer(c);
+    await c.updateComplete;
+
+    const srcEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
+    const otherEl = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
+    const mkEv = (over = {}) => ({
+      pointerId: 7, button: 0, clientX: 10, clientY: 10, stopPropagation: vi.fn(),
+      cancelable: true, preventDefault: vi.fn(), currentTarget: srcEl, ...over,
+    });
+
+    c._tpPointerDown(mkEv(), TP_PEERS[0]);
+    const firstHandler = c._tpMoveHandler;
+    c._tpPointerDown(mkEv({ pointerId: 8, currentTarget: otherEl }), TP_PEERS[2]);
+    expect(c._tpDrag.pointerId).toBe(7);
+    expect(c._tpDrag.src).toBe(TP_PEERS[0]);
+    expect(c._tpDrag.srcEl).toBe(srcEl);
+    expect(c._tpMoveHandler).toBe(firstHandler); // 监听没被第二根手指覆盖
+    c._tpPointerCancel(mkEv());
+    expect(c._tpDrag).toBe(null);
+    await flush();
+  });
+
+  it("D1 关页后旧会话的流转回写被丢弃(不抢遥控目标/不弹提示)", async () => {
+    let resolveT;
+    const transferFrom = vi.fn(() => new Promise((r) => { resolveT = r; }));
+    const c = mkCard({}, { transferFrom });
+    c._ui.currentPeerId = "local:l1";
+    c._ui.showVolume = true;
+    openTransfer(c);
+    expect(c._ui.showVolume).toBe(false); // 打开流转页先收音量浮层,否则遮住回收站/热区
+    await c.updateComplete;
+
+    const pending = c._tpTransfer(TP_PEERS[0], TP_PEERS[2]);
+    expect(c._ui.transferBusy).toBe(true);
+    c._closeTransfer(); // 请求在途时关页
+    openTransfer(c);    // 立刻重开 = 新会话
+    resolveT({ success: true });
+    await pending;
+
+    expect(c._ui.currentPeerId).toBe("local:l1"); // 不跟随旧会话的目的地
+    expect(c._ui.transferMsg).toBe("");
+    expect(c._ui.transferOpen).toBe(true);
+    expect(c._ui.transferBusy).toBe(false); // 新会话忙态未被旧 finally 打乱
+    expect(c._client.resetPeer).toHaveBeenCalledWith("dlna:d1"); // 搬运本身照常收尾
+    await flush();
+  });
+
+  it("D1 关页后旧会话的销毁回写被丢弃", async () => {
+    let resolveR;
+    const resetPeer = vi.fn(() => new Promise((r) => { resolveR = r; }));
+    const c = mkCard({}, { resetPeer });
+    openTransfer(c);
+    await c.updateComplete;
+
+    const pending = c._tpDestroy(TP_PEERS[2]);
+    c._closeTransfer();
+    openTransfer(c);
+    resolveR({ success: true });
+    await pending;
+
+    expect(c._ui.transferMsg).toBe(""); // 新会话页面上不出现「已销毁」
+    expect(c._ui.transferOpen).toBe(true);
+    await flush();
+  });
+
+  it("D1 群组成员旧会话回写被丢弃,且不复位新会话的忙态", async () => {
+    let resolveU;
+    const updateGroupMembers = vi.fn(() => new Promise((r) => { resolveU = r; }));
+    const c = mkCard({}, { updateGroupMembers });
+    openTransfer(c);
+    c._ui.transferGroupId = "group:g1";
+    await c.updateComplete;
+
+    const pending = c._tpToggleMember({ stopPropagation: vi.fn() }, TP_PEERS[0]);
+    expect(c._ui.transferBusy).toBe(true);
+    c._closeTransfer();
+    openTransfer(c);
+    c._ui.transferGroupId = "group:g1";
+    c._ui.transferBusy = true; // 新会话自己的操作在跑
+    resolveU({ group: { memberIds: ["dlna:d1", "dlna:d2"] } });
+    await pending;
+
+    expect(c._transferGroupMembers.size).toBe(0); // 旧群成员集没覆盖新会话
+    expect(c._ui.transferBusy).toBe(true); // 旧 finally 不乱复位
+    c._ui.transferBusy = false;
+    await flush();
   });
 });

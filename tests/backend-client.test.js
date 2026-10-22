@@ -935,6 +935,17 @@ describe("peer actions 的 URL 与 body", () => {
     expect(last(c)[0]).toBe("/api/v1/groups/g%201/members");
     expect(last(c)[1].body).toEqual({ add: ["dlna:a"], remove: [] });
   });
+
+  it("transferFrom / resetPeer", async () => {
+    const c = spied();
+    await c.transferFrom("dlna:to", "airplay:from");
+    expect(last(c)[0]).toBe("/api/v1/peers/dlna%3Ato/queue/transfer-from");
+    expect(last(c)[1].method).toBe("POST");
+    expect(last(c)[1].body).toEqual({ from: "airplay:from" });
+    await c.resetPeer("dlna:p 1");
+    expect(last(c)[0]).toBe("/api/v1/peers/dlna%3Ap%201/reset");
+    expect(last(c)[1].method).toBe("POST");
+  });
 });
 
 describe("Subsonic / v1 端点 URL 拼接", () => {

@@ -600,6 +600,17 @@ export class BackendClient {
   reorderQueue(peerId, from, to) {
     return this.rest(this.peerPath(peerId, "/queue/reorder"), { method: "POST", body: { from, to } });
   }
+  // 流转播放:把源端队列整体交给目标端(服务端一次完成搬运与起播落位)。
+  transferFrom(toPeerId, fromPeerId) {
+    return this.rest(this.peerPath(toPeerId, "/queue/transfer-from"), {
+      method: "POST",
+      body: { from: fromPeerId },
+    });
+  }
+  // 销毁播放端:停止传输 + 清空队列(流转页回收站的语义)。
+  resetPeer(peerId) {
+    return this.rest(this.peerPath(peerId, "/reset"), { method: "POST" });
+  }
   getStatus(peerId) { return this.rest(this.peerPath(peerId, "/status")); }
   getPeers() { return this.rest("/api/v1/peers"); }
   // 播放器群组:列出全部(含 memberIds)/ 增删成员(幂等原子口)。
