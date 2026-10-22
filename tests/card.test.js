@@ -2407,7 +2407,7 @@ describe("流转页:数据层与交互(A4–A8)", () => {
       await c.updateComplete;
 
       const d2 = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
-      d2.click();
+      d2.querySelector(".tp-ring").click();
       expect(c._ui.currentPeerId).toBe("dlna:d2");
       expect(c._ui.transferMsg).toContain("已切换到「书房」");
       expect(c._ui.transferOpen).toBe(true);
@@ -2458,7 +2458,7 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     await c.updateComplete;
 
     let g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
-    g.click();
+    g.querySelector(".tp-ring").click();
     await flush();
     expect(c._ui.currentPeerId).toBe("group:g1");
     expect(c._ui.transferGroupId).toBe("group:g1");
@@ -2479,7 +2479,7 @@ describe("流转页:数据层与交互(A4–A8)", () => {
 
     // 再点群组 = 退出成员模式(遥控目标仍是该群组)
     g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
-    g.click();
+    g.querySelector(".tp-ring").click();
     await flush();
     expect(c._ui.transferGroupId).toBe(null);
     expect(c._ui.currentPeerId).toBe("group:g1");
@@ -2527,7 +2527,9 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     expect(srcEl.classList.contains("drag-src")).toBe(true);
     expect(c.shadowRoot.querySelector(".panel.transfer").classList.contains("dragging")).toBe(true);
 
-    c.shadowRoot.elementFromPoint = vi.fn(() => dstEl);
+    // elementFromPoint 在真实 DOM 里命中的是圆内最深层节点(封面图/图标),
+    // 落点判定只认 .tp-ring 祖先 —— 这里返回封面圆。
+    c.shadowRoot.elementFromPoint = vi.fn(() => dstEl.querySelector(".tp-cover"));
     c._tpPointerMove(mkEv({ clientX: 44, clientY: 44 }));
     expect(c._tpOverPeerId).toBe("dlna:d2");
     expect(dstEl.classList.contains("drop")).toBe(true);
@@ -2542,7 +2544,7 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     // 拖回自己身上不算落点
     c._tpPointerDown(mkEv(), TP_PEERS[0]);
     c._tpPointerMove(mkEv({ clientX: 40, clientY: 40 }));
-    c.shadowRoot.elementFromPoint = vi.fn(() => srcEl);
+    c.shadowRoot.elementFromPoint = vi.fn(() => srcEl.querySelector(".tp-cover"));
     c._tpPointerMove(mkEv({ clientX: 44, clientY: 44 }));
     expect(c._tpOverPeerId).toBe(null);
     c._tpPointerUp(mkEv({ clientX: 44, clientY: 44 }));
@@ -2842,6 +2844,157 @@ describe("流转页审查修复(D1 回归守卫)", () => {
     expect(c._transferGroupMembers.size).toBe(0); // 旧群成员集没覆盖新会话
     expect(c._ui.transferBusy).toBe(true); // 旧 finally 不乱复位
     c._ui.transferBusy = false;
+    await flush();
+  });
+});
+
+describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
+  const allCss = () => [].concat(CardCtor.styles).map((x) => x.cssText || String(x)).join("\n");
+
+  it("E1 流转按钮:无限循环(∞)图标,且不再渲染文字", async () => {
+    const c = mkCard();
+    c._ui.peers = PEERS.filter((p) => p.available !== false);
+    c.requestUpdate();
+    await c.updateComplete;
+
+    const btn = c.shadowRoot.querySelector(".out.transfer");
+    expect(btn).toBeTruthy();
+    // 只留图标:按钮内文本节点为空,旧「流转播放」文案不再挂在按钮上
+    expect(btn.textContent.trim()).toBe("");
+    expect(btn.getAttribute("aria-label")).toBe("流转播放");
+    const d = btn.querySelector("svg path").getAttribute("d");
+    // 与客户端 AppIcons.transferInfinity 同形的交叉双环
+    expect(d).toContain("M12 12c-2-2.67-4-4-6-4");
+    await flush();
+  });
+
+  it("E4 流转按钮无外框:透明底/无边框,hover 与 MINI 播放器 .ctl 同款", () => {
+    const all = allCss();
+    expect(all).toMatch(/\.out\.transfer \{[^}]*border: none/);
+    expect(all).toMatch(/\.out\.transfer \{[^}]*background: transparent/);
+    expect(all).toMatch(/\.out\.transfer:hover \{[^}]*transform: scale\(1\.10\)/);
+    expect(all).toMatch(/\.out\.transfer:active \{[^}]*transform: scale\(0\.92\)/);
+    // 旧的高亮底色/边框版本必须彻底移除
+    expect(all).not.toMatch(/\.out\.transfer \{ border-color/);
+  });
+
+  it("E2 选中态收敛到圆框:格子不再画底色,网格两侧留出光晕空间", () => {
+    const all = allCss();
+    // 整格底色会在卡片左右边缘形成被切掉的黑边 —— 必须禁用
+    expect(all).not.toMatch(/\.tp-peer\.current \{ background/);
+    expect(all).not.toMatch(/\.tp-peer:hover \{[^}]*background/);
+    // 选中效果只落在圆上
+    expect(all).toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*border-color: rgb\(var\(--acc\)\)/);
+    expect(all).toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*box-shadow/);
+    // 网格左右 padding,给圆外环留出不被裁切的空间
+    expect(all).toMatch(/\.tp-grid \{[^}]*padding: 2px 8px/);
+  });
+
+  it("E3 点选/拖拽只认封面圆:点名称与在播文字都不响应", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    const peer = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
+    peer.querySelector(".tp-name").click();
+    peer.querySelector(".tp-sub").click();
+    expect(c._ui.currentPeerId).toBe("dlna:d1"); // 没切走
+    expect(c._ui.transferOpen).toBe(true); // 也没被当成「点空白」关页
+
+    // 名称上没有 pointerdown 处理器 ⇒ 不会起拖
+    peer.querySelector(".tp-name").dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(c._tpDrag).toBeFalsy();
+
+    // 圆框才响应单击
+    peer.querySelector(".tp-ring").click();
+    expect(c._ui.currentPeerId).toBe("dlna:d2");
+    await flush();
+  });
+
+  it("E5 首页 chip 行:按住 chip 横向拖动,超过阈值才算拖、松手吞 click", async () => {
+    const c = mkCard();
+    c._ui.peers = PEERS.filter((p) => p.available !== false);
+    c._ui.currentPeerId = "dlna:d2";
+    c.requestUpdate();
+    await c.updateComplete;
+
+    const list = c.shadowRoot.querySelector(".out-list");
+    Object.defineProperty(list, "scrollWidth", { value: 600, configurable: true });
+    Object.defineProperty(list, "clientWidth", { value: 200, configurable: true });
+    list.scrollLeft = 10;
+
+    c._outListPointerDown({
+      pointerType: "mouse", button: 0, pointerId: 3, clientX: 100,
+      currentTarget: list, composedPath: () => [list],
+    });
+    expect(c._outDrag).toBeTruthy();
+
+    // 4px 抖动:不算拖动,也不吞后续 click
+    c._onOutDragMove({ pointerId: 3, clientX: 104, cancelable: true, preventDefault: vi.fn() });
+    expect(c._outDrag.active).toBe(false);
+    expect(c._outDragSwallowed()).toBe(false);
+
+    // 超过阈值:进入拖动,列表反向跟手(10 - (60-100) = 50)
+    c._onOutDragMove({ pointerId: 3, clientX: 60, cancelable: true, preventDefault: vi.fn() });
+    expect(c._outDrag.active).toBe(true);
+    expect(list.scrollLeft).toBe(50);
+
+    c._onOutDragEnd({ pointerId: 3 });
+    expect(c._outDrag).toBeNull();
+    expect(c._outDragSwallowed()).toBe(true); // 浏览器随后补发的 click 会被吞
+    await flush();
+  });
+
+  it("E5 无滚动空间或按在群组徽标上:都不进入拖动", async () => {
+    const c = mkCard();
+    c._ui.groupManage = "group:g1";
+    c._ui.peers = PEERS.filter((p) => p.available !== false);
+    c.requestUpdate();
+    await c.updateComplete;
+
+    const list = c.shadowRoot.querySelector(".out-list");
+    // 内容不超出视口 ⇒ 不起拖
+    Object.defineProperty(list, "scrollWidth", { value: 200, configurable: true });
+    Object.defineProperty(list, "clientWidth", { value: 200, configurable: true });
+    c._outListPointerDown({
+      pointerType: "mouse", button: 0, pointerId: 4, clientX: 10,
+      currentTarget: list, composedPath: () => [list],
+    });
+    expect(c._outDrag).toBeFalsy();
+
+    // 有滚动空间,但按在 +/− 徽标上 ⇒ 不抢它的点击
+    Object.defineProperty(list, "scrollWidth", { value: 600, configurable: true });
+    const badge = c.shadowRoot.querySelector(".out-badge");
+    c._outListPointerDown({
+      pointerType: "mouse", button: 0, pointerId: 5, clientX: 10,
+      currentTarget: list, composedPath: () => [badge, list],
+    });
+    expect(c._outDrag).toBeFalsy();
+    await flush();
+  });
+
+  it("E6 从名称/文字上按下、在空白处松手:补发的 click 不得被当成点空白关页", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    openTransfer(c);
+    await c.updateComplete;
+
+    const panel = c.shadowRoot.querySelector(".panel.transfer");
+    const peer = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"]');
+    const name = peer.querySelector(".tp-name");
+    const grid = c.shadowRoot.querySelector(".tp-grid");
+
+    // press 落在名称(属于 .tp-peer)→ 松手在网格空白:共同祖先 .tp-grid 不是交互元素,
+    // 但按下位置在播放端格子里 ⇒ 只算「从文字起手」,不关页
+    c._onTransferPointerDown({ composedPath: () => [name, peer, grid, panel] });
+    c._onTransferClick({ composedPath: () => [grid, panel] });
+    expect(c._ui.transferOpen).toBe(true);
+
+    // 真正点空白:press 与 click 都在空白 ⇒ 仍然关页
+    c._onTransferPointerDown({ composedPath: () => [grid, panel] });
+    c._onTransferClick({ composedPath: () => [grid, panel] });
+    expect(c._ui.transferOpen).toBe(false);
     await flush();
   });
 });

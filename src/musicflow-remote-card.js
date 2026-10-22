@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.6.0";
+const CARD_VERSION = "2.6.1";
 
 // 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
 // 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
@@ -105,8 +105,8 @@ const MF_ICONS = {
   // 客户端本机实例(安卓/Windows):与 DLNA 的 speaker 区分开来,一眼看出是「客户端播放器」。
   smartphone: '<rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/>',
   monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
-  // 流转播放:左右箭头互换(lucide arrow-right-left),一眼看出「把播放搬到另一台设备」。
-  transfer: '<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>',
+  // 流转播放:无限循环(∞)与客户端 `AppIcons.transferInfinity` 同形 —— 两段交叉闭合弧 + 圆头描边。
+  transfer: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"/>',
   // 群组(多台设备的集合,lucide users)/ 回收站(lucide trash-2)
   group: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
@@ -333,6 +333,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._tpOverPeerId = null; // 当前落点(拖动经过的播放端)
     this._tpOverTrash = false; // 指针是否已在回收站(此时不滚动)
     this._tpSuppressClickUntil = 0; // 拖拽结束后抑制一次 click(否则会误触「切目标」)
+    this._tpDownInPeer = false;  // 本次 press 是否落在播放端格子内(含名称/文字),用于避免误判「点空白」关页
     this._tpSession = 0;        // 流转页会话号:关页/重开即递增,丢弃旧会话的异步回写
     this._tpMoveHandler = null;
     this._tpUpHandler = null;
@@ -397,6 +398,8 @@ class MusicFlowRemoteCard extends LitElement {
     // 流转页:拖拽监听/幽灵节点/rAF 循环与提示定时器都必须随卡片卸载清理,
     // 否则重新挂载后 window 上会残留指向旧实例的监听。
     this._tpEndDrag();
+    // 首页 chip 行横向拖动同样挂在 window 上,卸载时必须摘掉
+    this._onOutDragEnd({ pointerId: this._outDrag ? this._outDrag.pointerId : undefined });
     if (this._tpMsgTimer) { clearTimeout(this._tpMsgTimer); this._tpMsgTimer = null; }
     if (this._tpCloseTimer) { clearTimeout(this._tpCloseTimer); this._tpCloseTimer = null; }
     if (this._visHandler) { document.removeEventListener("visibilitychange", this._visHandler); this._visHandler = null; }
@@ -2110,16 +2113,16 @@ class MusicFlowRemoteCard extends LitElement {
     const peers = (this._ui.peers || []).filter((p) => p.available !== false || p.kind === "group");
     if (!peers.length) return html`<div class="outputs"><span class="hint">${this._t("browser.noPlayer")}</span></div>`;
     const managing = this._ui.groupManage;
-    // 首页 chip 行**恒为一行**:放不下的播放器一律裁掉(不换行、正常态也不给横向滚动),
-    // 要切到被裁掉的设备请点行尾「流转播放」进整卡流转页(见 _openTransfer)。
-    // 当前遥控目标提到首位,保证被裁时「正在控的那台」始终可见。
+    // 首页 chip 行**恒为一行**:不换行,放不下的播放器靠**按住任意 chip 左右拖动**滑出来
+    // (鼠标拖 = 本文件 _outListPointerDown;触屏走原生 pan-x)。点行尾「流转播放」可进整卡
+    // 流转页做流转/群组/销毁。当前遥控目标提到首位,保证初始视口内「正在控的那台」可见。
     const cur = this._ui.currentPeerId;
     const ordered = cur
       ? [...peers.filter((p) => p.peerId === cur), ...peers.filter((p) => p.peerId !== cur)]
       : peers;
     return html`
       <div class="outputs ${managing ? "managing" : ""}">
-        <div class="out-list">
+        <div class="out-list" @pointerdown=${this._outListPointerDown}>
           ${ordered.map((p) => {
             const isGroup = p.kind === "group";
             // 管理模式下,设备型成员(dlna/sendspin)底下出现 +/− 徽标;
@@ -2132,24 +2135,87 @@ class MusicFlowRemoteCard extends LitElement {
               <div class="out-wrap">
                 <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"} ${managing === p.peerId ? "managing" : ""}"
                   title="${this._peerTitle(p)}"
-                  @click=${() => (isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId))}>
+                  @click=${() => {
+                    // 横向拖动结束后浏览器仍会补发 click:这一段直接吞掉,避免「拖完就切台」。
+                    if (this._outDragSwallowed()) return;
+                    isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId);
+                  }}>
                   ${this._icon(this._peerIcon(p), 16)}<span class="out-label">${this._peerLabel(p)}</span>
                 </button>
                 ${showBadge ? html`
                   <button class="out-badge ${member ? "in" : ""}"
                     title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
-                    @click=${(e) => { e.stopPropagation(); this._toggleGroupMember(p); }}>✓</button>` : null}
+                    @click=${(e) => {
+                      e.stopPropagation();
+                      if (this._outDragSwallowed()) return;
+                      this._toggleGroupMember(p);
+                    }}>✓</button>` : null}
               </div>
             `;
           })}
         </div>
         <button class="out transfer" title="${this._t("outputs.transfer")}"
+          aria-label="${this._t("outputs.transfer")}"
           @click=${(e) => { e.stopPropagation(); this._openTransfer(); }}>
-          ${this._icon("transfer", 16)} ${this._t("outputs.transfer")}
+          ${this._icon("transfer", 17)}
         </button>
         ${managing ? html`<div class="gm-hint">${this._t("outputs.groupManageHint")}</div>` : null}
       </div>
     `;
+  }
+
+  // ---- 首页 chip 行横向拖动(鼠标 / 笔) ----
+  // 触屏走 CSS 原生 `touch-action: pan-x`,这里只补鼠标与笔:按住**任意 chip** 左右拖,
+  // 位移超过 8px 才算拖动(不误触切换),松手后 350ms 内吞掉浏览器补发的 click。
+  // 不做惯性滑动(按需求明确不加)。
+  _outDragSwallowed() {
+    return !!this._outDragUntil && Date.now() < this._outDragUntil;
+  }
+
+  _outListPointerDown(e) {
+    if (e.pointerType === "touch") return; // 触屏由原生滚动处理
+    if (typeof e.button === "number" && e.button !== 0) return;
+    const list = e.currentTarget;
+    if (!list || list.scrollWidth <= list.clientWidth + 1) return; // 无滚动空间:不起拖
+    // 群组管理的 ✓ 徽标是独立按钮,按它不进入横向拖动(否则会吃掉它的点击)
+    const path = e.composedPath ? e.composedPath() : [];
+    if (path.some((n) => n && n.classList && n.classList.contains("out-badge"))) return;
+    this._outDrag = { list, pointerId: e.pointerId, x: e.clientX, left: list.scrollLeft, active: false };
+    this._outDragMoveH = (ev) => this._onOutDragMove(ev);
+    this._outDragEndH = (ev) => this._onOutDragEnd(ev);
+    window.addEventListener("pointermove", this._outDragMoveH, { passive: false });
+    window.addEventListener("pointerup", this._outDragEndH);
+    window.addEventListener("pointercancel", this._outDragEndH);
+  }
+
+  _onOutDragMove(ev) {
+    const d = this._outDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    const dx = ev.clientX - d.x;
+    if (!d.active) {
+      if (Math.abs(dx) < 8) return;
+      d.active = true;
+      d.list.classList.add("drag-x");
+    }
+    if (ev.cancelable) ev.preventDefault();
+    d.list.scrollLeft = d.left - dx;
+  }
+
+  _onOutDragEnd(ev) {
+    const d = this._outDrag;
+    if (!d || (ev.pointerId !== undefined && ev.pointerId !== d.pointerId)) return;
+    if (d.active) this._outDragUntil = Date.now() + 350;
+    this._outDrag = null;
+    d.list.classList.remove("drag-x");
+    if (this._outDragMoveH) {
+      window.removeEventListener("pointermove", this._outDragMoveH);
+      this._outDragMoveH = null;
+    }
+    if (this._outDragEndH) {
+      window.removeEventListener("pointerup", this._outDragEndH);
+      window.removeEventListener("pointercancel", this._outDragEndH);
+      this._outDragEndH = null;
+    }
   }
 
   // 打开整卡流转页:首页 chip 行只放得下一行,被裁掉的播放器在这里切换/拖拽流转。
@@ -2184,7 +2250,8 @@ class MusicFlowRemoteCard extends LitElement {
     const ordered = this._sortPeersForDisplay(peers);
     const busy = this._ui.transferBusy;
     return html`
-      <div class="panel transfer ${busy ? "busy" : ""}" @click=${this._onTransferClick}>
+      <div class="panel transfer ${busy ? "busy" : ""}"
+        @pointerdown=${this._onTransferPointerDown} @click=${this._onTransferClick}>
         <div class="panel-head">
           <span class="tp-title">${this._t("transfer.title")}</span>
           ${this._ui.transferMsg ? html`
@@ -2239,11 +2306,11 @@ class MusicFlowRemoteCard extends LitElement {
     const isDropTarget = p.peerId === this._tpOverPeerId;
     return html`
       <div class="tp-peer ${isCurrent ? "current" : ""} ${isDropTarget ? "drop" : ""} ${isGroup ? "group" : ""} ${p.available === false ? "off" : ""}"
-        data-peer-id="${p.peerId}" role="button" tabindex="0" title="${this._peerTitle(p)}"
-        @click=${(e) => this._tpPeerClick(e, p)}
-        @keydown=${(e) => this._tpPeerKey(e, p)}
-        @pointerdown=${(e) => this._tpPointerDown(e, p)}>
-        <div class="tp-ring">
+        data-peer-id="${p.peerId}" title="${this._peerTitle(p)}">
+        <div class="tp-ring" role="button" tabindex="0"
+          @click=${(e) => this._tpPeerClick(e, p)}
+          @keydown=${(e) => this._tpPeerKey(e, p)}
+          @pointerdown=${(e) => this._tpPointerDown(e, p)}>
           <div class="tp-cover">
             ${coverArt
               ? html`<img class="tp-cover-lazy" data-cover-id="${coverArt}" alt="" draggable="false" />`
@@ -2465,11 +2532,15 @@ class MusicFlowRemoteCard extends LitElement {
     if (typeof e.button === "number" && e.button !== 0) return;
     this._tpCancelCloseSoon(); // 开始新操作:撤销成功后排的自动关页
     // 这里**不能** preventDefault:取消 pointerdown 会抑制触屏后续补发的 click,
-    // 而「单击切目标」与群组 +/− 都挂在 click 上。滚动/选中已由 .tp-peer 的
+    // 而「单击切目标」与群组 +/− 都挂在 click 上。滚动/选中已由 .tp-ring 的
     // touch-action:none + user-select:none 挡住,无需再动默认行为。
     if (e.stopPropagation) e.stopPropagation();
     this._tpDrag = {
-      src: p, srcEl: e.currentTarget, pointerId: e.pointerId,
+      src: p, srcEl: e.currentTarget,
+      // 交互元素已缩到圆框(.tp-ring),但「被拖走的那一格」要整格变淡,所以单独记 peer 节点。
+      peerEl: (e.currentTarget && e.currentTarget.closest)
+        ? (e.currentTarget.closest(".tp-peer") || e.currentTarget) : e.currentTarget,
+      pointerId: e.pointerId,
       x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, active: false,
     };
     // 指针捕获 + blur 兜底:指针拖到窗口外/切走再松开时仍能收到 pointerup,
@@ -2504,7 +2575,7 @@ class MusicFlowRemoteCard extends LitElement {
       this._tpStartGhost(d);
       const panel = this.shadowRoot && this.shadowRoot.querySelector(".panel.transfer");
       if (panel) panel.classList.add("dragging");
-      if (d.srcEl) d.srcEl.classList.add("drag-src");
+      if (d.peerEl) d.peerEl.classList.add("drag-src");
       this._tpFlash("", false); // 拖拽期间清掉上一条提示,避免遮挡落点
       this._tpEnsureAutoScrollLoop();
     }
@@ -2566,8 +2637,8 @@ class MusicFlowRemoteCard extends LitElement {
       if (drop) drop.classList.remove("drop");
       const trash = sr.querySelector(".tp-trash.over");
       if (trash) trash.classList.remove("over");
-      const srcEl = this._tpDrag && this._tpDrag.srcEl;
-      if (srcEl) srcEl.classList.remove("drag-src");
+      const srcPeerEl = this._tpDrag && this._tpDrag.peerEl;
+      if (srcPeerEl) srcPeerEl.classList.remove("drag-src");
     }
     this._tpDrag = null;
     this._tpOverPeerId = null;
@@ -2618,7 +2689,9 @@ class MusicFlowRemoteCard extends LitElement {
     const sr = this.shadowRoot;
     if (!sr || typeof sr.elementFromPoint !== "function") return;
     const el = sr.elementFromPoint(x, y);
-    const peerEl = el && el.closest ? el.closest(".tp-peer") : null;
+    // 落点也只认**封面圆框**:拖到名称/在播文字上不算落到该端(与点选口径一致)。
+    const ringEl = el && el.closest ? el.closest(".tp-ring") : null;
+    const peerEl = ringEl && ringEl.closest ? ringEl.closest(".tp-peer") : null;
     const trashEl = el && el.closest ? el.closest(".tp-trash") : null;
     const d = this._tpDrag;
     let pid = peerEl ? peerEl.getAttribute("data-peer-id") : null;
@@ -2735,10 +2808,20 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
+  // 记录按下位置是否落在播放端格子内(含圆、名称、在播文字)。名称/文字已不参与点选与拖拽,
+  // 但「从文字上按下、在别处松手」时浏览器补发的 click 目标是两点的共同祖先(.tp-grid),
+  // 会被误判成「点空白」而关页 —— 用按下位置兜住,保证从文字上起手不会关页。
+  _onTransferPointerDown(e) {
+    const path = e.composedPath ? e.composedPath() : [];
+    this._tpDownInPeer = path.some((n) => n && n.classList && n.classList.contains("tp-peer"));
+  }
+
   _onTransferClick(e) {
     // 拖拽刚结束时浏览器仍会补发一次 click:它不代表「点空白」,不能关页
     // (含拖进回收站销毁的场景 —— 销毁成功本来就要求留在页面)。
     if (Date.now() < this._tpSuppressClickUntil) return;
+    const downInPeer = !!this._tpDownInPeer;
+    this._tpDownInPeer = false;
     const path = e.composedPath ? e.composedPath() : [];
     const interactive = path.some((n) => {
       if (!n || !n.classList) return false;
@@ -2746,7 +2829,7 @@ class MusicFlowRemoteCard extends LitElement {
         n.classList.contains("tp-trash") || n.classList.contains("tp-badge") ||
         n.classList.contains("tp-msg") || n.tagName === "BUTTON";
     });
-    if (!interactive) this._closeTransfer();
+    if (!interactive && !downInPeer) this._closeTransfer();
   }
 
   // ============ 群组管理模式(点群组 output → 每个设备旁出现 +/−) ============
@@ -4056,12 +4139,22 @@ class MusicFlowRemoteCard extends LitElement {
          把行尾按钮挤到第二行(2026-10-22 20+ 端实测)。故正常态 nowrap,让列表收缩裁剪。
          管理模式要独占一行的提示行(.gm-hint),在 .outputs.managing 里单独恢复 wrap。 */
       .outputs { display: flex; flex-wrap: nowrap; gap: 12px; align-items: center; }
-      /* 首页 chip 列表:恒单行、不换行,超出部分 overflow 裁掉(滚动也只发生在管理态)。
-         flex:1 1 auto 占满剩余宽度 ⇒ 行尾「流转播放」按钮恒定在卡片右缘,设备再多也裁不到它。 */
-      .out-list { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; overflow: hidden; padding: 4px 0 4px 4px; }
-      /* 行尾固定:被裁掉的播放器走这里进整卡流转页 */
-      .out.transfer { flex: 0 0 auto; border-color: rgba(var(--acc), 0.55); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
-      .out.transfer:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.20); }
+      /* 首页 chip 列表:恒单行、不换行。放不下的 chip 靠**按住任意 chip 左右拖动**滑出来
+         (鼠标见 _outListPointerDown;触屏走原生 pan-x),滚动条隐藏。
+         flex:1 1 auto 占满剩余宽度 ⇒ 行尾「流转播放」按钮恒定在卡片右缘。 */
+      .out-list { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto;
+        overflow-x: auto; overflow-y: hidden; padding: 4px 0 4px 4px; scrollbar-width: none;
+        touch-action: pan-x; -webkit-overflow-scrolling: touch; }
+      .out-list::-webkit-scrollbar { display: none; }
+      .out-list.drag-x { cursor: grabbing; }
+      /* 行尾「流转播放」:去掉外框,与 MINI 播放器那一排 .ctl 按钮完全同款 —— 
+         透明底、无边框,仅 hover 放大上浮 + 中性阴影,active 缩回。 */
+      .out.transfer { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; gap: 0;
+        border: none; background: transparent; color: var(--ctl); border-radius: 50%; box-shadow: none; }
+      .out.transfer:hover { border: none; background: transparent; color: var(--ctl);
+        transform: scale(1.10); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      .out.transfer:active { transform: scale(0.92); }
+      .out.transfer:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 2px; }
       /* 芯片不收缩、文字恒单行:名称再长也只省略号裁字。否则 20+ 端时每个 chip 被压到
          59px,长设备名在 chip 内部换行,整行从 32px 撑到 95px(2026-10-22 实测)。 */
       .out { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
@@ -4251,24 +4344,27 @@ class MusicFlowRemoteCard extends LitElement {
       .tp-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
       /* 流转页网格:每格一个播放端(圆 + 名称 + 状态),窄卡自动单列。
          颜色一律走 --ctl-rgb / --acc:深底白圈、浅底黑圈,强调色跟随封面。 */
+      /* 选中/悬停/焦点全部收敛到**封面圆**上:格子本身(.tp-peer)不再画底色,
+         否则整格底色在卡片左右边缘会像一条被切掉的黑边。 */
       .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
-        gap: 10px 6px; align-items: start; }
+        gap: 10px 6px; align-items: start; padding: 2px 8px; }
       .tp-peer { position: relative; display: flex; flex-direction: column; align-items: center;
-        gap: 3px; padding: 6px 2px 8px; border-radius: 12px; cursor: pointer; touch-action: none;
-        transition: background 0.15s, opacity 0.15s; -webkit-tap-highlight-color: transparent; }
-      .tp-peer:hover { background: rgba(var(--ctl-rgb), 0.08); }
-      .tp-peer:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 2px; }
-      .tp-peer.current { background: rgba(var(--acc), 0.12); }
-      .tp-peer.off { opacity: 0.45; }
+        gap: 3px; padding: 6px 2px 8px; border-radius: 12px;
+        transition: opacity 0.15s; -webkit-tap-highlight-color: transparent; }
       .tp-ring { position: relative; width: 56px; height: 56px; border-radius: 50%;
         border: 2px solid rgba(var(--ctl-rgb), 0.82); background: rgba(var(--ctl-rgb), 0.12);
         display: flex; align-items: center; justify-content: center;
-        transition: border-color 0.15s, box-shadow 0.15s; }
-      .tp-peer.current .tp-ring { border-color: rgb(var(--acc));
-        box-shadow: 0 0 0 2px rgba(var(--acc), 0.28), 0 0 12px rgba(var(--acc), 0.4); }
+        cursor: pointer; touch-action: none;
+        transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
+      .tp-ring:hover { border-color: rgba(var(--acc), 0.85); }
+      .tp-ring:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 3px; }
+      /* 当前目标:圆内一层柔光 + 贴边双环,全部落在圆上,不外溢到格子左右边缘 */
+      .tp-peer.current .tp-ring { border-color: rgb(var(--acc)); background: rgba(var(--acc), 0.10);
+        box-shadow: 0 0 0 2px rgba(var(--acc), 0.30), 0 0 7px rgba(var(--acc), 0.38); }
       .tp-peer.drop .tp-ring { border-color: rgb(var(--acc));
-        box-shadow: 0 0 0 3px rgba(var(--acc), 0.36), 0 0 16px rgba(var(--acc), 0.5); }
+        box-shadow: 0 0 0 3px rgba(var(--acc), 0.36), 0 0 10px rgba(var(--acc), 0.5); }
       .tp-peer.drag-src { opacity: 0.32; }
+      .tp-peer.off { opacity: 0.45; }
       .tp-cover { width: 100%; height: 100%; border-radius: 50%; overflow: hidden;
         display: flex; align-items: center; justify-content: center; }
       .tp-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
