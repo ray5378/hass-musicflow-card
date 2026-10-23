@@ -32,11 +32,12 @@
 > **稳定配套（测试组合）**：服务端 **v1.1.19** + 集成 **v1.3.6** + 卡片 **v1.6.11**。
 > 三者需对齐：升级服务端后，请在 HACS 同步更新集成与卡片到对应版本。
 
-## 混合传输（局域网直连 + 外网代理）
+## 混合传输（默认经 HA 中转，可切回直连）
 
-卡片默认**直连** MusicFlow 后端（WebSocket + REST），局域网内延迟最低。
-当浏览器无法直连后端时（外网访问、或受 Private Network Access / 混合内容 /
-私有 IP 不可路由拦截），卡片会自动切换为**经 Home Assistant 中转**：
+自 **v2.7.0** 起，卡片默认**强制经 Home Assistant 集成中转**：浏览器只与 HA 通信，
+后端由集成代为访问。这样外网访问、HTTPS 页面、跨网段都不再受混合内容 /
+Private Network Access / 私有 IP 不可路由拦截。
+直连（`transport: direct`）与自动探测（`transport: auto`）仍然保留，可按需在 YAML 指定。
 
 - REST 请求走集成提供的代理视图；
 - 实时事件由集成通过 WebSocket 订阅转发；
@@ -45,7 +46,8 @@
 这需要集成 **1.3.0 及以上**（当前稳定 **1.3.6**）。代理模式下后端 API Key
 只保存在 HA 侧，不会下发到浏览器。
 
-直连模式下，后端仍需在 `CORS_ORIGINS` 中放行 HA 前端来源（或设 `CORS_ORIGINS=*`）。
+仅**直连模式**要求后端在 `CORS_ORIGINS` 中放行 HA 前端来源（或设 `CORS_ORIGINS=*`）；
+默认的中转模式是同源请求，不需要该配置。
 
 ## 封面性能（服务端 v1.1.19+）
 
@@ -100,12 +102,14 @@ entity: media_player.hivi_h5mkii_2
 
 ### 传输模式
 
-默认 `auto`：先探测直连，失败且集成支持时自动切换 HA 代理。也可强制指定：
+默认 `proxy`（v2.7.0 起）：始终经 HA 集成中转，不依赖浏览器到后端的网络与 CORS。
+其余两种模式仍然可用：
 
 ```yaml
 type: custom:hass-musicflow-card
+# transport: proxy  # 默认值：始终经 HA 中转（需要集成 1.3.0+）
 transport: direct   # 始终直连后端
-# transport: proxy  # 始终经 HA 中转（需要集成 1.3.0+）
+# transport: auto   # 先探测直连，失败且集成支持时切 HA 代理
 ```
 
 ### 未播放态底色（idle ambient）

@@ -34,13 +34,16 @@ channel, and any change made elsewhere is reflected on the card immediately.
   card **v1.6.11**. Keep these three in sync; upgrading the server should be
   followed by updating the integration and the card in HACS.
 
-## Hybrid transport (LAN direct + WAN proxy)
+## Hybrid transport (proxy by default, direct optional)
 
-The card normally connects **directly** to the MusicFlow backend (WebSocket +
-REST), which gives the lowest latency on your LAN. When the browser cannot
-reach the backend directly - outside your LAN, or when a Public Network Access
-/ mixed-content / private-IP restriction blocks the connection - the card
-automatically falls back to routing everything through Home Assistant:
+Since **v2.7.0** the card routes everything through the Home Assistant
+integration by default: the browser only talks to Home Assistant, which reaches
+the backend on its behalf. This removes the mixed-content / Private Network
+Access / unroutable-private-IP restrictions entirely.
+Direct (`transport: direct`) and auto probing (`transport: auto`) are still
+available and can be enabled in YAML.
+
+In proxy mode everything goes through Home Assistant:
 
 - REST calls go through the integration's proxy view.
 - Real-time events are forwarded by the integration over a WebSocket
@@ -53,9 +56,9 @@ This requires the MusicFlow integration **1.3.0 or newer** (current stable:
 **1.3.6**). The backend API key stays inside Home Assistant and is never sent
 to the browser in proxy mode.
 
-In direct mode the backend must still allow your Home Assistant frontend origin
-in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`), because the card calls the backend
-directly from the browser.
+Only **direct mode** requires the backend to allow your Home Assistant frontend
+origin in `CORS_ORIGINS` (or set `CORS_ORIGINS=*`). The default proxy mode is
+same-origin and needs no CORS change.
 
 ## Cover art performance (with server v1.7.x+)
 
@@ -109,14 +112,16 @@ effect and the card falls back to the first available output.
 
 ### Transport mode
 
-By default the card auto-detects the best transport (`auto`): it probes a direct
-connection first and switches to the Home Assistant proxy when direct access
-fails. You can force a mode with the `transport` option:
+Since **v2.7.0** the default is `proxy`: every request and event goes through the
+Home Assistant integration, so the card no longer depends on the browser being
+able to reach the backend (mixed content / PNA / CORS / unroutable private IPs).
+The other modes remain available:
 
 ```yaml
 type: custom:hass-musicflow-card
+# transport: proxy  # default: always route through Home Assistant (needs integration 1.3.0+)
 transport: direct   # always connect straight to the backend
-# transport: proxy  # always route through Home Assistant (needs integration 1.3.0+)
+# transport: auto   # probe direct first, fall back to the HA proxy
 ```
 
 ### Idle background (idle ambient)

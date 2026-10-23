@@ -207,7 +207,12 @@ export class BackendClient {
 
   async _resolveMode() {
     if (this.transport === "direct") return "direct";
-    if (this.transport === "proxy") return this.proxySupported ? "proxy" : "direct";
+    if (this.transport === "proxy") {
+      // 集成版本过旧(未提供 REST 代理 + 事件订阅)时只能回落直连。
+      // 明确打一行告警,避免「以为在测中转、其实走了直连」。
+      if (!this.proxySupported) warn("transport=proxy 但集成不支持代理 -> 回落直连");
+      return this.proxySupported ? "proxy" : "direct";
+    }
     // auto: 直连可达就用直连;不可达且集成支持代理才切代理
     if (this.proxySupported && !(await this._probeDirect())) return "proxy";
     return "direct";
