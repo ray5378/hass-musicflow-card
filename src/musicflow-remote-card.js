@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.0";
+const CARD_VERSION = "2.8.1";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -2279,7 +2279,7 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
           ${isGroup ? html`<span class="tp-dash"></span>` : null}
           ${playing ? html`<span class="tp-live" title="${this._t("transfer.playing")}"><i></i><i></i><i></i></span>` : null}
-          ${isCurrent ? html`<span class="tp-cur" title="${this._t("transfer.current")}">${this._icon("check", 11)}</span>` : null}
+          ${isCurrent ? html`<span class="tp-cur" title="${this._t("transfer.current")}">${this._icon("check", 16)}</span>` : null}
         </div>
         <div class="tp-name">${this._peerLabel(p)}</div>
         <div class="tp-sub">${sub}</div>
@@ -4210,9 +4210,9 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
       .tp-ring:hover { border-color: rgba(var(--acc), 0.85); }
       .tp-ring:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 3px; }
-      /* 当前目标:圆内一层柔光 + 贴边双环,全部落在圆上,不外溢到格子左右边缘 */
-      .tp-peer.current .tp-ring { border-color: rgb(var(--acc)); background: rgba(var(--acc), 0.10);
-        box-shadow: 0 0 0 2px rgba(var(--acc), 0.30), 0 0 7px rgba(var(--acc), 0.38); }
+      /* 当前目标:不再画白色外环(2026-10-23 用户要求「从白色圈改为圈内红色 ✓」),
+         只保留一圈极淡强调色描边,「选中」完全由圆内的红色对勾表达。 */
+      .tp-peer.current .tp-ring { border-color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
       .tp-peer.drop .tp-ring { border-color: rgb(var(--acc));
         box-shadow: 0 0 0 3px rgba(var(--acc), 0.36), 0 0 10px rgba(var(--acc), 0.5); }
       .tp-peer.drag-src { opacity: 0.32; }
@@ -4232,17 +4232,22 @@ class MusicFlowRemoteCard extends LitElement {
       .tp-live i:nth-child(2) { animation-delay: -0.45s; }
       .tp-live i:nth-child(3) { animation-delay: -0.7s; }
       @keyframes tp-eq { 0%, 100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
-      .tp-cur { position: absolute; right: -3px; top: -3px; width: 18px; height: 18px;
-        border-radius: 50%; background: rgb(var(--acc)); color: #fff;
+      /* 当前目标的红色对勾:落在封面圆**内部正中**(原先是圆右上角的白色小圆 + 白 ✓,
+         2026-10-23 用户要求改为「圈圈里面带红色 ✓」)。深色半透明衬底保证红勾在任何
+         封面图上都能看清;不再外溢到圆外。 */
+      .tp-cur { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: 26px; height: 26px; border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55); color: #ef4444;
         display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35); }
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
       .tp-name { max-width: 100%; font-size: 12px; font-weight: 600; color: var(--fg);
         text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tp-sub { max-width: 100%; font-size: 10.5px; color: var(--fg-faint);
         text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       /* 群组成员勾选圈:与首页 chip 无关,只在流转页的成员管理态出现。
          未加入 = 空心圈(边框 + 半透明底,✓ 着色为透明);
-         已加入 = accent 实心圈 + 白色 ✓(与 Web 流转列表、客户端同款视觉)。
+         已加入 = 强调色实心圈 + **红色 ✓**(2026-10-23 用户要求:红勾,与选中态同色);
+         勾外加极轻的暗色描边,保证红勾在红/橙系强调色底上也不糊。
          位置固定在原「+/−」处(封面圆右上角)。 */
       .tp-badge { position: absolute; right: 3px; top: 0; width: 20px; height: 20px; padding: 0;
         box-sizing: border-box; border-radius: 50%;
@@ -4254,7 +4259,8 @@ class MusicFlowRemoteCard extends LitElement {
         transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.18s; }
       .tp-badge:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.22);
         transform: scale(1.1); }
-      .tp-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff; }
+      .tp-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #ef4444;
+        text-shadow: 0 0 2px rgba(0, 0, 0, 0.55), 0 1px 1px rgba(0, 0, 0, 0.35); }
       .tp-badge:focus-visible { outline: 2px solid rgb(var(--acc)); outline-offset: 2px; }
       /* 回收站固定在滚动区之外:滚动视口下缘 = 热区与回收站的物理分界。 */
       .tp-trash { flex: 0 0 auto; margin-top: 6px; display: flex; align-items: center;

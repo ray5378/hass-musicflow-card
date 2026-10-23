@@ -2848,11 +2848,22 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     // 整格底色会在卡片左右边缘形成被切掉的黑边 —— 必须禁用
     expect(all).not.toMatch(/\.tp-peer\.current \{ background/);
     expect(all).not.toMatch(/\.tp-peer:hover \{[^}]*background/);
-    // 选中效果只落在圆上
+    // 选中效果只落在圆上;2026-10-23 起不再画白色外环,改由圆内红色 ✓ 表达
     expect(all).toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*border-color: rgb\(var\(--acc\)\)/);
-    expect(all).toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*box-shadow/);
+    expect(all).not.toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*box-shadow/);
     // 网格左右 padding,给圆外环留出不被裁切的空间
     expect(all).toMatch(/\.tp-grid \{[^}]*padding: 2px 8px/);
+  });
+
+  it("E7 选中态与已加入群组态统一红色勾,选中不再用白色外环", () => {
+    const all = allCss();
+    // 选中标记:落在封面圆内部正中,红色 ✓(不再外溢到圆右上角)
+    expect(all).toMatch(/\.tp-cur \{[^}]*left: 50%/);
+    expect(all).toMatch(/\.tp-cur \{[^}]*top: 50%/);
+    expect(all).toMatch(/\.tp-cur \{[^}]*color: #ef4444/);
+    expect(all).not.toMatch(/\.tp-cur \{[^}]*color: #fff/);
+    // 已加入群组的勾选圈同样红勾
+    expect(all).toMatch(/\.tp-badge\.in \{[^}]*color: #ef4444/);
   });
 
   it("E3 点选/拖拽只认封面圆:点名称与在播文字都不响应", async () => {

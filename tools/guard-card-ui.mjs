@@ -134,6 +134,38 @@ record(
   badgeOk(dist),
 );
 
+// 勾选标记统一红色(2026-10-23 用户要求):
+//   ① 「当前遥控」不再用白色外环(.tp-peer.current .tp-ring 的 box-shadow)表达,
+//      改为封面圆**内部正中**的红色 ✓(.tp-cur);
+//   ② 「已加入群组」的勾选圈实心 ✓ 也改成同一种红。
+// 这两处都是纯视觉改动,编译/单测都不报错 ⇒ 只能静态钉住颜色与位置。
+// ⚠️ 只取到本条规则的 `}` 为止:按固定长度切片会把下一条规则(比如 .tp-peer.drop
+//    的 box-shadow)一起吞进来,导致「没有外环」的断言假红。
+const ruleAt = (text, selector) => {
+  const i = text.indexOf(selector);
+  if (i < 0) return "";
+  const j = text.indexOf("}", i);
+  return j < 0 ? text.slice(i) : text.slice(i, j + 1);
+};
+const RED_CHECK = /color:\s*#ef4444/i;
+const redCheckOk = (text) => {
+  const cur = ruleAt(text, ".tp-cur {");
+  const badgeIn = ruleAt(text, ".tp-badge.in {");
+  const curRing = ruleAt(text, ".tp-peer.current .tp-ring {");
+  return (
+    RED_CHECK.test(cur) &&
+    /left:\s*50%/.test(cur) && /top:\s*50%/.test(cur) && // 落在圆内正中
+    RED_CHECK.test(badgeIn) &&
+    !/box-shadow/.test(curRing) // 白色外环已去掉
+  );
+};
+record(
+  "A3 流转页勾选标记统一为红色 ✓,选中态不再画白色外环",
+  "改回白勾或把白圈加回来 = 用户明确否掉的视觉回流(2026-10-23)",
+  redCheckOk(src),
+  redCheckOk(dist),
+);
+
 // ============ B. 首页 chip 行:只切遥控目标,不做成员管理 ============
 
 /** 取方法体(方法名须在行首缩进后出现,避免命中 `this._x(...)` 调用点)。 */
