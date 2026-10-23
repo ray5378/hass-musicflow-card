@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.2";
+const CARD_VERSION = "2.8.3";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -4213,10 +4213,15 @@ class MusicFlowRemoteCard extends LitElement {
       /* 当前目标:不再画白色外环,也不在封面里塞勾选标记(2026-10-23 用户要求),
          改为与客户端 _ActivePulse 同款的**外圈呼吸光环**:一圈 3px 强调色圆环
          从 1.0 放大到 1.26 并渐隐,1.2s ease-in-out 往返 ⇒ 视觉上向外「吐」。
-         光环是 .tp-ring 的**前置兄弟节点**,因此画在封面与频谱徽标之下。 */
+         光环是 .tp-ring 的**前置兄弟节点**,因此画在封面与频谱徽标之下。
+         ⚠️ 圆心/直径必须与封面圆严格同心:.tp-ring 未设 border-box,外径 =
+         内容 56 + 上下左右各 2px 边框 = 60;而 .tp-peer 的 padding-top 是 6px。
+         所以光环取 60×60、top 6px、left calc(50% - 30px)——与 .tp-ring 的
+         border box 完全重合(2026-10-23 用户实测反馈「圆心偏移」后修正;
+         守卫 A5 会按这三条算式反查,禁止再手改单一数值)。 */
       .tp-peer.current .tp-ring { border-color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
-      .tp-pulse { position: absolute; left: calc(50% - 28px); top: 6px;
-        width: 56px; height: 56px; box-sizing: border-box;
+      .tp-pulse { position: absolute; left: calc(50% - 30px); top: 6px;
+        width: 60px; height: 60px; box-sizing: border-box;
         border-radius: 50%; border: 3px solid rgb(var(--acc));
         box-shadow: 0 0 10px rgba(var(--acc), 0.45);
         pointer-events: none;

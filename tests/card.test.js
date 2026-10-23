@@ -2861,7 +2861,8 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     const all = allCss();
     // 封面圆内的勾选标记已彻底移除
     expect(all).not.toMatch(/\.tp-cur/);
-    // 呼吸光环:56px 圆环,1.0 → 1.26 放大渐隐,1.2s ease-in-out 往返(对齐客户端 _ActivePulse)
+    // 呼吸光环:外径与封面圆 border box 一致(56+2×2=60),1.0 → 1.26 放大渐隐,1.2s ease-in-out 往返
+    expect(all).toMatch(/\.tp-pulse \{[^}]*width: 60px; height: 60px/);
     expect(all).toMatch(/\.tp-pulse \{[^}]*border: 3px solid rgb\(var\(--acc\)\)/);
     expect(all).toMatch(/\.tp-pulse \{[^}]*animation: tp-pulse 1\.2s ease-in-out infinite alternate/);
     expect(all).toMatch(/@keyframes tp-pulse[\s\S]{0,160}scale\(1\.26\)/);

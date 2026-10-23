@@ -178,6 +178,40 @@ record(
   RED_CHECK.test(ruleAt(dist, ".tp-badge.in {")),
 );
 
+// 呼吸光环必须与封面圆**严格同心**(2026-10-23 用户实测反馈「圆心偏移了位置」)。
+// .tp-ring 未设 border-box ⇒ 外径 = 内容尺寸 + 上下左右边框;.tp-pulse 是兄弟节点,
+// 靠 top / left 硬定位。任何一处数值被单独改动都会让光环偏心,而这只在真机上肉眼可见。
+// 因此按算式反查,而不是钉死某一个像素值。
+function ringAlignOk(text) {
+  const px = (block, prop) => {
+    const m = new RegExp(`(?:^|[;{\\s])${prop}\\s*:\\s*([\\d.]+)px`).exec(block || "");
+    return m ? parseFloat(m[1]) : NaN;
+  };
+  const ring = ruleAt(text, ".tp-ring {");
+  const peer = ruleAt(text, ".tp-peer {");
+  const pulse = ruleAt(text, ".tp-pulse {");
+  const ringSize = px(ring, "width");
+  const ringBorder = px(ring, "border");
+  const padTop = px(peer, "padding");
+  const w = px(pulse, "width");
+  const h = px(pulse, "height");
+  const top = px(pulse, "top");
+  const leftOff = /left:\s*calc\(\s*50%\s*-\s*([\d.]+)px\s*\)/.exec(pulse)?.[1];
+  const outer = ringSize + ringBorder * 2;
+  return (
+    Number.isFinite(ringSize) && Number.isFinite(ringBorder) && Number.isFinite(padTop) &&
+    w === outer && h === outer && // 光环外径 == 封面圆外径(border box)
+    top === padTop && // 顶点与封面圆齐平
+    Number(leftOff) === w / 2 // 水平居中
+  );
+}
+record(
+  "A5 呼吸光环与封面圆严格同心(外径/top/水平偏移三条算式)",
+  "光环与封面不同心 = 真机上肉眼可见的偏心(2026-10-23 用户实测反馈)",
+  ringAlignOk(src),
+  ringAlignOk(dist),
+);
+
 // ============ B. 首页 chip 行:只切遥控目标,不做成员管理 ============
 
 /** 取方法体(方法名须在行首缩进后出现,避免命中 `this._x(...)` 调用点)。 */
