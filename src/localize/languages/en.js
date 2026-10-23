@@ -8,7 +8,6 @@ const en = {
   "common.loading": "Loading…",
   "common.empty": "No content",
   "common.init": "MusicFlow initializing…",
-  "connection.restoring": "Reconnecting… (REST fallback)",
   "connection.cannotConnect": "Cannot reach backend, reconnecting…",
   "playModeTip.order": "Play sequentially",
   "playModeTip.one": "Repeat one",

@@ -1656,7 +1656,8 @@ describe("渲染", () => {
     c5._ui.connected = false;
     c5._ui.wsState = "rest";
     await c5.updateComplete;
-    expect(c5.shadowRoot.querySelector(".warnbar")).toBeTruthy();
+    // v2.7.1:REST 兜底(REST 通、WS 未连上)不再显示任何提示条 —— 用户要求去掉。
+    expect(c5.shadowRoot.querySelector(".warnbar")).toBeFalsy();
     c5._ui.wsState = "down";
     c5.requestUpdate();
     await c5.updateComplete;

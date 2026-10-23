@@ -8,7 +8,6 @@ const zh = {
   "common.loading": "加载中…",
   "common.empty": "无内容",
   "common.init": "MusicFlow 卡片初始化中…",
-  "connection.restoring": "连接恢复中…（REST 兜底）",
   "connection.cannotConnect": "无法连接后端，自动重连中…",
   "playModeTip.order": "顺序播放",
   "playModeTip.one": "单曲循环",
