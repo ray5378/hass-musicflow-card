@@ -13,13 +13,11 @@
  *    「点了群组,没有任何圆圈,没办法加减成员」。同一类错误在任何 var 上都静默,
  *    所以按**类型**统一拦,而不是逐个修。
  *
- * B. 群组「增减成员」管理态可用性契约
- *    用户拍板的三条性质,少一条就「遥控用不了 / 管理态粘住」:
- *    ① 点群组 chip = **同时**把遥控目标切到该群组(否则点群组只冒出圆圈,遥控还挂在
- *       别的设备上 ⇒ 「没办法选择遥控」);
- *    ② 勾选圈只改成员,**不得**改遥控目标(挑成员时不该顺手把遥控切走);
- *    ③ 管理态必须有出口:点空白处退出 + 10s 无操作自动退出,且管理态内的操作要重新
- *       计时(否则连着挑设备会被闹钟打断)。管理态是**临时浮层**,不是常驻模式。
+ * B. 首页播放器 chip 行契约(2026-10-23 用户拍板)
+ *    ① 点任何 chip(含群组)= **只切遥控目标**;
+ *    ② 首页**不再**提供群组增减成员入口(勾选圈 / 管理提示条),成员加减只在整卡流转页;
+ *    ③ 流转页的成员控件用**勾选 / 非勾选**表达(空心圈 = 未加入,accent 实心 ✓ = 已加入),
+ *       位置沿用原「+/−」处。用户反馈:「加减号改为勾选和非勾选显示」。
  *
  * C. 播放端展示序契约(三端同一口径:**在播优先 → 类别 → 名称**)
  *    第一维度是「正在播」(服务端 queue.isActive),第二维度才是「类别」
@@ -117,25 +115,26 @@ if (srcBadVars.length) console.log("   src 违规变量:", srcBadVars.join(" / "
 if (distBadVars.length) console.log("   dist 违规变量:", distBadVars.join(" / "));
 
 // 勾选圈必须自带轮廓:底色随封面 / idle 渐变变化,没有边框的圈等于隐形。
+// 首页的成员勾选圈已移除(2026-10-23),现在只剩流转页的 .tp-badge。
 const badgeRule = (text) => {
-  const i = text.indexOf(".out-badge {");
-  return i < 0 ? "" : text.slice(i, i + 400);
+  const i = text.indexOf(".tp-badge {");
+  return i < 0 ? "" : text.slice(i, i + 500);
 };
 const badgeOk = (text) => {
   const block = badgeRule(text);
   return (
-    /\.out-badge\s*\{[^}]*border:\s*\d+(?:\.\d+)?px\s+solid/.test(block) &&
-    /\.out-badge\.in\s*\{[^}]*background:\s*rgb\(var\(--acc\)\)/.test(text)
+    /\.tp-badge\s*\{[^}]*border:\s*\d+(?:\.\d+)?px\s+solid/.test(block) &&
+    /\.tp-badge\.in\s*\{[^}]*background:\s*rgb\(var\(--acc\)\)/.test(text)
   );
 };
 record(
-  "A2 加入/退出勾选圈必须自带可见边框 + 已加入态实心",
+  "A2 流转页成员勾选圈必须自带可见边框 + 已加入态实心",
   "底色随封面/idle 渐变变,无边框的空心圈在亮底上等于隐形",
   badgeOk(src),
   badgeOk(dist),
 );
 
-// ============ B. 群组管理态可用性 ============
+// ============ B. 首页 chip 行:只切遥控目标,不做成员管理 ============
 
 /** 取方法体(方法名须在行首缩进后出现,避免命中 `this._x(...)` 调用点)。 */
 function bodyOf(text, name) {
@@ -153,39 +152,29 @@ function bodyOf(text, name) {
   return text.slice(start);
 }
 
-const toggleManage = bodyOf(src, "_toggleGroupManage");
-const toggleMember = bodyOf(src, "_toggleGroupMember");
-const wrapClick = bodyOf(src, "_onWrapClick");
+const outputsBody = bodyOf(src, "_renderOutputs");
 
 record(
-  "B1 点群组 = 同时把遥控目标切到该群组",
-  "只冒圆圈不切遥控 ⇒ 用户没法用卡片遥控群组",
-  /_selectPeer\(p\.peerId\)/.test(toggleManage),
+  "B1 首页点任何 chip(含群组)只切遥控目标",
+  "首页又冒成员管理入口 = 用户明确要求去掉的功能回流(2026-10-23)",
+  /_selectPeer\(p\.peerId\)/.test(outputsBody) &&
+    !/_toggleGroupManage/.test(src) &&
+    !/groupManage/.test(src),
   true, // 行为契约只查 src(标识符会被 minify 改名)
 );
 record(
-  "B2 勾选圈只改成员,不得改遥控目标",
-  "挑成员时顺手把遥控切走 = 遥控状态被非预期改写",
-  !/_selectPeer\(/.test(toggleMember),
+  "B2 首页不得渲染成员勾选圈 / 管理提示条",
+  "勾选圈或提示行回流 = 首页 chip 行又变成临时管理浮层",
+  // ⚠️ 不能笼统匹配 `gm-hint`:流转页的 `.tp-gm-hint` 是保留的,只拦首页那份 `class=\"gm-hint\"`。
+  !/out-badge/.test(src) && !/groupManageHint/.test(src) && !/class="gm-hint"/.test(src),
   true,
 );
 record(
-  "B3 管理态有出口:点空白处退出",
-  "没有出口 ⇒ 管理态粘在界面上,勾选圈一直挂着",
-  /_exitGroupManage\(\)/.test(wrapClick),
-  true,
-);
-record(
-  "B4 管理态有出口:10s 无操作自动退出",
-  "用户明确要求的兜底出口(定时器常量 + 进入时挂载)",
-  /const\s+GROUP_MANAGE_IDLE_MS\s*=\s*10000\s*;/.test(src) &&
-    /_armGroupManageTimeout\(\)\s*;/.test(toggleManage),
-  true,
-);
-record(
-  "B5 管理态内的操作要重新计时",
-  "不重置 ⇒ 连着挑第二个设备时被 10s 闹钟打断",
-  /_armGroupManageTimeout\(\)/.test(toggleMember),
+  "B3 成员管理只在流转页,且用勾选 / 非勾选表达",
+  "改成 +/− 数字号或挪回首页都违背用户要求;空心圈 = 未加入,accent 实心 ✓ = 已加入",
+  src.includes('class="tp-badge ${member ? "in" : ""}"') &&
+    src.includes(">✓</button>") &&
+    /_tpToggleMember\(/.test(src),
   true,
 );
 

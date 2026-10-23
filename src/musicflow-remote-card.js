@@ -40,12 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.7.1";
-
-// 群组「增减成员」管理模式是**临时浮层**:进入后设备 chip 底下出现勾选圈。
-// 点空白处立即退出;若一直没操作,GROUP_MANAGE_IDLE_MS 后自动退出回到普通选中态。
-// 管理态内的任何操作(勾选圈 / 点群组 chip)都会重新计时,不会挑设备挑到一半被踢出。
-const GROUP_MANAGE_IDLE_MS = 10000;
+const CARD_VERSION = "2.8.0";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -270,8 +265,6 @@ class MusicFlowRemoteCard extends LitElement {
   constructor() {
     super();
     this._client = null;
-    // 群组管理模式下被选群组的成员键集合(sendspin:<clientId> / 裸 dlna id)。
-    this._groupMembers = new Set();
     this._ready = false;
     this._peerRestoreDone = false; // 一次性:刷新后从 localStorage 恢复上次选中的遥控目标
     this._ui = {
@@ -280,13 +273,10 @@ class MusicFlowRemoteCard extends LitElement {
       serverOk: false,
       peers: [],
       currentPeerId: "",
-      // 群组管理模式:被点选的群组 peerId(null = 未进入)。进入后每个设备
-      // output 旁出现 +/− 徽标(组内 − / 组外 +),点击即加入/退出该组。
-      groupManage: null,
       // 流转播放页:true = 用「与当前卡片同尺寸的整卡覆盖层」显示流转页(见 _renderTransfer)。
       transferOpen: false,
-      // 流转页自己的群组管理态:**不共用首页 groupManage**(首页是 10s 自动退出的临时浮层,
-      // 流转页要一直保持到用户再点群组 / 关页)。存 group:<gid>。
+      // 流转页的群组管理态:点群组圆进入,保持到用户再点群组 / 关页。存 group:<gid>。
+      // 首页不再提供增减成员能力(2026-10-23 用户拍板),群组成员管理只在流转页。
       transferGroupId: null,
       transferBusy: false, // 流转页内任一异步操作(切换/流转/销毁/加减成员)进行中:禁止重复操作
       transferMsg: "",     // 流转页内联提示(成功/失败)
@@ -394,7 +384,6 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._probeTimer) { clearInterval(this._probeTimer); this._probeTimer = null; }
     if (this._miniTimer) { clearTimeout(this._miniTimer); this._miniTimer = null; }
     if (this._pauseTimer) { clearTimeout(this._pauseTimer); this._pauseTimer = null; }
-    if (this._gmTimer) { clearTimeout(this._gmTimer); this._gmTimer = null; }
     // 流转页:拖拽监听/幽灵节点/rAF 循环与提示定时器都必须随卡片卸载清理,
     // 否则重新挂载后 window 上会残留指向旧实例的监听。
     this._tpEndDrag();
@@ -1370,17 +1359,8 @@ class MusicFlowRemoteCard extends LitElement {
       this.requestUpdate();
       return;
     }
-    // 群组「增减成员」管理态:点空白处 = 退出管理,回到普通选中态(群组仍是被遥控的那个)。
-    // 点群组 chip / 勾选圈都不算空白:chip 自带开关语义、勾选圈是本态唯一操作目标
-    // (它自身已 stopPropagation,这里再兜一层)。管理态不该「粘」在界面上。
-    if (this._ui.groupManage) {
-      const keep = ["out", "out-badge"];
-      const onControl = path.some((n) => {
-        const cls = n && n.classList;
-        return !!(cls && Array.from(cls).some((c) => keep.includes(c)));
-      });
-      if (!onControl) this._exitGroupManage();
-    }
+    // 首页已不再有群组增减成员的管理态:点群组 chip 只是切遥控目标(见 _renderOutputs)。
+    // 成员管理统一在整卡流转页里做。
   }
 
   // ============ 极简歌词模式(auto-hide) ============
@@ -2112,57 +2092,39 @@ class MusicFlowRemoteCard extends LitElement {
 
   _renderOutputs() {
     // 兜底过滤:任何路径进来的离线设备都不渲染;群组是「容器」,成员全离线也保留
-    // (否则管理模式入口消失,空组没法加减成员)。
+    // (否则群里没成员时连遥控入口都找不到)。
     const peers = (this._ui.peers || []).filter((p) => p.available !== false || p.kind === "group");
     if (!peers.length) return html`<div class="outputs"><span class="hint">${this._t("browser.noPlayer")}</span></div>`;
-    const managing = this._ui.groupManage;
     // 首页 chip 行**恒为一行**:不换行,放不下的播放器靠**按住任意 chip 左右拖动**滑出来
     // (鼠标拖 = 本文件 _outListPointerDown;触屏走原生 pan-x)。点行尾「流转播放」可进整卡
-    // 流转页做流转/群组/销毁。当前遥控目标提到首位,保证初始视口内「正在控的那台」可见。
+    // 流转页做流转/群组增减成员/销毁。当前遥控目标提到首位,保证初始视口内「正在控的那台」可见。
+    // 点任何 chip(含群组)= 只切换遥控目标;群组增减成员只在流转页做(2026-10-23 用户拍板)。
     const cur = this._ui.currentPeerId;
     const ordered = cur
       ? [...peers.filter((p) => p.peerId === cur), ...peers.filter((p) => p.peerId !== cur)]
       : peers;
     return html`
-      <div class="outputs ${managing ? "managing" : ""}">
+      <div class="outputs">
         <div class="out-list" @pointerdown=${this._outListPointerDown}>
-          ${ordered.map((p) => {
-            const isGroup = p.kind === "group";
-            // 管理模式下,设备型成员(dlna/sendspin)底下出现 +/− 徽标;
-            // 本机/airplay/其它不参与(服务端组成员只有 dlna/sendspin 命名空间)。
-            const showBadge = !!managing && !isGroup && (p.kind === "dlna" || p.kind === "sendspin");
-            const member = this._isGroupMember(p);
-            // 勾选圈:始终渲染 ✓ 字形,未加入时着色为透明(仅留空心圈),
-            // 加入后 accent 实心 + 白色 ✓ —— 与 Web / 客户端一致。
-            return html`
-              <div class="out-wrap">
-                <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"} ${managing === p.peerId ? "managing" : ""}"
-                  title="${this._peerTitle(p)}"
-                  @click=${() => {
-                    // 横向拖动结束后浏览器仍会补发 click:这一段直接吞掉,避免「拖完就切台」。
-                    if (this._outDragSwallowed()) return;
-                    isGroup ? this._toggleGroupManage(p) : this._selectPeer(p.peerId);
-                  }}>
-                  ${this._icon(this._peerIcon(p), 16)}<span class="out-label">${this._peerLabel(p)}</span>
-                </button>
-                ${showBadge ? html`
-                  <button class="out-badge ${member ? "in" : ""}"
-                    title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
-                    @click=${(e) => {
-                      e.stopPropagation();
-                      if (this._outDragSwallowed()) return;
-                      this._toggleGroupMember(p);
-                    }}>✓</button>` : null}
-              </div>
-            `;
-          })}
+          ${ordered.map((p) => html`
+            <div class="out-wrap">
+              <button class="out ${p.peerId === this._ui.currentPeerId ? "active" : ""} ${p.available ? "" : "off"}"
+                title="${this._peerTitle(p)}"
+                @click=${() => {
+                  // 横向拖动结束后浏览器仍会补发 click:这一段直接吞掉,避免「拖完就切台」。
+                  if (this._outDragSwallowed()) return;
+                  this._selectPeer(p.peerId);
+                }}>
+                ${this._icon(this._peerIcon(p), 16)}<span class="out-label">${this._peerLabel(p)}</span>
+              </button>
+            </div>
+          `)}
         </div>
         <button class="out transfer" title="${this._t("outputs.transfer")}"
           aria-label="${this._t("outputs.transfer")}"
           @click=${(e) => { e.stopPropagation(); this._openTransfer(); }}>
           ${this._icon("transfer", 17)}
         </button>
-        ${managing ? html`<div class="gm-hint">${this._t("outputs.groupManageHint")}</div>` : null}
       </div>
     `;
   }
@@ -2180,9 +2142,6 @@ class MusicFlowRemoteCard extends LitElement {
     if (typeof e.button === "number" && e.button !== 0) return;
     const list = e.currentTarget;
     if (!list || list.scrollWidth <= list.clientWidth + 1) return; // 无滚动空间:不起拖
-    // 群组管理的 ✓ 徽标是独立按钮,按它不进入横向拖动(否则会吃掉它的点击)
-    const path = e.composedPath ? e.composedPath() : [];
-    if (path.some((n) => n && n.classList && n.classList.contains("out-badge"))) return;
     this._outDrag = { list, pointerId: e.pointerId, x: e.clientX, left: list.scrollLeft, active: false };
     this._outDragMoveH = (ev) => this._onOutDragMove(ev);
     this._outDragEndH = (ev) => this._onOutDragEnd(ev);
@@ -2222,9 +2181,8 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 打开整卡流转页:首页 chip 行只放得下一行,被裁掉的播放器在这里切换/拖拽流转。
-  // 先收起群组管理态与队列/媒体库面板,避免流转页底下残留临时浮层状态(A3 渲染页面)。
+  // 先收起队列/媒体库面板,避免流转页底下残留临时浮层状态(A3 渲染页面)。
   _openTransfer() {
-    this._exitGroupManage();
     this._ui.showQueue = false;
     this._ui.showBrowser = false;
     this._ui.showVolume = false; // 音量浮层 z-index 高于 .panel,不关会遮住回收站与底部热区
@@ -2328,8 +2286,9 @@ class MusicFlowRemoteCard extends LitElement {
         ${showBadge ? html`
           <button class="tp-badge ${member ? "in" : ""}"
             title="${member ? this._t("outputs.groupLeave") : this._t("outputs.groupJoin")}"
+            aria-pressed="${member ? "true" : "false"}"
             @pointerdown=${(e) => e.stopPropagation()}
-            @click=${(e) => this._tpToggleMember(e, p)}>${member ? "−" : "+"}</button>` : null}
+            @click=${(e) => this._tpToggleMember(e, p)}>✓</button>` : null}
       </div>
     `;
   }
@@ -2835,83 +2794,13 @@ class MusicFlowRemoteCard extends LitElement {
     if (!interactive && !downInPeer) this._closeTransfer();
   }
 
-  // ============ 群组管理模式(点群组 output → 每个设备旁出现 +/−) ============
-
-  // 点群组 chip = **两件事一起做**:①把遥控目标切到该群组(与 Web / 客户端一致 —— 否则
-  // 「进管理模式调完成员,遥控却还停在别的设备上」);②进入「增减成员」管理模式,设备 chip
-  // 底下出现勾选圈。管理态是**临时浮层**:点空白处或 10s 无操作自动退出,回到普通选中态
-  // (群组仍是被遥控的那个,只是勾选圈收起来)。
-  async _toggleGroupManage(p) {
-    this._selectPeer(p.peerId); // 已选中时内部早退,零副作用
-    // 再点同一个群组 = 退出管理模式;点另一个群组 = 切换管理目标。
-    if (this._ui.groupManage === p.peerId) {
-      this._exitGroupManage();
-      return;
-    }
-    this._ui.groupManage = p.peerId;
-    this._groupMembers = new Set();
-    this.requestUpdate();
-    this._armGroupManageTimeout();
-    const gid = p.peerId.startsWith("group:") ? p.peerId.slice("group:".length) : p.peerId;
-    try {
-      const res = await this._client.getGroups();
-      const hit = (res?.groups || []).find((g) => g.id === gid);
-      this._groupMembers = new Set((hit?.memberIds || []).map(String));
-    } catch {
-      // 拉取失败:成员集留空,徽标全部显示 +,点一下以服务端返回为准。
-    }
-    this.requestUpdate();
-  }
-
-  // 退出管理模式 = 回到普通选中态(currentPeerId 不动,群组仍是遥控目标)。
-  _exitGroupManage() {
-    if (this._gmTimer) { clearTimeout(this._gmTimer); this._gmTimer = null; }
-    if (!this._ui.groupManage) return;
-    this._ui.groupManage = null;
-    this._groupMembers = new Set();
-    this.requestUpdate();
-  }
-
-  // 空闲计时:管理态内每次操作(勾选圈 / 点群组 chip)都重新计时。
-  // 不这么做的话,用户正一个个挑设备时会被 10s 闹钟打断。
-  _armGroupManageTimeout() {
-    if (this._gmTimer) clearTimeout(this._gmTimer);
-    this._gmTimer = this._ui.groupManage
-      ? setTimeout(() => { this._gmTimer = null; this._exitGroupManage(); }, GROUP_MANAGE_IDLE_MS)
-      : null;
-  }
+  // ============ 群组成员键(仅流转页使用) ============
 
   // 服务端成员命名空间写法:sendspin = `sendspin:<clientId>`(与 peerId 同形);
   // DLNA = 裸设备 id(历史数据约定,去掉 peerId 的 `dlna:` 前缀)。
+  // 首页不做成员管理(点群组只切遥控目标),加减成员只在流转页(_tpToggleMember)。
   _memberKeyFor(p) {
     return p.kind === "sendspin" ? p.peerId : p.peerId.replace(/^dlna:/, "");
-  }
-  _isGroupMember(p) {
-    if (!this._ui.groupManage) return false;
-    const k = this._memberKeyFor(p);
-    return this._groupMembers.has(k) || this._groupMembers.has(p.peerId);
-  }
-
-  async _toggleGroupMember(p) {
-    if (!this._ui.groupManage || !this._client) return;
-    const gid = this._ui.groupManage.startsWith("group:") ? this._ui.groupManage.slice("group:".length) : this._ui.groupManage;
-    const key = this._memberKeyFor(p);
-    const join = !this._isGroupMember(p);
-    try {
-      const res = await this._client.updateGroupMembers(gid, join ? [key] : [], join ? [] : [key]);
-      const ids = res?.group?.memberIds;
-      if (Array.isArray(ids)) {
-        this._groupMembers = new Set(ids.map(String));
-      } else {
-        // 响应缺 memberIds:本地反转兜底(下一轮拉取会纠正)。
-        if (join) { this._groupMembers.add(key); this._groupMembers.add(p.peerId); }
-        else { this._groupMembers.delete(key); this._groupMembers.delete(p.peerId); }
-      }
-    } catch {
-      // 失败保持原状,下次打开管理模式重新拉取。
-    }
-    this._armGroupManageTimeout(); // 连着挑多个设备时不让 10s 闹钟提前收摊
-    this.requestUpdate();
   }
 
 
@@ -4139,8 +4028,7 @@ class MusicFlowRemoteCard extends LitElement {
       /* 播放设备切换按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
          避免相邻按钮放大后贴在一起。 */
       /* 正常态恒单行:flex 换行按「未收缩宽度」排线 —— 列表内容再宽也会独占第一行、
-         把行尾按钮挤到第二行(2026-10-22 20+ 端实测)。故正常态 nowrap,让列表收缩裁剪。
-         管理模式要独占一行的提示行(.gm-hint),在 .outputs.managing 里单独恢复 wrap。 */
+         把行尾按钮挤到第二行(2026-10-22 20+ 端实测)。故这里 nowrap,让列表收缩裁剪。 */
       .outputs { display: flex; flex-wrap: nowrap; gap: 12px; align-items: center; }
       /* 首页 chip 列表:恒单行、不换行。放不下的 chip 靠**按住任意 chip 左右拖动**滑出来
          (鼠标见 _outListPointerDown;触屏走原生 pan-x),滚动条隐藏。
@@ -4165,47 +4053,8 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.2s, box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
       .out-label { min-width: 0; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .out .ic { display: inline-flex; }
-      /* 群组管理模式:每个 output 外包一层纵向 wrap,设备底下挂 +/− 徽标
-         (组内 − / 组外 +),与客户端流转页同款语义。 */
+      /* 每个 output 外包一层纵向 wrap(仅用于保持 chip 不收缩的对齐结构)。 */
       .out-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto; }
-      /* 加入/退出群组的**可勾选小圆圈**(与 Web 流转列表行尾、客户端同款视觉):
-         未加入 = 空心圈(边框 + 半透明底,勾不着色);已加入 = accent 实心圈 + 白色 ✓。
-         底色会随封面强调色(--acc)/ idle 渐变 / 明暗主题整体变化 ⇒ 圆圈必须自带对比度:
-         ① 边框与底走 --ctl-rgb(随主题翻转:深底白圈 / 浅底黑圈),不用固定色;
-         ② 外面再套一圈暗色阴影,把圆从亮封面里「抠」出来,任何底色上都有轮廓;
-         ③ 已加入态 accent 实心 + 白 ✓ + accent 光晕,是三态里最亮的一档(「要亮眼」)。
-         ⚠️ 必须用 --ctl-rgb,不能写 rgba(var(--ctl), x):--ctl 是完整色值(rgba(...)),
-         套进 rgba() 属无效值 ⇒ 计算值阶段整条 border 变 unset(border-style:none)
-         ⇒ 未加入的圆圈直接消失(2026-09-24 现场:点了群组看不到设备圆圈)。 */
-      .out-badge { width: 22px; height: 22px; box-sizing: border-box; border-radius: 50%;
-        border: 2px solid rgba(var(--ctl-rgb), 0.9);
-        background: rgba(var(--ctl-rgb), 0.14);
-        color: transparent; font-size: 13px; font-weight: 700; line-height: 1;
-        display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
-        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.40), 0 2px 6px rgba(0, 0, 0, 0.30);
-        animation: mf-badge-in 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
-        transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease,
-          transform 0.18s ease, box-shadow 0.18s ease; }
-      .out-badge:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.22);
-        transform: scale(1.14);
-        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.42), 0 0 10px rgba(var(--acc), 0.6); }
-      .out-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff;
-        box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55), 0 0 12px rgba(var(--acc), 0.7), 0 2px 6px rgba(0, 0, 0, 0.35); }
-      .out-badge:focus-visible { outline: 2px solid rgb(var(--acc)); outline-offset: 2px; }
-      /* 进场只做一次弹入(scale + opacity,GPU 合成):管理态是临时出现的,得被看见。
-         fill-mode 用 backwards 而非 both —— both 会把末帧 transform 钉住,让 :hover 的
-         transform 失效(动画优先级高于普通声明)。 */
-      @keyframes mf-badge-in { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-      @media (prefers-reduced-motion: reduce) { .out-badge { animation: none; } }
-      /* 群组管理模式:要能触达每一台设备增减成员 ⇒ 唯一例外地允许单行横向滚动
-         (滚动条隐藏),并给芯片下方的勾选圈留出纵向空间;正常态仍严格单行裁剪。
-         滚动只影响「看得到哪台」,不改变首页 chip 恒单行的版式。 */
-      .outputs.managing { align-items: flex-start; flex-wrap: wrap; }
-      .outputs.managing .out-list { overflow-x: auto; overflow-y: hidden; align-items: flex-start; padding-bottom: 26px; scrollbar-width: none; }
-      .outputs.managing .out-list::-webkit-scrollbar { display: none; }
-      /* 管理态提示行:明说出口在哪(点空白 / 10s 自动),flex-basis:100% 独占一行。 */
-      .gm-hint { flex-basis: 100%; margin-top: 2px; font-size: 11px; color: var(--fg-faint); }
-      .out.managing { border-color: rgba(var(--acc), 0.85); color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影。
          选中播放器(.active)恒保持放大状态(等同悬停效果),切换后才缩小;
          未选中仅悬停放大、移走恢复。 */
@@ -4391,11 +4240,22 @@ class MusicFlowRemoteCard extends LitElement {
         text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tp-sub { max-width: 100%; font-size: 10.5px; color: var(--fg-faint);
         text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* 群组成员勾选圈:与首页 chip 无关,只在流转页的成员管理态出现。
+         未加入 = 空心圈(边框 + 半透明底,✓ 着色为透明);
+         已加入 = accent 实心圈 + 白色 ✓(与 Web 流转列表、客户端同款视觉)。
+         位置固定在原「+/−」处(封面圆右上角)。 */
       .tp-badge { position: absolute; right: 3px; top: 0; width: 20px; height: 20px; padding: 0;
-        border-radius: 50%; border: 1.5px solid rgba(var(--ctl-rgb), 0.75);
-        background: rgba(var(--ctl-rgb), 0.18); color: var(--ctl); font-size: 13px; line-height: 1;
-        display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        box-sizing: border-box; border-radius: 50%;
+        border: 1.5px solid rgba(var(--ctl-rgb), 0.75);
+        background: rgba(var(--ctl-rgb), 0.18); color: transparent;
+        font-size: 12px; font-weight: 700; line-height: 1;
+        display: flex; align-items: center; justify-content: center; cursor: pointer;
+        box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
+        transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.18s; }
+      .tp-badge:hover { border-color: rgba(var(--acc), 0.95); background: rgba(var(--acc), 0.22);
+        transform: scale(1.1); }
       .tp-badge.in { border-color: rgb(var(--acc)); background: rgb(var(--acc)); color: #fff; }
+      .tp-badge:focus-visible { outline: 2px solid rgb(var(--acc)); outline-offset: 2px; }
       /* 回收站固定在滚动区之外:滚动视口下缘 = 热区与回收站的物理分界。 */
       .tp-trash { flex: 0 0 auto; margin-top: 6px; display: flex; align-items: center;
         justify-content: center; gap: 6px; height: 34px; border-radius: 10px;

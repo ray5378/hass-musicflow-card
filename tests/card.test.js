@@ -261,7 +261,6 @@ describe("生命周期 / 绑定", () => {
     c._refreshTimer = setTimeout(() => {}, 1000);
     c._miniTimer = setTimeout(() => {}, 1000);
     c._pauseTimer = setTimeout(() => {}, 1000);
-    c._gmTimer = setTimeout(() => {}, 1000);
     c._visHandler = () => {};
     c._idleVisHandler = () => {};
     c._idleObserver = { disconnect: vi.fn() };
@@ -273,7 +272,6 @@ describe("生命周期 / 绑定", () => {
     expect(c._probeTimer).toBe(null);
     expect(c._miniTimer).toBe(null);
     expect(c._pauseTimer).toBe(null);
-    expect(c._gmTimer).toBe(null);
     expect(c._visHandler).toBe(null);
     expect(c._coverObserver).toBe(null);
   });
@@ -1668,7 +1666,7 @@ describe("渲染", () => {
     await flush();
   });
 
-  it("_renderOutputs:无设备 / 有设备 / 管理模式徽标", async () => {
+  it("_renderOutputs:无设备 / 有设备 / 首页无成员管理控件", async () => {
     const c = mkCard();
     c._ui.peers = [];
     await c.updateComplete;
@@ -1680,14 +1678,18 @@ describe("渲染", () => {
     await c.updateComplete;
     expect(c.shadowRoot.querySelector(".out")).toBeTruthy();
 
-    // 管理模式
-    c._ui.groupManage = "group:g1";
-    c._ui.peers = [...PEERS.filter((p) => p.available !== false), { peerId: "sendspin:sX", kind: "sendspin", available: true }];
-    c._groupMembers = new Set(["dlna:d1"]);
+    // 2026-10-23:首页不再有群组增减成员入口;点群组 chip 只切遥控目标。
+    c._ui.peers = [...PEERS.filter((p) => p.available !== false),
+      { peerId: "group:g2", kind: "group", groupId: "g2", name: "组2", available: true }];
     c.requestUpdate();
     await c.updateComplete;
-    expect(c.shadowRoot.querySelector(".out-badge")).toBeTruthy();
-    expect(c.shadowRoot.querySelector(".gm-hint")).toBeTruthy();
+    expect(c.shadowRoot.querySelector(".out-badge")).toBeFalsy();
+    expect(c.shadowRoot.querySelector(".gm-hint")).toBeFalsy();
+    const g = [...c.shadowRoot.querySelectorAll(".out")]
+      .find((el) => el.textContent.includes("组2"));
+    g.click();
+    await flush();
+    expect(c._ui.currentPeerId).toBe("group:g2");
     await flush();
   });
 
@@ -1718,10 +1720,11 @@ describe("渲染", () => {
 
   it("首页 chip 单行版式守卫(20+ 端不换行/不撑高/按钮不落行)", async () => {
     // jsdom 无布局,这里对静态样式做守卫:曾经为了让按钮同行、chip 不换行,必须同时满足
-    // ①正常态 .outputs nowrap ②chip 不收缩 ③chip 文字单行省略 ④管理态仍 wrap(提示行独占一行)。
+    // ①chip 行 nowrap ②chip 不收缩 ③chip 文字单行省略。
+    // (2026-10-23 首页取消成员管理模式后,不再有 `.outputs.managing` 的 wrap 回退。)
     const all = [].concat(CardCtor.styles).map((x) => x.cssText || String(x)).join("\n");
     expect(all).toMatch(/\.outputs \{[^}]*flex-wrap: nowrap/);
-    expect(all).toMatch(/\.outputs\.managing \{[^}]*flex-wrap: wrap/);
+    expect(all).not.toMatch(/\.outputs\.managing/);
     expect(all).toMatch(/\.out \{[^}]*flex: 0 0 auto/);
     expect(all).toMatch(/\.out \{[^}]*white-space: nowrap/);
     expect(all).toMatch(/\.out-wrap \{[^}]*flex: 0 0 auto/);
@@ -1738,13 +1741,11 @@ describe("渲染", () => {
     await flush();
   });
 
-  it("_openTransfer:收起群组管理态与面板", async () => {
+  it("_openTransfer:收起队列/媒体库面板", async () => {
     const c = mkCard();
-    c._ui.groupManage = "group:g1";
     c._ui.showQueue = true;
     c._ui.showBrowser = true;
     c._openTransfer();
-    expect(c._ui.groupManage).toBe(null);
     expect(c._ui.showQueue).toBe(false);
     expect(c._ui.showBrowser).toBe(false);
     expect(c._ui.transferOpen).toBe(true);
@@ -1976,92 +1977,6 @@ describe("渲染", () => {
     c._ui.accentRgb = "1,2,3";
     c._analyzeBrightness({});
   });
-});
-
-describe("群组成员管理", () => {
-  it("_toggleGroupManage:进入 / 切换 / 退出 / 拉取失败", async () => {
-    const c = mkCard();
-    c._ui.peers = PEERS;
-    c._ui.currentPeerId = "";
-    await c._toggleGroupManage({ peerId: "group:g1", kind: "group" });
-    expect(c._ui.groupManage).toBe("group:g1");
-    expect(c._groupMembers.has("dlna:d1")).toBe(true);
-    expect(c._gmTimer).toBeTruthy();
-    await c._toggleGroupManage({ peerId: "group:g1", kind: "group" }); // 同组 → 退出
-    expect(c._ui.groupManage).toBe(null);
-
-    const c2 = mkCard({}, { getGroups: vi.fn(async () => { throw new Error("x"); }) });
-    c2._ui.peers = PEERS;
-    await c2._toggleGroupManage({ peerId: "group:g2", kind: "group" });
-    expect(c2._groupMembers.size).toBe(0);
-
-    const c3 = mkCard();
-    c3._ui.peers = PEERS;
-    await c3._toggleGroupManage({ peerId: "dlna:d1", kind: "dlna" }); // 非 group 前缀 peerId
-    expect(c3._ui.groupManage).toBe("dlna:d1");
-    c3._exitGroupManage();
-    await flush();
-  });
-
-  it("_exitGroupManage 幂等 / _armGroupManageTimeout", () => {
-    const c = mkCard();
-    c._exitGroupManage(); // 未进入 → 早退
-    c._ui.groupManage = "g";
-    c._armGroupManageTimeout();
-    expect(c._gmTimer).toBeTruthy();
-    c._exitGroupManage();
-    expect(c._ui.groupManage).toBe(null);
-    expect(c._gmTimer).toBe(null);
-    // 再次 arm(未进入) → 不设定时器
-    c._armGroupManageTimeout();
-    expect(c._gmTimer).toBe(null);
-  });
-
-  it("_memberKeyFor / _isGroupMember", () => {
-    const c = mkCard();
-    expect(c._memberKeyFor({ kind: "sendspin", peerId: "sendspin:s1" })).toBe("sendspin:s1");
-    expect(c._memberKeyFor({ kind: "dlna", peerId: "dlna:d1" })).toBe("d1");
-    c._ui.groupManage = null;
-    expect(c._isGroupMember({ kind: "dlna", peerId: "dlna:d1" })).toBe(false);
-    c._ui.groupManage = "group:g1";
-    c._groupMembers = new Set(["d1"]);
-    expect(c._isGroupMember({ kind: "dlna", peerId: "dlna:d1" })).toBe(true);
-    c._groupMembers = new Set(["dlna:d2"]);
-    expect(c._isGroupMember({ kind: "dlna", peerId: "dlna:d2" })).toBe(true);
-  });
-
-  it("_toggleGroupMember:加入 / 退出 / 响应缺 memberIds 兜底 / 失败", async () => {
-    const c = mkCard();
-    c._ui.groupManage = "group:g1";
-    c._groupMembers = new Set();
-    await c._toggleGroupMember({ kind: "dlna", peerId: "dlna:d1" });
-    expect(c._groupMembers.has("dlna:d1")).toBe(true); // 服务端返回 ids
-
-    const c2 = mkCard({}, { updateGroupMembers: vi.fn(async () => ({})) });
-    c2._ui.groupManage = "group:g1";
-    c2._groupMembers = new Set(["d2"]);
-    await c2._toggleGroupMember({ kind: "dlna", peerId: "dlna:d2" }); // 退出 + 缺 ids → 本地删除
-    expect(c2._groupMembers.has("d2")).toBe(false);
-
-    const c3 = mkCard({}, { updateGroupMembers: vi.fn(async () => ({})) });
-    c3._ui.groupManage = "group:g1";
-    c3._groupMembers = new Set();
-    await c3._toggleGroupMember({ kind: "dlna", peerId: "dlna:d3" }); // 加入 + 缺 ids → 本地添加
-    expect(c3._groupMembers.has("d3")).toBe(true);
-
-    const c4 = mkCard({}, { updateGroupMembers: vi.fn(async () => { throw new Error("x"); }) });
-    c4._ui.groupManage = "group:g1";
-    c4._groupMembers = new Set();
-    await c4._toggleGroupMember({ kind: "dlna", peerId: "dlna:d4" });
-    expect(c4._groupMembers.size).toBe(0);
-
-    const c5 = mkCard();
-    c5._ui.groupManage = null;
-    await c5._toggleGroupMember({ kind: "dlna", peerId: "dlna:d1" }); // 未进入
-    c5._ui.groupManage = "g";
-    c5._client = null;
-    await c5._toggleGroupMember({ kind: "dlna", peerId: "dlna:d1" }); // 无 client
-  });
 
   it("_peerIcon / _peerLabel / _peerTitle", () => {
     const c = mkCard();
@@ -2077,6 +1992,30 @@ describe("群组成员管理", () => {
     c._ui.peers = [{ peerId: "group:g1", kind: "group", groupId: "g1", name: "客厅组" }];
     expect(c._peerTitle({ kind: "dlna", managedByGroup: "g1" })).toMatch(/跟随「客厅组」播放/);
     expect(c._peerTitle({ kind: "dlna", managedByGroup: "ghost" })).toMatch(/ghost/);
+  });
+});
+
+describe("首页群组 chip(不再管理成员)", () => {
+  it("_memberKeyFor:服务端成员命名空间(流转页仍在用)", () => {
+    const c = mkCard();
+    expect(c._memberKeyFor({ kind: "sendspin", peerId: "sendspin:s1" })).toBe("sendspin:s1");
+    expect(c._memberKeyFor({ kind: "dlna", peerId: "dlna:d1" })).toBe("d1");
+  });
+
+  it("点群组 chip 只切遥控目标,不进入成员管理、不拉群组、不渲染勾选圈", async () => {
+    const c = mkCard();
+    c._ui.peers = [{ peerId: "group:g1", kind: "group", groupId: "g1", name: "组", available: true }];
+    c.requestUpdate();
+    await c.updateComplete;
+    c.shadowRoot.querySelector(".out").click();
+    await flush();
+    expect(c._ui.currentPeerId).toBe("group:g1");
+    // 2026-10-23 用户拍板:首页不再有增减成员入口(成员管理只在流转页)。
+    expect(c._ui.groupManage).toBeUndefined();
+    expect(c.shadowRoot.querySelector(".out-badge")).toBeFalsy();
+    expect(c.shadowRoot.querySelector(".gm-hint")).toBeFalsy();
+    expect(c._client.getGroups).not.toHaveBeenCalled();
+    await flush();
   });
 });
 
@@ -2198,7 +2137,7 @@ describe("极简模式与交互", () => {
     }
   });
 
-  it("_onWrapClick:音量 / 队列面板 / 群组管理 分支", () => {
+  it("_onWrapClick:音量 / 队列面板分支", () => {
     const c = mkCard();
     const mkPath = (cls) => { const el = document.createElement("div"); cls.forEach((x) => el.classList.add(x)); return { composedPath: () => [el] }; };
     // 音量面板点击外部 → 关闭
@@ -2221,12 +2160,9 @@ describe("极简模式与交互", () => {
     expect(c._ui.showQueue).toBe(false);
     expect(c._ui.showBrowser).toBe(false);
 
-    // 群组管理:点 out 不退出 / 空白退出
-    c._ui.groupManage = "group:g1";
+    // 首页已无群组增减成员管理态(2026-10-23),点 out 不会产生任何管理分支副作用
     c._onWrapClick(mkPath(["out"]));
-    expect(c._ui.groupManage).toBe("group:g1");
-    c._onWrapClick({ composedPath: () => [] });
-    expect(c._ui.groupManage).toBe(null);
+    expect(c._ui.showQueue).toBe(false);
 
     // 无 composedPath 的实现
     const c2 = mkCard();
@@ -2475,7 +2411,7 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     await flush();
   });
 
-  it("A6 群组:点群组切目标 + 成员模式,+/− 调 updateGroupMembers", async () => {
+  it("A6 群组:点群组切目标 + 成员模式,勾选态调 updateGroupMembers", async () => {
     const c = mkCard();
     c._ui.currentPeerId = "local:l1";
     openTransfer(c);
@@ -2490,12 +2426,17 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     await c.updateComplete;
     expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeTruthy();
 
-    // 组内成员显示 −,组外设备显示 +
+    // 成员勾选圈:两态都渲染 ✓,已加入为 accent 实心(in),未加入为空心圈
     const inBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"] .tp-badge');
     const outBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"] .tp-badge');
-    expect(inBadge.textContent.trim()).toBe("−");
+    expect(inBadge.textContent.trim()).toBe("✓");
     expect(inBadge.classList.contains("in")).toBe(true);
-    expect(outBadge.textContent.trim()).toBe("+");
+    expect(inBadge.getAttribute("aria-pressed")).toBe("true");
+    expect(outBadge.textContent.trim()).toBe("✓");
+    expect(outBadge.classList.contains("in")).toBe(false);
+    expect(outBadge.getAttribute("aria-pressed")).toBe("false");
+    // 勾选语义:两个态的符号一致,只靠视觉态区分(+/− 已废弃)
+    expect(inBadge.textContent.trim()).toBe(outBadge.textContent.trim());
     outBadge.click();
     await flush();
     expect(c._client.updateGroupMembers).toHaveBeenCalledWith("g1", ["d2"], []);
@@ -2970,9 +2911,8 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     await flush();
   });
 
-  it("E5 无滚动空间或按在群组徽标上:都不进入拖动", async () => {
+  it("E5 无滚动空间不起拖 / 有滚动空间正常起拖,首页已无群组徽标", async () => {
     const c = mkCard();
-    c._ui.groupManage = "group:g1";
     c._ui.peers = PEERS.filter((p) => p.available !== false);
     c.requestUpdate();
     await c.updateComplete;
@@ -2987,14 +2927,19 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     });
     expect(c._outDrag).toBeFalsy();
 
-    // 有滚动空间,但按在 +/− 徽标上 ⇒ 不抢它的点击
+    // 2026-10-23 用户拍板:首页不再有群组增减成员徽标,chip 行只保留切台
+    expect(c.shadowRoot.querySelector(".out-badge")).toBeFalsy();
+
+    // 有滚动空间 ⇒ 正常进入拖动(原先的徽标豁免分支已随功能移除)
     Object.defineProperty(list, "scrollWidth", { value: 600, configurable: true });
-    const badge = c.shadowRoot.querySelector(".out-badge");
     c._outListPointerDown({
       pointerType: "mouse", button: 0, pointerId: 5, clientX: 10,
-      currentTarget: list, composedPath: () => [badge, list],
+      currentTarget: list, composedPath: () => [list],
     });
-    expect(c._outDrag).toBeFalsy();
+    expect(c._outDrag).toBeTruthy();
+    expect(c._outDrag.pointerId).toBe(5);
+    c._onOutDragEnd({ pointerId: 5 });
+    expect(c._outDrag).toBeNull();
     await flush();
   });
 
