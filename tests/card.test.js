@@ -2338,7 +2338,9 @@ describe("流转页:数据层与交互(A4–A8)", () => {
 
     const d1 = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"]');
     expect(d1.classList.contains("current")).toBe(true);
-    expect(d1.querySelector(".tp-cur")).toBeTruthy();
+    // 选中态 = 外圈呼吸光环;封面圆内不再有勾选标记(2026-10-23 用户要求)
+    expect(d1.querySelector(".tp-pulse")).toBeTruthy();
+    expect(d1.querySelector(".tp-cur")).toBeFalsy();
     expect(d1.querySelector(".tp-live")).toBeTruthy();
     expect(d1.querySelector(".tp-cover img").getAttribute("data-cover-id")).toBe("cov1");
     expect(d1.querySelector(".tp-sub").textContent).toContain("甲 - 乙");
@@ -2848,21 +2850,26 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     // 整格底色会在卡片左右边缘形成被切掉的黑边 —— 必须禁用
     expect(all).not.toMatch(/\.tp-peer\.current \{ background/);
     expect(all).not.toMatch(/\.tp-peer:hover \{[^}]*background/);
-    // 选中效果只落在圆上;2026-10-23 起不再画白色外环,改由圆内红色 ✓ 表达
+    // 选中效果只落在圆上;2026-10-23 起改为外圈呼吸光环(不再有白色外环/圆内勾选)
     expect(all).toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*border-color: rgb\(var\(--acc\)\)/);
     expect(all).not.toMatch(/\.tp-peer\.current \.tp-ring \{[^}]*box-shadow/);
     // 网格左右 padding,给圆外环留出不被裁切的空间
     expect(all).toMatch(/\.tp-grid \{[^}]*padding: 2px 8px/);
   });
 
-  it("E7 选中态与已加入群组态统一红色勾,选中不再用白色外环", () => {
+  it("E7 选中态=外圈呼吸光环(无圆内勾选),频谱底色固定不随选中态", () => {
     const all = allCss();
-    // 选中标记:落在封面圆内部正中,红色 ✓(不再外溢到圆右上角)
-    expect(all).toMatch(/\.tp-cur \{[^}]*left: 50%/);
-    expect(all).toMatch(/\.tp-cur \{[^}]*top: 50%/);
-    expect(all).toMatch(/\.tp-cur \{[^}]*color: #ef4444/);
-    expect(all).not.toMatch(/\.tp-cur \{[^}]*color: #fff/);
-    // 已加入群组的勾选圈同样红勾
+    // 封面圆内的勾选标记已彻底移除
+    expect(all).not.toMatch(/\.tp-cur/);
+    // 呼吸光环:56px 圆环,1.0 → 1.26 放大渐隐,1.2s ease-in-out 往返(对齐客户端 _ActivePulse)
+    expect(all).toMatch(/\.tp-pulse \{[^}]*border: 3px solid rgb\(var\(--acc\)\)/);
+    expect(all).toMatch(/\.tp-pulse \{[^}]*animation: tp-pulse 1\.2s ease-in-out infinite alternate/);
+    expect(all).toMatch(/@keyframes tp-pulse[\s\S]{0,160}scale\(1\.26\)/);
+    // 频谱徽标底色固定,不得再吃强调色(强调色会随选中曲目封面重算)
+    expect(all).toMatch(/\.tp-live \{[^}]*background: rgba\(38, 38, 41/);
+    expect(all).not.toMatch(/\.tp-live \{[^}]*background: rgba\(var\(--acc\)/);
+    expect(all).not.toMatch(/\.tp-peer\.current \.tp-live/);
+    // 已加入群组的勾选圈仍为红勾
     expect(all).toMatch(/\.tp-badge\.in \{[^}]*color: #ef4444/);
   });
 

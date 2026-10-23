@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.1";
+const CARD_VERSION = "2.8.2";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -2268,6 +2268,7 @@ class MusicFlowRemoteCard extends LitElement {
     return html`
       <div class="tp-peer ${isCurrent ? "current" : ""} ${isDropTarget ? "drop" : ""} ${isGroup ? "group" : ""} ${p.available === false ? "off" : ""}"
         data-peer-id="${p.peerId}" title="${this._peerTitle(p)}">
+        ${isCurrent ? html`<span class="tp-pulse" aria-hidden="true"></span>` : null}
         <div class="tp-ring" role="button" tabindex="0"
           @click=${(e) => this._tpPeerClick(e, p)}
           @keydown=${(e) => this._tpPeerKey(e, p)}
@@ -2279,7 +2280,6 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
           ${isGroup ? html`<span class="tp-dash"></span>` : null}
           ${playing ? html`<span class="tp-live" title="${this._t("transfer.playing")}"><i></i><i></i><i></i></span>` : null}
-          ${isCurrent ? html`<span class="tp-cur" title="${this._t("transfer.current")}">${this._icon("check", 16)}</span>` : null}
         </div>
         <div class="tp-name">${this._peerLabel(p)}</div>
         <div class="tp-sub">${sub}</div>
@@ -4210,9 +4210,21 @@ class MusicFlowRemoteCard extends LitElement {
         transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
       .tp-ring:hover { border-color: rgba(var(--acc), 0.85); }
       .tp-ring:focus-visible { outline: 2px solid rgba(var(--acc), 0.9); outline-offset: 3px; }
-      /* 当前目标:不再画白色外环(2026-10-23 用户要求「从白色圈改为圈内红色 ✓」),
-         只保留一圈极淡强调色描边,「选中」完全由圆内的红色对勾表达。 */
+      /* 当前目标:不再画白色外环,也不在封面里塞勾选标记(2026-10-23 用户要求),
+         改为与客户端 _ActivePulse 同款的**外圈呼吸光环**:一圈 3px 强调色圆环
+         从 1.0 放大到 1.26 并渐隐,1.2s ease-in-out 往返 ⇒ 视觉上向外「吐」。
+         光环是 .tp-ring 的**前置兄弟节点**,因此画在封面与频谱徽标之下。 */
       .tp-peer.current .tp-ring { border-color: rgb(var(--acc)); background: rgba(var(--acc), 0.10); }
+      .tp-pulse { position: absolute; left: calc(50% - 28px); top: 6px;
+        width: 56px; height: 56px; box-sizing: border-box;
+        border-radius: 50%; border: 3px solid rgb(var(--acc));
+        box-shadow: 0 0 10px rgba(var(--acc), 0.45);
+        pointer-events: none;
+        animation: tp-pulse 1.2s ease-in-out infinite alternate; }
+      @keyframes tp-pulse {
+        0% { transform: scale(1); opacity: 0.9; }
+        100% { transform: scale(1.26); opacity: 0; }
+      }
       .tp-peer.drop .tp-ring { border-color: rgb(var(--acc));
         box-shadow: 0 0 0 3px rgba(var(--acc), 0.36), 0 0 10px rgba(var(--acc), 0.5); }
       .tp-peer.drag-src { opacity: 0.32; }
@@ -4223,23 +4235,24 @@ class MusicFlowRemoteCard extends LitElement {
       .tp-fallback { display: flex; align-items: center; justify-content: center; color: rgba(var(--ctl-rgb), 0.85); }
       .tp-dash { position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
         border: 1.5px dashed rgba(var(--acc), 0.75); }
+      /* 「正在播」频谱徽标:底色固定为中性深灰,**不跟随强调色 / 选择状态变化**
+         (2026-10-23 用户要求)。曾用 rgba(var(--acc), .92):强调色随当前曲封面
+         重算,切一次遥控目标徽标就换色,看起来像选中态在改频谱底色。 */
       .tp-live { position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
         display: flex; align-items: flex-end; gap: 2px; height: 9px; padding: 1px 5px;
-        border-radius: 6px; background: rgba(var(--acc), 0.92); }
+        border-radius: 6px; background: rgba(38, 38, 41, 0.92);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
       .tp-live i { width: 2px; height: 6px; border-radius: 1px; background: #fff;
         animation: tp-eq 0.9s ease-in-out infinite; }
       .tp-live i:nth-child(1) { animation-delay: -0.2s; }
       .tp-live i:nth-child(2) { animation-delay: -0.45s; }
       .tp-live i:nth-child(3) { animation-delay: -0.7s; }
       @keyframes tp-eq { 0%, 100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
-      /* 当前目标的红色对勾:落在封面圆**内部正中**(原先是圆右上角的白色小圆 + 白 ✓,
-         2026-10-23 用户要求改为「圈圈里面带红色 ✓」)。深色半透明衬底保证红勾在任何
-         封面图上都能看清;不再外溢到圆外。 */
-      .tp-cur { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-        width: 26px; height: 26px; border-radius: 50%;
-        background: rgba(0, 0, 0, 0.55); color: #ef4444;
-        display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
+      /* 动效偏好:reduced-motion → 呼吸光环停在静止可见态,频谱不再跳。 */
+      @media (prefers-reduced-motion: reduce) {
+        .tp-pulse { animation: none; transform: scale(1.08); opacity: 0.5; }
+        .tp-live i { animation: none; }
+      }
       .tp-name { max-width: 100%; font-size: 12px; font-weight: 600; color: var(--fg);
         text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tp-sub { max-width: 100%; font-size: 10.5px; color: var(--fg-faint);

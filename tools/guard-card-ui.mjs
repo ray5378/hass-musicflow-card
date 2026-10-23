@@ -134,11 +134,11 @@ record(
   badgeOk(dist),
 );
 
-// 勾选标记统一红色(2026-10-23 用户要求):
-//   ① 「当前遥控」不再用白色外环(.tp-peer.current .tp-ring 的 box-shadow)表达,
-//      改为封面圆**内部正中**的红色 ✓(.tp-cur);
-//   ② 「已加入群组」的勾选圈实心 ✓ 也改成同一种红。
-// 这两处都是纯视觉改动,编译/单测都不报错 ⇒ 只能静态钉住颜色与位置。
+// 流转页「当前目标」= 外圈呼吸光环(2026-10-23 用户二次拍板):
+//   ① 封面圆内**不再**放勾选标记(先前的 `.tp-cur` 白色小圆 + 红 ✓ 已删除);
+//   ② 选中态靠一圈与客户端 `_ActivePulse` 同款的呼吸光环:56px 圆环从 1.0
+//      放大到 1.26 并渐隐,1.2s ease-in-out 往返;
+//   ③ 封面下方的频谱徽标底色固定,不随强调色/选择状态变化。
 // ⚠️ 只取到本条规则的 `}` 为止:按固定长度切片会把下一条规则(比如 .tp-peer.drop
 //    的 box-shadow)一起吞进来,导致「没有外环」的断言假红。
 const ruleAt = (text, selector) => {
@@ -147,23 +147,35 @@ const ruleAt = (text, selector) => {
   const j = text.indexOf("}", i);
   return j < 0 ? text.slice(i) : text.slice(i, j + 1);
 };
-const RED_CHECK = /color:\s*#ef4444/i;
-const redCheckOk = (text) => {
-  const cur = ruleAt(text, ".tp-cur {");
-  const badgeIn = ruleAt(text, ".tp-badge.in {");
+const ringOk = (text) => {
+  const pulse = ruleAt(text, ".tp-pulse {");
   const curRing = ruleAt(text, ".tp-peer.current .tp-ring {");
+  const live = ruleAt(text, ".tp-live {");
   return (
-    RED_CHECK.test(cur) &&
-    /left:\s*50%/.test(cur) && /top:\s*50%/.test(cur) && // 落在圆内正中
-    RED_CHECK.test(badgeIn) &&
-    !/box-shadow/.test(curRing) // 白色外环已去掉
+    !/tp-cur/.test(text) && // 圆内勾选标记已彻底移除
+    /class="tp-pulse"/.test(text) &&
+    /border:\s*3px\s+solid\s+rgb\(var\(--acc\)\)/.test(pulse) &&
+    /animation:\s*tp-pulse\s+1\.2s\s+ease-in-out\s+infinite\s+alternate/.test(pulse) &&
+    /scale\(1\.26\)/.test(text) && // 关键帧放大到 1.26
+    !/box-shadow/.test(curRing) && // 白色外环(以及任何外环阴影)不得回流
+    !/background:\s*rgba\(var\(--acc\)/.test(live) && // 频谱底色不再跟强调色
+    !/\.tp-peer\.current \.tp-live/.test(text)
   );
 };
 record(
-  "A3 流转页勾选标记统一为红色 ✓,选中态不再画白色外环",
-  "改回白勾或把白圈加回来 = 用户明确否掉的视觉回流(2026-10-23)",
-  redCheckOk(src),
-  redCheckOk(dist),
+  "A3 选中态=外圈呼吸光环(无圆内勾选)、频谱底色固定",
+  "把红 ✓ / 白圈加回来,或让频谱底色跟着选中态换色 = 用户明确否掉的视觉回流(2026-10-23)",
+  ringOk(src),
+  ringOk(dist),
+);
+
+// 已加入群组的勾选圈仍为红色 ✓(与上一轮口径一致,勿随选中态改造被冲掉)。
+const RED_CHECK = /color:\s*#ef4444/i;
+record(
+  "A4 已加入群组的勾选圈 ✓ 为红色",
+  "改回白勾 = 用户明确否掉的视觉回流(2026-10-23)",
+  RED_CHECK.test(ruleAt(src, ".tp-badge.in {")),
+  RED_CHECK.test(ruleAt(dist, ".tp-badge.in {")),
 );
 
 // ============ B. 首页 chip 行:只切遥控目标,不做成员管理 ============
