@@ -46,8 +46,8 @@ function makeClient(over = {}) {
     getStatus: vi.fn(async () => ({ state: "PLAYING", position: 1, duration: 100, volume: 50, muted: false, media: { songId: "s1", title: "歌", artist: "手", album: "辑", coverArt: "c1", duration: 100 } })),
     getQueue: vi.fn(async () => ({ items: [{ songId: "s1", title: "A", artist: "B", coverArt: "c1", duration: 100 }], total: 1, currentIndex: 0, playMode: "order", isActive: true })),
     getPeers: vi.fn(async () => ({ peers: [] })),
-    getGroups: vi.fn(async () => ({ groups: [{ id: "g1", memberIds: ["dlna:d1"] }] })),
-    updateGroupMembers: vi.fn(async () => ({ group: { memberIds: ["dlna:d1", "dlna:d2"] } })),
+    getGroups: vi.fn(async () => ({ groups: [{ id: "g1", memberIds: ["airplay:a1"] }] })),
+    updateGroupMembers: vi.fn(async () => ({ group: { memberIds: ["airplay:a1", "sendspin:s1"] } })),
     getLyrics: vi.fn(async () => ({ lyricsList: { structuredLyrics: [{ synced: true, line: [{ start: 0, value: "第一行" }, { start: 1000, value: "第二行" }] }] } })),
     star: vi.fn(async () => ({})),
     unstar: vi.fn(async () => ({})),
@@ -1998,7 +1998,13 @@ describe("渲染", () => {
 describe("首页群组 chip(不再管理成员)", () => {
   it("_memberKeyFor:服务端成员命名空间(流转页仍在用)", () => {
     const c = mkCard();
+    // 成员键 = 服务端口径的完整 peerId;DLNA 已不能进组,旧版「剥掉 dlna: 前缀」已废
     expect(c._memberKeyFor({ kind: "sendspin", peerId: "sendspin:s1" })).toBe("sendspin:s1");
+    expect(c._memberKeyFor({ kind: "airplay", peerId: "airplay:a1" })).toBe("airplay:a1");
+    expect(c._memberKeyFor({ kind: "dlna", peerId: "dlna:d1" })).toBe("dlna:d1");
+    // 已在组内且组里存的是裸 id(历史数据)⇒ 移除要用组里那条,不能自己造一条
+    c._ui.transferGroupId = "group:g1";
+    c._transferGroupMembers = new Set(["d1"]);
     expect(c._memberKeyFor({ kind: "dlna", peerId: "dlna:d1" })).toBe("d1");
   });
 
@@ -2317,6 +2323,16 @@ const TP_PEERS = [
   { peerId: "web:1", kind: "local", platform: "web", available: true },
 ];
 
+// 群组成员夹具:只有 airplay / sendspin 能进组,DLNA 不能 ——
+// 所以要有一台 DLNA 设备专门用来验证「管理态下不渲染勾选圈」。
+const GROUP_PEERS = [
+  { peerId: "airplay:a1", name: "主卧", kind: "airplay", available: true, queue: { isActive: false } },
+  { peerId: "sendspin:s1", name: "书房", kind: "sendspin", available: true, queue: { isActive: false } },
+  { peerId: "dlna:d1", name: "客厅", kind: "dlna", available: true, queue: { isActive: false } },
+  { peerId: "group:g1", kind: "group", groupId: "g1", name: "组", available: false,
+    memberIds: ["airplay:a1"], queue: { isActive: true } },
+];
+
 function openTransfer(c) {
   c._ui.peers = TP_PEERS;
   c._openTransfer();
@@ -2416,7 +2432,8 @@ describe("流转页:数据层与交互(A4–A8)", () => {
   it("A6 群组:点群组切目标 + 成员模式,勾选态调 updateGroupMembers", async () => {
     const c = mkCard();
     c._ui.currentPeerId = "local:l1";
-    openTransfer(c);
+    c._ui.peers = GROUP_PEERS;
+    c._openTransfer();
     await c.updateComplete;
 
     let g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
@@ -2424,13 +2441,13 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     await flush();
     expect(c._ui.currentPeerId).toBe("group:g1");
     expect(c._ui.transferGroupId).toBe("group:g1");
-    expect(c._isTransferGroupMember(TP_PEERS[0])).toBe(true);
+    expect(c._isTransferGroupMember(GROUP_PEERS[0])).toBe(true);
     await c.updateComplete;
     expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeTruthy();
 
     // 成员勾选圈:两态都渲染 ✓,已加入为 accent 实心(in),未加入为空心圈
-    const inBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"] .tp-badge');
-    const outBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d2"] .tp-badge');
+    const inBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="airplay:a1"] .tp-badge');
+    const outBadge = c.shadowRoot.querySelector('.tp-peer[data-peer-id="sendspin:s1"] .tp-badge');
     expect(inBadge.textContent.trim()).toBe("✓");
     expect(inBadge.classList.contains("in")).toBe(true);
     expect(inBadge.getAttribute("aria-pressed")).toBe("true");
@@ -2439,10 +2456,13 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     expect(outBadge.getAttribute("aria-pressed")).toBe("false");
     // 勾选语义:两个态的符号一致,只靠视觉态区分(+/− 已废弃)
     expect(inBadge.textContent.trim()).toBe(outBadge.textContent.trim());
+    // ★ 只有 AirPlay / Sendspin 能进组 ⇒ DLNA 设备在管理态下不得出现勾选圈
+    expect(c.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"] .tp-badge')).toBeFalsy();
     outBadge.click();
     await flush();
-    expect(c._client.updateGroupMembers).toHaveBeenCalledWith("g1", ["d2"], []);
-    expect(c._isTransferGroupMember(TP_PEERS[2])).toBe(true);
+    // 成员键必须是服务端口径的完整 peerId(旧版剥掉 dlna: 前缀那套已废)
+    expect(c._client.updateGroupMembers).toHaveBeenCalledWith("g1", ["sendspin:s1"], []);
+    expect(c._isTransferGroupMember(GROUP_PEERS[1])).toBe(true);
 
     // 再点群组 = 退出成员模式(遥控目标仍是该群组)
     g = c.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"]');
@@ -2451,6 +2471,34 @@ describe("流转页:数据层与交互(A4–A8)", () => {
     expect(c._ui.transferGroupId).toBe(null);
     expect(c._ui.currentPeerId).toBe("group:g1");
     expect(c.shadowRoot.querySelector(".panel.transfer .tp-gm-hint")).toBeFalsy();
+  });
+
+  it("A6b 群组:非 AirPlay/Sendspin 直接被拒;历史 DLNA 成员仍可移除", async () => {
+    // ① 拒绝路径:直接调 _tpToggleMember 给一台 DLNA(勾选圈本身已不渲染),不许发请求
+    const c = mkCard();
+    c._ui.peers = GROUP_PEERS;
+    c._openTransfer();
+    c._ui.transferGroupId = "group:g1";
+    await flush();
+    await c._tpToggleMember({ stopPropagation: vi.fn() }, GROUP_PEERS[2]);
+    expect(c._client.updateGroupMembers).not.toHaveBeenCalled();
+    expect(c._ui.transferMsg).toContain("不支持加入群组");
+
+    // ② 移除路径:旧组里存的是裸 deviceId(`d1`),勾选圈照渲染,点一下用**组里那条**删除
+    const getGroups = vi.fn(async () => ({ groups: [{ id: "g1", memberIds: ["d1"] }] }));
+    const updateGroupMembers = vi.fn(async () => ({ group: { memberIds: [] } }));
+    const c2 = mkCard({}, { getGroups, updateGroupMembers });
+    c2._ui.peers = GROUP_PEERS;
+    c2._openTransfer();
+    await c2.updateComplete;
+    c2.shadowRoot.querySelector('.tp-peer[data-peer-id="group:g1"] .tp-ring').click();
+    await flush();
+    const badge = c2.shadowRoot.querySelector('.tp-peer[data-peer-id="dlna:d1"] .tp-badge');
+    expect(badge).toBeTruthy(); // 已是成员 ⇒ 保留删除出口
+    expect(badge.classList.contains("in")).toBe(true);
+    badge.click();
+    await flush();
+    expect(updateGroupMembers).toHaveBeenCalledWith("g1", [], ["d1"]);
   });
 
   it("A7 回收站:_tpDestroy 成功留页提示,失败报错", async () => {
@@ -2799,7 +2847,8 @@ describe("流转页审查修复(D1 回归守卫)", () => {
     c._ui.transferGroupId = "group:g1";
     await c.updateComplete;
 
-    const pending = c._tpToggleMember({ stopPropagation: vi.fn() }, TP_PEERS[0]);
+    // 用一台 airplay 设备:DLNA 会被 _tpToggleMember 直接拒绝,这里测的是会话回写
+    const pending = c._tpToggleMember({ stopPropagation: vi.fn() }, { peerId: "airplay:a9", kind: "airplay" });
     expect(c._ui.transferBusy).toBe(true);
     c._closeTransfer();
     openTransfer(c);

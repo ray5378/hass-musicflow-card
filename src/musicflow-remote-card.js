@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.3";
+const CARD_VERSION = "2.8.4";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -2261,9 +2261,13 @@ class MusicFlowRemoteCard extends LitElement {
       : (playing && title
         ? (artist ? `${title} - ${artist}` : title)
         : this._t("transfer.idle"));
-    const showBadge = !!this._ui.transferGroupId && !isGroup &&
-      (p.kind === "dlna" || p.kind === "sendspin");
+    // 成员勾选圈只给**能进群组**的设备:群组出流是 sendspin pump → AirPlay BridgeRing
+    // 桥接,只有 airplay / sendspin 两种成员能出声;DLNA(与本机客户端)加进去也是静默。
+    // Web 端群组页的候选口径同样是这两个 kind(Groups/index.vue 的 selectableDevices)。
+    // 「已是成员」时也照渲染 —— 历史组里若存着 DLNA 成员,用户仍得有出口把它移除。
     const member = this._isTransferGroupMember(p);
+    const joinable = this._canJoinGroup(p);
+    const showBadge = !!this._ui.transferGroupId && !isGroup && (joinable || member);
     const isDropTarget = p.peerId === this._tpOverPeerId;
     return html`
       <div class="tp-peer ${isCurrent ? "current" : ""} ${isDropTarget ? "drop" : ""} ${isGroup ? "group" : ""} ${p.available === false ? "off" : ""}"
@@ -2351,10 +2355,31 @@ class MusicFlowRemoteCard extends LitElement {
     this.requestUpdate();
   }
 
+  /** 能否加入群组:只有 AirPlay / Sendspin 走群组桥接出流;DLNA / 本机客户端在组里
+   *  没有出声通路,服务端群组页也不把它们列为候选。 */
+  _canJoinGroup(p) {
+    return !!p && (p.kind === "airplay" || p.kind === "sendspin");
+  }
+
+  /** 群组 memberIds 里与该设备对应的那条字符串(命中返回原样,未命中 null)。
+   *  服务端口径是 `airplay:<deviceId>` / `sendspin:<clientId>`;旧组可能存裸 deviceId,
+   *  故按「peerId → kind:裸id → 裸id」依次回查 —— 移除成员必须回传**组里那条**,
+   *  否则服务端按 no-op 处理,成员删不掉。 */
+  _groupMemberKey(p) {
+    const set = this._transferGroupMembers;
+    if (!set || !p) return null;
+    const pid = String(p.peerId || "");
+    const cut = pid.indexOf(":");
+    const bare = cut >= 0 ? pid.slice(cut + 1) : pid;
+    for (const k of [pid, `${p.kind}:${bare}`, bare]) {
+      if (k && set.has(k)) return k;
+    }
+    return null;
+  }
+
   _isTransferGroupMember(p) {
     if (!this._ui.transferGroupId) return false;
-    const k = this._memberKeyFor(p);
-    return this._transferGroupMembers.has(k) || this._transferGroupMembers.has(p.peerId);
+    return this._groupMemberKey(p) !== null;
   }
 
   async _tpToggleMember(e, p) {
@@ -2366,6 +2391,12 @@ class MusicFlowRemoteCard extends LitElement {
       : groupId;
     const key = this._memberKeyFor(p);
     const join = !this._isTransferGroupMember(p);
+    // 加入路径再拦一道:非 AirPlay / Sendspin(如 DLNA)不许进组 —— 组播对它没有出声
+    // 通路,放进去只会得到「成员在册但没声音」的假成功。移除路径不拦(历史成员要能清掉)。
+    if (join && !this._canJoinGroup(p)) {
+      this._tpFlash(this._t("transfer.groupUnsupported"), true);
+      return;
+    }
     const session = this._tpSession;
     this._ui.transferBusy = true;
     this.requestUpdate();
@@ -2800,7 +2831,9 @@ class MusicFlowRemoteCard extends LitElement {
   // DLNA = 裸设备 id(历史数据约定,去掉 peerId 的 `dlna:` 前缀)。
   // 首页不做成员管理(点群组只切遥控目标),加减成员只在流转页(_tpToggleMember)。
   _memberKeyFor(p) {
-    return p.kind === "sendspin" ? p.peerId : p.peerId.replace(/^dlna:/, "");
+    // 已在组内:回传组里存的那条(移除才有效);不在组内:用 peerId 加入
+    //(`airplay:<deviceId>` / `sendspin:<clientId>`,与服务端成员候选同口径)。
+    return this._groupMemberKey(p) || String(p.peerId || "");
   }
 
 
