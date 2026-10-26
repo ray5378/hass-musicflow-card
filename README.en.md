@@ -48,6 +48,12 @@ a JWT and renews it automatically, so no static API key is required up front.
 The probe and any later direct/proxy switch happen silently in the background
 and **never show a prompt or notification**.
 
+**Probe timeout**: the direct-reachability probe and login handshake both use a
+**1s** timeout (lowered from 4s in v2.8.7). On a LAN the backend responds in
+milliseconds, so 1s is ample headroom; for off-LAN / unreachable targets no
+amount of waiting helps, so the shorter timeout just falls back to the proxy
+faster.
+
 In proxy mode everything goes through Home Assistant:
 
 - REST calls go through the integration's proxy view.

@@ -23,7 +23,9 @@ const COVER_SIZE = 160;
 const RECONNECT_DELAY = 3000;
 const RECONNECT_MAX_DELAY = 30000; // 重连指数退避上限
 const HANDSHAKE_TIMEOUT_MS = 10000; // WS 握手看门狗:超时未 open 即主动断开走重连
-const PROBE_TIMEOUT = 4000;
+const PROBE_TIMEOUT = 1000; // 直连探测/登录握手超时。LAN 内响应毫秒级,4s 纯属浪费;
+                            // 跨网段/外网本就连不上,等再久也是白等。1s 已留足冷启动/TLS 抖动余量,
+                            // 既更快回落中转,又不误杀可达的直连。
 
 function log(...args) {
   console.log("[MusicFlow card]", ...args);
