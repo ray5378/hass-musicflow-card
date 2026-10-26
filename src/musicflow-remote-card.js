@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.7";
+const CARD_VERSION = "2.8.8";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -3991,6 +3991,8 @@ class MusicFlowRemoteCard extends LitElement {
         --panel-bg: rgba(255, 255, 255, 0.04);
         --line: rgba(255, 255, 255, 0.12);
         --line-soft: rgba(255, 255, 255, 0.08);
+        /* 选中播放器文字投影:白字配深投影,保证压在任意 accent 底色上都读得清。 */
+        --sel-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
         /* MusicFlow FnOS 暗色玻璃拟态:深紫灰渐变底(无封面时回退显示) */
         background: linear-gradient(180deg, #2d293a 0%, #1a1728 52%, #15121f 100%);
         color: var(--fg);
@@ -4012,6 +4014,8 @@ class MusicFlowRemoteCard extends LitElement {
         --panel-bg: rgba(0, 0, 0, 0.06);
         --line: rgba(0, 0, 0, 0.16);
         --line-soft: rgba(0, 0, 0, 0.10);
+        /* .dark = 深色文字(亮背景封面):投影反相为浅色,同上。 */
+        --sel-text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55);
       }
       .wrap { position: relative; z-index: 1; padding: 14px; display: flex; flex-direction: column; gap: 12px;
         box-sizing: border-box; /* shadow DOM 不吃 HA 全局 reset:content-box 会让 min-height+padding 叠加,极简模式卡片变高 */
@@ -4064,8 +4068,10 @@ class MusicFlowRemoteCard extends LitElement {
       /* 首页 chip 列表:恒单行、不换行。放不下的 chip 靠**按住任意 chip 左右拖动**滑出来
          (鼠标见 _outListPointerDown;触屏走原生 pan-x),滚动条隐藏。
          flex:1 1 auto 占满剩余宽度 ⇒ 行尾「流转播放」按钮恒定在卡片右缘。 */
+      /* 纵向 padding 10px(原 4px):给选中 chip 的 scale(1.12) 与底部投影留出绘制空间 ——
+         overflow-x:auto 会让 overflow-y 实际落在 hidden,投影一旦超出 padding 就被硬切成一条直线。 */
       .out-list { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto;
-        overflow-x: auto; overflow-y: hidden; padding: 4px 0 4px 4px; scrollbar-width: none;
+        overflow-x: auto; overflow-y: hidden; padding: 10px 0 10px 4px; scrollbar-width: none;
         touch-action: pan-x; -webkit-overflow-scrolling: touch; }
       .out-list::-webkit-scrollbar { display: none; }
       .out-list.drag-x { cursor: grabbing; }
@@ -4089,20 +4095,23 @@ class MusicFlowRemoteCard extends LitElement {
       /* 悬停反馈与封面/播放控件统一:仅放大上浮 + 中性阴影。
          选中播放器(.active)恒保持放大状态(等同悬停效果),切换后才缩小;
          未选中仅悬停放大、移走恢复。 */
-      .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      .out:hover, .out.active { transform: scale(1.1); box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35); }
       .out:active { transform: scale(0.96); }
-      /* 当前播放器:立体突出(放大上浮 + 受光渐变 + 底部投影),颜色跟随封面 accent(--acc);
-         去除霓虹光晕,仅用底部阴影营造立体感 */
+      /* 当前播放器:立体突出(放大上浮 + 受光渐变 + 底部投影);去除霓虹光晕,仅用底部阴影营造立体感。
+         底色/边框仍跟随封面 accent(--acc) 保留选中色感,但**文字与图标恒取 --fg**(卡片当前明暗档的
+         固定前景,不再跟 --acc 走):--acc 逐曲变化会让选中那台的文字/图标跟着换色,浅封面时浅字压
+         浅底近乎不可见(2026-10-26 实测)。投影走 --sel-text-shadow:白字深投影 / 深字浅投影。
+         底部投影已收窄 —— 原 8px/22px 会伸出容器被 overflow-y:hidden 切成一条直线,见 .out-list。 */
       .out { position: relative; }
       .out.active {
         transform: scale(1.12) translateY(-1px);
         background: linear-gradient(180deg, rgba(var(--acc), 0.32), rgba(var(--acc), 0.10));
         border-color: rgba(var(--acc), 0.85);
-        color: rgb(var(--acc));
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 8px 22px rgba(0, 0, 0, 0.6);
+        color: var(--fg);
+        text-shadow: var(--sel-text-shadow);
+        box-shadow: 0 2px 3px rgba(0, 0, 0, 0.45), 0 4px 9px rgba(0, 0, 0, 0.5);
       }
-      .out.active .ic { color: rgb(var(--acc)); }
+      .out.active .ic { color: var(--fg); }
       .out.off { opacity: 0.45; }
       .hint { color: var(--fg-faint); font-size: 12px; }
       .now { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
