@@ -144,11 +144,12 @@ export class BackendClient {
     }
   }
 
-  async _ensureToken() {
+  async _ensureToken(opts = {}) {
     // 旧 YAML 兜底静态 token:直接用,不登录。
     if (this.apiKey) return this.apiKey;
-    // 代理模式:浏览器连不上后端,卡片不登录(由 HA 集成代理鉴权)。
-    if (this.mode === "proxy") return null;
+    // 代理模式且非探测:浏览器连不上后端,卡片不登录(由 HA 集成代理鉴权)。
+    // forProbe:探测直连可达性时即便当前处于 proxy 也允许登录,用于 proxy→direct 回切。
+    if (this.mode === "proxy" && !opts.forProbe) return null;
     // 已有未过期(<24h)的 JWT:直接复用(留 5 分钟缓冲避免临界过期)。
     if (this.token && this._tokenExpiry && Date.now() < this._tokenExpiry - 5 * 60 * 1000) {
       return this.token;
@@ -184,9 +185,12 @@ export class BackendClient {
   // 直连可达性探测:局域网内直连延迟最低,探测成功就保持直连;
   // 外网/跨网段(混合内容、PNA、私有 IP 不可路由)会抛网络错误 -> 走 HA 代理。
   async _probeDirect() {
-    if (!this.url || !(this.token || this.apiKey)) return false;
+    // 没有 url 必不可能直连。尚无 token / apiKey 时,若同时提供了用户名 + 密码,
+    // 仍允许先登录拿 JWT 再探测直连可达性(直连场景下卡片自行登录持有 JWT)。
+    if (!this.url) return false;
+    if (!(this.token || this.apiKey) && !(this.username && this.password)) return false;
     try {
-      await this._ensureToken();
+      await this._ensureToken({ forProbe: true });
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT);
       let ok = false;

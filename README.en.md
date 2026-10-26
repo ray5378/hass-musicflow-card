@@ -42,6 +42,12 @@ when direct access is unavailable and the integration supports proxying, it
 automatically falls back to the HA proxy with no manual switch. Direct
 (`transport: direct`) and forced proxy (`transport: proxy`) can still be set in YAML.
 
+**Direct-mode authentication**: direct mode (including the auto probe phase)
+supports **username + password only** credentials — the card logs in to obtain
+a JWT and renews it automatically, so no static API key is required up front.
+The probe and any later direct/proxy switch happen silently in the background
+and **never show a prompt or notification**.
+
 In proxy mode everything goes through Home Assistant:
 
 - REST calls go through the integration's proxy view.

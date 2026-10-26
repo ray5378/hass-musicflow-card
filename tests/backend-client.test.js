@@ -288,6 +288,36 @@ describe("_probeDirect / _resolveMode", () => {
     await expect(c._probeDirect()).resolves.toBe(false);
   });
 
+  it("有 url + 用户名/密码(无 apiKey)→ 先登录拿 JWT 再探测直连", async () => {
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url).includes("/auth/login")) return jsonRes({ token: "JWT" });
+      return { ok: true, status: 200 };
+    });
+    globalThis.fetch = fetchMock;
+    const c = new BackendClient({ url: "http://h", username: "u", password: "p" });
+    await expect(c._probeDirect()).resolves.toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain("/auth/login");
+    expect(c.token).toBe("JWT"); // 登录成功并持有 JWT
+  });
+
+  it("用户名/密码登录失败(网络错误)→ 探测返回 false 不抛错", async () => {
+    globalThis.fetch = vi.fn(async () => { throw new TypeError("net"); });
+    const c = new BackendClient({ url: "http://h", username: "u", password: "p" });
+    await expect(c._probeDirect()).resolves.toBe(false);
+  });
+
+  it("proxy 模式下 forProbe 仍允许登录探测直连(支持回切 direct)", async () => {
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url).includes("/auth/login")) return jsonRes({ token: "JWT2" });
+      return { ok: true, status: 200 };
+    });
+    globalThis.fetch = fetchMock;
+    const c = new BackendClient({ url: "http://h", username: "u", password: "p" });
+    c.mode = "proxy"; // 处于代理模式下的回切探测
+    await expect(c._probeDirect()).resolves.toBe(true);
+    expect(c.token).toBe("JWT2");
+  });
+
   it("transport direct → direct", async () => {
     const c = new BackendClient({ transport: "direct" });
     await expect(c._resolveMode()).resolves.toBe("direct");
