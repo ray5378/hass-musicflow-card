@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.4";
+const CARD_VERSION = "2.8.5";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -424,11 +424,9 @@ class MusicFlowRemoteCard extends LitElement {
       username: cfg.username || null,
       password: cfg.password || null,
       apiKey: cfg.api_key || null, // 旧 YAML 兜底静态 token
-      // v2.7.0 起默认**强制走 HA 中转**:直连在部分网络下会静默失败(混合内容 /
-      // PNA / CORS / 私有 IP 不可路由),且 auto 的探测在凭据来自集成时恒判失败、
-      // 实际也会落到 proxy。先统一走中转测延迟;direct / auto 仍然保留,YAML 显式
-      // 指定即可切回(后续若中转延迟可接受,再移除直连)。
-      transport: cfg.transport || "proxy", // auto | direct | proxy
+      // 默认 auto:先探测直连,可达则直连(最低延迟);不可达且集成支持代理时自动切
+      // HA 中转。direct / proxy 仍可在 YAML 显式指定,强制只走某一种。
+      transport: cfg.transport || "auto", // auto | direct | proxy
     });
     try {
       await this._client.init();

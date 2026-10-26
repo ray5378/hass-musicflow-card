@@ -193,8 +193,8 @@ describe("生命周期 / 绑定", () => {
     document.body.removeChild(c);
   });
 
-  // v2.7.0:默认传输改为 proxy(强制经 HA 中转);direct / auto 仍可按需显式指定。
-  it("默认 transport 为 proxy,direct/auto 可显式覆盖", async () => {
+  // 默认传输为 auto(自动切换直连 / 中转);direct / proxy 仍可按需显式指定。
+  it("默认 transport 为 auto,direct/proxy 可显式覆盖", async () => {
     const mk = async (transport) => {
       const c = document.createElement("hass-musicflow-card");
       document.body.appendChild(c);
@@ -211,9 +211,9 @@ describe("生命周期 / 绑定", () => {
       document.body.removeChild(c);
       return mode;
     };
-    expect(await mk()).toBe("proxy");
+    expect(await mk()).toBe("auto");
     expect(await mk("direct")).toBe("direct");
-    expect(await mk("auto")).toBe("auto");
+    expect(await mk("proxy")).toBe("proxy");
   });
 
   it("_bindClient 注册全部事件回调并驱动 UI", async () => {

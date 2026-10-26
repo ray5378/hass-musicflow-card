@@ -34,14 +34,13 @@ channel, and any change made elsewhere is reflected on the card immediately.
   card **v1.6.11**. Keep these three in sync; upgrading the server should be
   followed by updating the integration and the card in HACS.
 
-## Hybrid transport (proxy by default, direct optional)
+## Hybrid transport (auto by default: switches between direct and HA proxy)
 
-Since **v2.7.0** the card routes everything through the Home Assistant
-integration by default: the browser only talks to Home Assistant, which reaches
-the backend on its behalf. This removes the mixed-content / Private Network
-Access / unroutable-private-IP restrictions entirely.
-Direct (`transport: direct`) and auto probing (`transport: auto`) are still
-available and can be enabled in YAML.
+The card defaults to `transport: auto`: it probes whether it can reach the
+backend directly and uses the direct connection (lowest latency) when possible;
+when direct access is unavailable and the integration supports proxying, it
+automatically falls back to the HA proxy with no manual switch. Direct
+(`transport: direct`) and forced proxy (`transport: proxy`) can still be set in YAML.
 
 In proxy mode everything goes through Home Assistant:
 
@@ -112,16 +111,15 @@ effect and the card falls back to the first available output.
 
 ### Transport mode
 
-Since **v2.7.0** the default is `proxy`: every request and event goes through the
-Home Assistant integration, so the card no longer depends on the browser being
-able to reach the backend (mixed content / PNA / CORS / unroutable private IPs).
-The other modes remain available:
+The default is `auto`: probe direct first, fall back to the HA proxy when direct
+access is unavailable and the integration supports it. The other modes can be set
+explicitly:
 
 ```yaml
 type: custom:hass-musicflow-card
-# transport: proxy  # default: always route through Home Assistant (needs integration 1.3.0+)
-transport: direct   # always connect straight to the backend
-# transport: auto   # probe direct first, fall back to the HA proxy
+transport: auto     # default: probe direct first, fall back to the HA proxy
+# transport: direct # always connect straight to the backend
+# transport: proxy  # always route through Home Assistant (needs integration 1.3.0+)
 ```
 
 ### Idle background (idle ambient)
