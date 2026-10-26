@@ -1,4 +1,4 @@
-// MusicFlow Remote Card — a Lovelace card that acts as a full external
+
 // controller for a MusicFlow server. It connects directly to the backend's
 // real-time /ws channel + REST API (via the `musicflow/backend_config` HA WS
 // command), so it is an equal peer to the Web/App clients.
@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.8";
+const CARD_VERSION = "2.8.9";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -4172,7 +4172,10 @@ class MusicFlowRemoteCard extends LitElement {
       .seek::-moz-range-progress { height: 6px; border-radius: 3px; background: rgb(var(--acc)); }
       .seek::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
         background: #fff; border: 2px solid rgb(var(--acc)); }
-      .controls { display: flex; justify-content: center; align-items: center; gap: 23px; position: relative; }
+      /* 播放控件最大宽度保持原 7 × 42px + 6 × 23px 的布局；窄卡先自动收紧间距，
+         可用宽度不足 294px 时再等比收缩按钮，避免只压缩宽度造成椭圆。 */
+      .controls { display: flex; width: min(100%, 432px); align-self: center; justify-content: space-between;
+        align-items: center; gap: 0; position: relative; }
       .ctl { border: none; background: transparent; color: var(--ctl); cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         width: 42px; height: 42px; padding: 0; border-radius: 50%;
@@ -4184,6 +4187,12 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.play { width: 42px; height: 42px; background: transparent; color: var(--ctl); }
       .ctl.play:hover { transform: scale(1.10); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
       .ctl.play:active { transform: scale(0.92); }
+      /* 仅播放控件行允许按钮等比收缩；音量面板里的 .ctl 仍保持原 42px 尺寸。 */
+      .controls > .ctl { flex: 0 1 42px; min-width: 0; height: auto; aspect-ratio: 1; }
+      .controls > .ctl .ic, .controls > .ctl svg { max-width: 100%; max-height: 100%; }
+      .controls > .ctl svg { width: auto; height: auto; }
+      /* 前提:_icon() 生成的 svg 自带尺寸属性(20/22px)。若将来改成只留 viewBox,
+         这里必须给 svg 写死尺寸,否则上面的 auto 会让图标撑满整个按钮。 */
       .ctl.like.on { color: rgb(var(--acc)); }
       /* 展开态只用图标变色标识,不再加红圈描边 */
       .ctl.active { color: rgb(var(--acc)); }

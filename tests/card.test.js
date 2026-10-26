@@ -2,6 +2,9 @@
 // 模块本身不导出任何符号：靠 import 触发注册,再用 customElements.get 取到类实例化。
 // 所有网络/WebSocket/hass 调用都用桩替代,不产生真实 IO。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import "../src/musicflow-remote-card.js";
 
 const CardCtor = customElements.get("hass-musicflow-card");
@@ -3033,5 +3036,85 @@ describe("v2.6.1 复审修复:E1–E5 回归守卫", () => {
     c._onTransferClick({ composedPath: () => [grid, panel] });
     expect(c._ui.transferOpen).toBe(false);
     await flush();
+  });
+});
+
+describe("v2.8.8 手机端播放控件圆形按钮:等比收缩防回退静态守卫", () => {
+  // 直接读源码文本,不经 CSSOM —— 级联顺序(同特异性下「后写者胜」)只能在源文本顺序上判定,
+  // CSSOM 序列化会重排/归一化,不能作为顺序证据。
+  // vitest 转换后 import.meta.url 不是 file: 协议,优先按仓库根(cwd)定位,再回退到模块自身相对路径
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const SRC = () => repoFile("src/musicflow-remote-card.js");
+  const DIST = () => repoFile("dist/hass-musicflow-card.js");
+  const srcLines = () => readFileSync(SRC(), "utf8").split(/\r?\n/);
+  // 静态守卫只认非注释行:注释里出现同名串会让位置判定失真。
+  const ruleLine = (lines, selectorStart) =>
+    lines.findIndex((l) => l.includes(selectorStart) && !/^\s*(\/\/|\/\*|\*)/.test(l));
+
+  const OVERRIDE = ".controls > .ctl {";
+  const PLAY = ".ctl.play {";
+  const CONTROLS = ".controls { display: flex;";
+
+  it("覆盖块存在:可收缩 flex + min-width:0 + height:auto + aspect-ratio:1", () => {
+    const lines = srcLines();
+    const i = ruleLine(lines, OVERRIDE);
+    expect(i).toBeGreaterThan(-1);
+    const rule = lines[i] + " " + lines[i + 1];
+    expect(rule).toContain("flex: 0 1 42px");
+    expect(rule).toContain("min-width: 0");
+    expect(rule).toContain("height: auto");
+    expect(rule).toContain("aspect-ratio: 1");
+  });
+
+  it("级联顺序:覆盖块必须晚于 .ctl.play(同为 0,2,0 特异性,后写者胜)", () => {
+    const lines = srcLines();
+    const playIdx = ruleLine(lines, PLAY);
+    const overrideIdx = ruleLine(lines, OVERRIDE);
+    expect(playIdx).toBeGreaterThan(-1);
+    // .ctl.play 的 height: 42px 若写在覆盖块之后,会把 height:auto 顶掉 ⇒ play 键重变椭圆
+    expect(overrideIdx).toBeGreaterThan(playIdx);
+    // 覆盖块之后也不得再出现把 .ctl 高度钉回固定 px 的规则
+    const after = lines.slice(overrideIdx + 1).filter((l) => /^\s*\.ctl[^{]*\{[^}]*\bheight:\s*\d/.test(l));
+    expect(after).toEqual([]);
+  });
+
+  it(".controls 改用 width: min(100%, 432px) + space-between,旧的固定 gap: 23px 已移除", () => {
+    const lines = srcLines();
+    const i = ruleLine(lines, CONTROLS);
+    expect(i).toBeGreaterThan(-1);
+    const rule = lines[i] + " " + lines[i + 1];
+    expect(rule).toContain("width: min(100%, 432px)");
+    expect(rule).toContain("justify-content: space-between");
+    expect(rule).toContain("align-self: center");
+    expect(rule).toContain("gap: 0");
+    // 7 × 42px + 6 × 23px = 432px:宽卡下 space-between 的间距必须正好回到 23px,视觉零回归
+    expect((432 - 7 * 42) / 6).toBe(23);
+    expect(lines.some((l) => l.includes("gap: 23px"))).toBe(false);
+  });
+
+  it("图标不被拉伸:只给 svg 加 max-* 上限,不放大 20/22px 的原始尺寸", () => {
+    const lines = srcLines();
+    const i = ruleLine(lines, OVERRIDE);
+    const block = lines.slice(i, i + 3).join(" ");
+    expect(block).toMatch(/\.controls > \.ctl \.ic, \.controls > \.ctl svg \{[^}]*max-width: 100%/);
+    expect(block).toMatch(/\.controls > \.ctl \.ic, \.controls > \.ctl svg \{[^}]*max-height: 100%/);
+    // SVG 自带 width/height 属性(20 或 22),只放宽上限即可随按钮收缩,不应放大到 42px
+    expect(block).toMatch(/\.controls > \.ctl svg \{[^}]*width: auto/);
+    expect(block).toMatch(/\.controls > \.ctl svg \{[^}]*height: auto/);
+  });
+
+  it("dist 与 src 同步:构建产物里含同一段自适应 CSS 且顺序一致", () => {
+    const dLines = readFileSync(DIST(), "utf8").split(/\r?\n/);
+    const di = ruleLine(dLines, OVERRIDE);
+    expect(di).toBeGreaterThan(-1);
+    expect(dLines[di]).toContain("aspect-ratio: 1");
+    expect(di).toBeGreaterThan(ruleLine(dLines, PLAY));
+    expect(ruleLine(dLines, CONTROLS)).toBeGreaterThan(-1);
   });
 });
