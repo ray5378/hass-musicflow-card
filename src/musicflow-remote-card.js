@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.9";
+const CARD_VERSION = "2.8.10";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -4077,7 +4077,12 @@ class MusicFlowRemoteCard extends LitElement {
       .out-list.drag-x { cursor: grabbing; }
       /* 行尾「流转播放」:去掉外框,与 MINI 播放器那一排 .ctl 按钮完全同款 —— 
          透明底、无边框,仅 hover 放大上浮 + 中性阴影,active 缩回。 */
-      .out.transfer { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; gap: 0;
+      /* justify-content: center —— .out 只设了 align-items:center(纵向),横向仍是默认 flex-start;
+         按钮被钉成 30×30、padding 归零后,∞ 图标作为唯一 flex item 贴左排布,而圆形底
+         (border-radius:50% ⇒ hover 的 box-shadow 圆 / focus-visible 的 outline 圆)以按钮盒子
+         中心为圆心 ⇒ 图标与圆心不同心(Chrome 实测横偏 6.5~7px)。播放控件那一排 .ctl 本就
+         写了 justify-content:center,这里补齐同一条。 */
+      .out.transfer { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; gap: 0; justify-content: center;
         border: none; background: transparent; color: var(--ctl); border-radius: 50%; box-shadow: none; }
       .out.transfer:hover { border: none; background: transparent; color: var(--ctl);
         transform: scale(1.10); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }

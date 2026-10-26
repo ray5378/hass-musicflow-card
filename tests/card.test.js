@@ -3118,3 +3118,97 @@ describe("v2.8.8 手机端播放控件圆形按钮:等比收缩防回退静态�
     expect(ruleLine(dLines, CONTROLS)).toBeGreaterThan(-1);
   });
 });
+
+describe("流转按钮(∞)与圆形高亮底同心:静态守卫", () => {
+  // 与 v2.8.8 播放控件守卫同一套路:直接读源码文本,不经 CSSOM。
+  // 背景:.out 只设了 align-items:center(纵向),横向仍是默认 flex-start;
+  // .out.transfer 把盒子钉成 30×30、padding 归零后,∞ 图标作为唯一 flex item 贴左,
+  // 而 border-radius:50% 画出的圆(hover 的 box-shadow 圆 / focus-visible 的 outline 圆)
+  // 以按钮盒子中心为圆心 ⇒ 图标与圆心不同心(Chrome 实测横偏 6.5~7px)。
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const SRC = () => repoFile("src/musicflow-remote-card.js");
+  const DIST = () => repoFile("dist/hass-musicflow-card.js");
+  const srcLines = () => readFileSync(SRC(), "utf8").split(/\r?\n/);
+  // 静态守卫只认非注释行:注释里出现同名串会让位置判定失真。
+  const ruleLine = (lines, selectorStart) =>
+    lines.findIndex((l) => l.includes(selectorStart) && !/^\s*(\/\/|\/\*|\*)/.test(l));
+  // 严格版:要求「选择器独占行首」。.out 家族有两条同名规则(.out { display… } 与
+  // .out { position: relative }),用 includes 取第一命中等于把「两条规则的先后次序」
+  // 当成了隐含依赖 —— 一旦有人把两条调序,守卫就会对着错的那条断言、报出误导性失败。
+  const ruleLinesAt = (lines, re) =>
+    lines.map((l, i) => [i, l]).filter(([, l]) => re.test(l) && !/^\s*(\/\/|\/\*|\*)/.test(l)).map(([i]) => i);
+
+  const TRANSFER = ".out.transfer {";
+  const RE_TRANSFER = /^\s*\.out\.transfer\s*\{/;
+  const RE_IC = /^\s*\.ic\s*\{/;
+  const RE_OUT = /^\s*\.out\s*\{/;
+  // 取规则全文(含续行),transfer 家族都是两行写法
+  const ruleText = (lines, idx) => lines[idx] + " " + (lines[idx + 1] || "");
+
+  it(".out.transfer 必须同时具备横向与纵向居中(缺 justify-content 会回退成图标贴左)", () => {
+    const lines = srcLines();
+    const i = ruleLine(lines, TRANSFER);
+    expect(i).toBeGreaterThan(-1);
+    const rule = lines[i] + " " + lines[i + 1];
+    // 横向:按钮自己写死(不能只靠 .out 继承,.out 只管了纵向)
+    expect(rule).toContain("justify-content: center");
+    // 纵向:.out 的 align-items: center 仍在生效,守卫里把它钉住防止被误删。
+    // 注意 .out 有两条同名规则,必须「全部捞出来一起判」,不能只认第一条。
+    const outIdxs = ruleLinesAt(lines, RE_OUT);
+    expect(outIdxs.length).toBeGreaterThan(0);
+    const outAll = outIdxs.map((i) => ruleText(lines, i)).join("\n");
+    expect(outAll).toContain("align-items: center");
+  });
+
+  it(".ic 图标容器必须双轴居中:∞ 的 svg 才能落在按钮中心(而不只是 .ic 盒子对齐)", () => {
+    const lines = srcLines();
+    const idxs = ruleLinesAt(lines, RE_IC);
+    expect(idxs.length).toBe(1); // 锚必须唯一:`.ic {` 与 `.out .ic {` 同处一个文件
+    const ic = ruleText(lines, idxs[0]);
+    expect(ic).toContain("display: inline-flex");
+    expect(ic).toContain("justify-content: center");
+    expect(ic).toContain("align-items: center");
+  });
+
+  it("圆形底必须保持正方形(width == height):border-radius:50% 只在正方时才画得出正圆", () => {
+    const lines = srcLines();
+    const idxs = ruleLinesAt(lines, RE_TRANSFER);
+    expect(idxs.length).toBe(1);
+    const rule = ruleText(lines, idxs[0]);
+    const wm = rule.match(/width:\s*([\d.]+)px/);
+    const hm = rule.match(/height:\s*([\d.]+)px/);
+    expect(wm, "规则里没找到 width").toBeTruthy();
+    expect(hm, "规则里没找到 height").toBeTruthy();
+    expect(parseFloat(hm[1])).toBe(parseFloat(wm[1]));
+  });
+
+  it("圆形底的尺寸/配色/反馈语义不变:仍是 30×30 透明底无边框圆,hover 放大 + 中性阴影", () => {
+    const lines = srcLines();
+    const i = ruleLine(lines, TRANSFER);
+    const rule = lines[i] + " " + lines[i + 1];
+    expect(rule).toContain("width: 30px");
+    expect(rule).toContain("height: 30px");
+    expect(rule).toContain("padding: 0");
+    expect(rule).toContain("border: none");
+    expect(rule).toContain("background: transparent");
+    expect(rule).toContain("border-radius: 50%");
+    const hi = ruleLine(lines, ".out.transfer:hover {");
+    expect(hi).toBeGreaterThan(-1);
+    const hover = lines[hi] + " " + lines[hi + 1];
+    expect(hover).toContain("transform: scale(1.10)");
+    expect(hover).toContain("box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35)");
+  });
+
+  it("dist 与 src 同步:构建产物里的 .out.transfer 同样带 justify-content: center", () => {
+    const dLines = readFileSync(DIST(), "utf8").split(/\r?\n/);
+    const di = ruleLine(dLines, TRANSFER);
+    expect(di).toBeGreaterThan(-1);
+    expect(dLines[di]).toContain("justify-content: center");
+  });
+});
