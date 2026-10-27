@@ -40,7 +40,7 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.10";
+const CARD_VERSION = "2.8.11";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -1480,7 +1480,7 @@ class MusicFlowRemoteCard extends LitElement {
     const u = this._ui;
     const vpct = Math.round(u.volume * 100);
     return html`
-      <div class="vol-overlay">
+      <div class="vol-overlay ${u.showVolume ? "open" : ""}">
         <div class="vol-row" @click=${(e) => e.stopPropagation()}>
           <button class="ctl" title="${u.muted ? this._t("control.unmute") : this._t("control.mute")}" @click=${this._toggleMute}>${this._icon(u.muted ? "volumeX" : "volume2", 20)}</button>
           <div class="vol-slider" @pointerdown=${this._volPointerDown} @pointermove=${this._volPointerMove} @pointerup=${this._volPointerUp} @pointercancel=${this._volPointerUp}>
@@ -2054,7 +2054,7 @@ class MusicFlowRemoteCard extends LitElement {
           </div>
 
           <!-- 下半区(控件行 + 进度条)作为音量面板的定位容器。
-               volmode 时下面几块用 visibility:hidden 原地隐身(保留占位,卡片高度零跳变)。
+               volmode 时下面几块下沉淡出(仍占位,卡片高度零跳变,见 CSS 共享隐身规则)。
                队列/媒体库面板已移出到 .wrap 级(.panelmode 时覆盖整张卡)。 -->
           <div class="lower ${u.showVolume ? "volmode" : ""}">
             <div class="controls">
@@ -2077,12 +2077,17 @@ class MusicFlowRemoteCard extends LitElement {
               <span class="t">${this._fmtTime(u.duration)}</span>
             </div>
 
-            ${u.showVolume ? this._renderVolumeOverlay() : ""}
+            <!-- 音量面板常驻渲染:开合只切 .open,CSS transition 负责进出场动画
+                 (关闭态 visibility:hidden 延迟切换,不可点/不可 Tab,行为与旧条件渲染一致) -->
+            ${this._renderVolumeOverlay()}
           </div>
 
-          ${u.showQueue ? this._renderQueue() : ""}
-          ${u.showBrowser ? this._renderMediaBrowser() : ""}
-          ${u.transferOpen ? this._renderTransfer() : ""}
+          <!-- 三个面板常驻渲染:开合只切各自的 .open class,让 CSS transition 播放
+               「从底部滑上来 + 淡入」的进出场动画。关闭态 visibility:hidden(延迟切换)
+               保证不可点/不可 Tab;互斥与数据加载守卫(仅 .open 时 observe)不变。 -->
+          ${this._renderQueue()}
+          ${this._renderMediaBrowser()}
+          ${this._renderTransfer()}
         </div>
       </ha-card>
     `;
@@ -2209,7 +2214,7 @@ class MusicFlowRemoteCard extends LitElement {
     const ordered = this._sortPeersForDisplay(peers);
     const busy = this._ui.transferBusy;
     return html`
-      <div class="panel transfer ${busy ? "busy" : ""}"
+      <div class="panel transfer ${busy ? "busy" : ""} ${this._ui.transferOpen ? "open" : ""}"
         @pointerdown=${this._onTransferPointerDown} @click=${this._onTransferClick}>
         <div class="panel-head">
           <span class="tp-title">${this._t("transfer.title")}</span>
@@ -2893,7 +2898,7 @@ class MusicFlowRemoteCard extends LitElement {
       for (let i = s; i <= e; i++) win.push(i);
     }
     return html`
-      <div class="panel queue">
+      <div class="panel queue ${this._ui.showQueue ? "open" : ""}">
         <div class="panel-head">
           <span>${this._t("queue.title", { n: total })}</span>
           <button class="mini" @click=${this._clearQueue}>${this._t("control.clear")}</button>
@@ -3886,19 +3891,27 @@ class MusicFlowRemoteCard extends LitElement {
   _renderMediaBrowser() {
     const stack = this._ui.browserStack;
     const level = stack[stack.length - 1];
-    if (!level) return html``;
-    const isRoot = level.type === "root";
+    // 面板壳无条件渲染(即使 browserStack 为空):首次打开时节点必须已在 DOM,
+    // 否则「首次插入 + 同帧加 .open」没有起始渲染态,transition 不播 → 首开硬跳无动画。
+    // ⚠️ 必须用**同一个模板**输出壳(壳常驻、内部内容用 ${level ? ... : ""} 条件渲染),
+    // 不能按 level 有无返回两个不同模板 —— Lit 会把两个模板当不同结构直接换节点,
+    // 换出来的新节点同样没有起始渲染态,首开照样不播动画(实测踩过这个坑)。
+    // 空壳不带 open,走 .panel 关闭态(visibility:hidden 延迟切换),不可见不可点,
+    // 与旧的「不渲染任何节点」行为等价;_openBrowser 会在置 showBrowser=true 的同一帧
+    // 同步压入根级 stack,不会出现「开着但壳是空」的状态。
+    const isRoot = !!level && level.type === "root";
     // 搜索框:与虚拟滚动共用同一取数路径(服务端 query 过滤),显示给可搜索的库类型。
-    const showSearch = ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
+    const showSearch = !!level && ["playlists", "albums", "artists", "genres", "starred", "songs"].includes(level.type);
     // 虚拟滚动窗口:只在 [vWinStart, vWinEnd] 渲染(行数恒 ≈ 一屏 + 2*OVERSCAN)。
     const win = [];
-    if (!isRoot && level.total > 0 && (level.vWinStart ?? -1) >= 0) {
+    if (level && !isRoot && level.total > 0 && (level.vWinStart ?? -1) >= 0) {
       const s = Math.max(0, level.vWinStart);
       const e = Math.min(level.total - 1, level.vWinEnd ?? s);
       for (let i = s; i <= e; i++) win.push(i);
     }
     return html`
-      <div class="panel browser">
+      <div class="panel browser ${this._ui.showBrowser ? "open" : ""}">
+        ${level ? html`
         <button class="mini close" title="${this._t("control.close")}" @click=${(e) => { e.stopPropagation(); this._ui.showBrowser = false; this._ui.showQueue = false; this.requestUpdate(); }}>✕</button>
         <div class="br-crumbs">
           ${stack.map((lv, i) => html`
@@ -3954,6 +3967,7 @@ class MusicFlowRemoteCard extends LitElement {
             ${this._vsMoreHint(level)}
           `)}
         </div>
+        ` : ""}
       </div>
     `;
   }
@@ -3975,7 +3989,15 @@ class MusicFlowRemoteCard extends LitElement {
 
   static get styles() {
     return css`
-      :host { display: block; }
+      :host { display: block;
+        /* 面板/极简模式过渡的全局节奏(柔和档,主理人拍板):
+           进场 = 缓出曲线 cubic-bezier(0.2,0,0,1) 300ms —— 起步快收尾稳,面板像从底部滑上来;
+           出场 = 缓入曲线 cubic-bezier(0.4,0,1,1) 220ms —— 出场比进场短是 Material/HIG 通用做法,
+           用户关闭时意图已明确,不需要再铺垫情绪。 */
+        --anim-in: cubic-bezier(0.2, 0, 0, 1);
+        --anim-out: cubic-bezier(0.4, 0, 1, 1);
+        --dur-in: 0.3s;
+        --dur-out: 0.22s; }
       ha-card {
         /* 颜色变量:默认浅色文字(暗背景);.dark 时整体切深色文字(亮背景封面) */
         --fg: #ffffff;
@@ -4146,23 +4168,51 @@ class MusicFlowRemoteCard extends LitElement {
       ha-card.dark .lyricbox-line.cur { color: #a3690a; }
       /* === 极简歌词模式(auto-hide) ===
          播放中空闲 auto_hide_delay(默认 3s)后:切换器(.outputs)、播放控件行(.controls)、
-         进度条(.progress-row)全部隐藏(display:none,不占位),歌词视口接管整卡高度:
-         标题下沿 → 卡底(100px → 198px,约 9~10 行)。卡片靠 min-height 保持与完整模式同高。
-         进入:歌词 420ms easeOutQuint 扩展;恢复:300ms 收缩。enter/move/click/touch 唤出。 */
-      /* 极简模式高度 = 完整模式实测高度(--mini-h,由 JS updated() 在非 mini 时测量),
-         保证卡片尺寸切换前后完全一致,零跳变。overflow:hidden 兜底裁掉歌词盒越出卡底的部分。 */
+         进度条(.progress-row)收缩淡出,歌词视口接管整卡高度(标题下沿 → 卡底)。
+         收缩用 max-height→0 + opacity 而非 display:none —— display:none 无过渡、控件「啪」地
+         硬消失;max-height 逐帧插值让占位随动画一起消失,歌词盒扩展时不会与残留控件叠在一起。
+         ⚠️ 展开态(base)也必须给具体 max-height 上限:max-height: 0 → none 是不可插值的跳变,
+         回不到过渡。三块各写各的实际高度(不写巨大兜底值,否则收缩前段「空走」节奏失真):
+         .outputs ≈52px(chip 30px + out-list 上下各 10px padding)、.controls = 42px、
+         .progress-row ≈20px;上限略放宽 2px 防字体测量差裁掉内容。残余的 flex gap
+         (.wrap/.lower 各 12px)由 --mini-h 地板(min-height)吸收,不会撑高卡片。
+         进 mini:控件先收(0.3s,贴近歌词盒既有的 cubic-bezier(0.22,1,0.36,1) 观感),
+         歌词盒 0.42s 扩展(自带 0.18s delay)跟进;出 mini 反向(歌词盒 0.3s 先收,
+         控件同步展开)。visibility 延迟到收缩结束再切 hidden —— 动画期间仍参与渲染,
+         结束后真正不可点/不可 Tab,等价旧 display:none 的可达性行为。 */
       .wrap.mini { min-height: var(--mini-h, 250px); overflow: hidden; padding-top: 24px; padding-left: 20px; }
       /* 极简模式:封面左移 6px —— 右缘距卡边从 14px 变 20px,与左侧 20px 内边距对称 */
       .wrap.mini .cover { margin-right: 6px; }
+      /* 展开态(base)上限:overflow 只在收缩态加,展开态不裁 chip 的悬停放大/投影 */
+      .wrap > .outputs { max-height: 54px; }
+      .wrap > .lower > .controls { max-height: 42px; }
+      .wrap > .lower > .progress-row { max-height: 22px; }
+      /* 展开态过渡(服务出 mini 的展开、面板/音量关闭后首页内容的回归):
+         进场曲线 + 进场时长;visibility 立即恢复(动画一开始就可见可交互)。 */
+      .wrap > .outputs,
+      .wrap > .now,
+      .wrap > .lower > .controls,
+      .wrap > .lower > .progress-row {
+        transition: opacity var(--dur-in) var(--anim-in), transform var(--dur-in) var(--anim-in),
+          max-height var(--dur-in) var(--anim-in), visibility 0s linear 0s; }
+      /* 收缩态(极简模式):控件先收得顺、淡出干脆;visibility 延迟到收完再切 */
       .wrap.mini > .outputs,
       .wrap.mini > .lower > .controls,
-      .wrap.mini > .lower > .progress-row { display: none; }
+      .wrap.mini > .lower > .progress-row {
+        max-height: 0; opacity: 0; overflow: hidden; visibility: hidden;
+        transition: opacity 0.25s var(--anim-out), max-height var(--dur-in) cubic-bezier(0.22, 1, 0.36, 1),
+          transform var(--dur-in) var(--anim-in), visibility 0s linear var(--dur-in); }
       .wrap.mini .lyricbox { height: 188px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
       .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
-      /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。
-         动效偏好:reduced-motion → 直切。 */
+      /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。 */
+      /* 动效偏好:reduced-motion → 全部直切(新加的面板/音量/极简过渡 + 歌词盒既有过渡),
+         状态 class 照常生效,只是不再播动画 —— 保持直切瞬时的旧行为。 */
       @media (prefers-reduced-motion: reduce) {
         .wrap.mini .lyricbox, .wrap:not(.mini) .lyricbox { transition: none !important; }
+        .wrap > .outputs, .wrap > .now,
+        .wrap > .lower > .controls, .wrap > .lower > .progress-row,
+        .wrap.mini > .outputs, .wrap.mini > .lower > .controls, .wrap.mini > .lower > .progress-row,
+        .vol-overlay, .panel { transition: none !important; }
       }
       .t-art { font-size: 13px; font-weight: 400; color: var(--fg-dim); }
       .progress-row { display: flex; align-items: center; gap: 8px; }
@@ -4204,17 +4254,35 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.vol-open { background: transparent; color: var(--ctl); }
       /* 下半区容器:音量遮罩以它为定位参照,盖住控件行 + 进度条 + 队列面板 */
       .lower { position: relative; display: flex; flex-direction: column; gap: 12px; }
-      /* 音量态「无感」隐身:不盖蒙层,而是把下半区各块设为 visibility:hidden。
-         用 visibility 而非 display:none —— 元素仍占原高度,卡片高度全程零跳变,
-         露出的就是卡片自身那层模糊封面背景,与上半部分同源,不可能有色差/边界。
-         队列展开时那块列表会留一片空白(刻意为之:保高度不抖)。 */
+      /* 音量态/面板态的首页内容隐身 + 带方向过渡(主理人拍板的「旧内容下沉淡出」):
+         不盖蒙层,而是把被盖住的块 opacity→0 + translateY(8px) 下沉淡出。
+         仍占位(没动 max-height/display)→ 卡片高度全程零跳变,露出的就是卡片自身
+         那层模糊封面背景,与上半部分同源,不可能有色差/边界。
+         下沉只给 8px(面板本体是 20px):面板是「主体」,旧内容只是退居幕后,位移浅一点
+         才有层次感。visibility 延迟到淡出结束再切 hidden —— 动画期间不挡新面板,
+         结束后真正不可点/不可 Tab。 */
+      .wrap.panelmode > .outputs,
+      .wrap.panelmode > .now,
+      .wrap.panelmode > .lower > .controls,
+      .wrap.panelmode > .lower > .progress-row,
       .lower.volmode > .controls,
-      .lower.volmode > .progress-row { visibility: hidden; }
+      .lower.volmode > .progress-row {
+        opacity: 0; transform: translateY(8px); visibility: hidden;
+        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
+          max-height var(--dur-out) var(--anim-out), visibility 0s linear var(--dur-out); }
       /* 音量面板层本身完全透明,只负责承载音量行 + 接管「点外部关闭」。
          inset:0 与 .lower 严格对齐,不再需要负 inset/padding 那套魔数补偿,
-         音量条左右端与下方 seek 天然重合。 */
+         音量条左右端与下方 seek 天然重合。
+         常驻渲染 + .open 开合:进场 = 从底部滑上来 + 淡入(0.3s);出场反向(0.22s)。
+         visibility 延迟切换技巧同上:关闭动画播完才真正隐藏,期间仍可点静音键/拖音量。 */
       .vol-overlay { position: absolute; inset: 0; z-index: 6;
-        display: flex; align-items: flex-start; }
+        display: flex; align-items: flex-start;
+        opacity: 0; transform: translateY(20px); visibility: hidden;
+        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
+          visibility 0s linear var(--dur-out); }
+      .vol-overlay.open { opacity: 1; transform: none; visibility: visible;
+        transition: opacity var(--dur-in) var(--anim-in), transform var(--dur-in) var(--anim-in),
+          visibility 0s linear 0s; }
       /* 静音键占最左 42px(顶替进度条左侧时间标签的位置),右侧留 42px 空位,
          使音量条与下方 seek 严格等长、左右端上下重合。gap 必须为 0。 */
       .vol-row { display: flex; align-items: center; gap: 0; width: 100%; height: 42px; }
@@ -4232,14 +4300,18 @@ class MusicFlowRemoteCard extends LitElement {
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
-      /* 面板无感全屏覆盖:打开队列/媒体库时,主视图(.outputs/.now/.lower)原地隐身(保留占位→卡高恒定),
-         面板透明铺满整张卡(inset:0),露出卡片自身模糊封面背景,与卡片同源、无边框。 */
-      .wrap.panelmode > .outputs { visibility: hidden; }
-      .wrap.panelmode > .now { visibility: hidden; }
-      .wrap.panelmode > .lower > .controls,
-      .wrap.panelmode > .lower > .progress-row { visibility: hidden; }
+      /* 面板无感全屏覆盖 + 带方向过渡(面板常驻 DOM,开合只切 .open):
+         关闭态 = 透明 + 下沉 20px + visibility:hidden(延迟 0.22s)—— 动画期间仍参与渲染,
+         结束后真正不可点/不可 Tab(等价旧条件渲染卸载);打开态 = 从底部滑上来 + 淡入(0.3s)。
+         首页内容(.outputs/.now/.lower 内两行)同步下沉淡出,见上方共享隐身规则。 */
       .panel { position: absolute; inset: 0; z-index: 5; background: transparent; border: none; border-radius: 0;
-        padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box; }
+        padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;
+        opacity: 0; transform: translateY(20px); visibility: hidden;
+        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
+          visibility 0s linear var(--dur-out); }
+      .panel.open { opacity: 1; transform: none; visibility: visible;
+        transition: opacity var(--dur-in) var(--anim-in), transform var(--dur-in) var(--anim-in),
+          visibility 0s linear 0s; }
       /* 流转播放页:沿用 .panel 的整卡 inset:0 覆盖(尺寸 = 卡片尺寸),头部固定,
          内容区 .tp-scroll 独立滚动 —— A4 的网格与 B 的上下隐形热区都以这层滚动容器为准。 */
       .tp-title { font-weight: 600; font-size: 14px; }

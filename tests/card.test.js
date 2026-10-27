@@ -1766,11 +1766,11 @@ describe("渲染", () => {
     expect(panel.querySelector(".panel-head .tp-title").textContent).toBe("流转播放");
     expect(panel.querySelector(".tp-scroll .tp-grid")).toBeTruthy();
 
-    // 点内容区空白 → 关闭,面板从 DOM 移除、退出整卡面板态
+    // 点内容区空白 → 关闭,面板退出 .open(常驻 DOM,靠 visibility 延迟切换播出场动画)、退出整卡面板态
     panel.querySelector(".tp-scroll").click();
     await c.updateComplete;
     expect(c._ui.transferOpen).toBe(false);
-    expect(c.shadowRoot.querySelector(".panel.transfer")).toBeFalsy();
+    expect(c.shadowRoot.querySelector(".panel.transfer.open")).toBeFalsy();
     expect(c.shadowRoot.querySelector(".wrap.panelmode")).toBeFalsy();
 
     // 再开 → 右上角关闭按钮返回首页
@@ -3210,5 +3210,106 @@ describe("流转按钮(∞)与圆形高亮底同心:静态守卫", () => {
     const di = ruleLine(dLines, TRANSFER);
     expect(di).toBeGreaterThan(-1);
     expect(dLines[di]).toContain("justify-content: center");
+  });
+});
+
+// ============ v2.8.11 面板/极简过渡动画:防回退静态守卫(QA 回归补强) ============
+// 背景:vol-overlay / 三个 .panel 从条件渲染改常驻 DOM + .open class 过渡;极简模式三块
+// 从 display:none 改 max-height 收缩。动画节奏为产品拍板的固定值(进场 0.3s
+// cubic-bezier(0.2,0,0,1) / 出场 0.22s cubic-bezier(0.4,0,1,1) / visibility 延迟切换),
+// 这里把曲线、时长、visibility 延迟、mini 三块 max-height 展开值全部钉进源码文本,
+// 任何一处被改掉(改时长/丢 visibility 延迟/丢展开上限)都会让守卫立即 FAIL。
+describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const SRC = () => repoFile("src/musicflow-remote-card.js");
+  const srcLines = () => readFileSync(SRC(), "utf8").split(/\r?\n/);
+  // 只认非注释行,防止注释里的示例串当锚点
+  const ruleLine = (lines, anchor) =>
+    lines.findIndex((l) => l.includes(anchor) && !/^\s*(\/\/|\/\*|\*)/.test(l));
+  // 从锚点行起拼出完整规则文本(到含 "}" 的行为止)
+  const ruleText = (lines, anchor) => {
+    const i = ruleLine(lines, anchor);
+    if (i < 0) return "";
+    let t = lines[i];
+    for (let j = i + 1; j < lines.length && !t.includes("}"); j++) t += " " + lines[j];
+    return t;
+  };
+
+  it(":host 动画节奏四变量存在且值正确(进场 0.3s ease-out / 出场 0.22s ease-in)", () => {
+    const lines = srcLines();
+    expect(ruleText(lines, "--anim-in: cubic-bezier")).toContain("--anim-in: cubic-bezier(0.2, 0, 0, 1);");
+    expect(ruleText(lines, "--anim-out: cubic-bezier")).toContain("--anim-out: cubic-bezier(0.4, 0, 1, 1);");
+    expect(ruleText(lines, "--dur-in: 0.3s")).toContain("--dur-in: 0.3s;");
+    expect(ruleText(lines, "--dur-out: 0.22s")).toContain("--dur-out: 0.22s;");
+  });
+
+  it(".vol-overlay.open 与 .panel.open 进场过渡:0.3s 缓出曲线 + visibility 立即恢复", () => {
+    const lines = srcLines();
+    for (const sel of [".vol-overlay.open {", ".panel.open {"]) {
+      const rule = ruleText(lines, sel);
+      expect(rule, sel + " 规则丢失").not.toBe("");
+      expect(rule).toContain("opacity var(--dur-in) var(--anim-in)");
+      expect(rule).toContain("transform var(--dur-in) var(--anim-in)");
+      expect(rule).toContain("visibility 0s linear 0s");
+    }
+  });
+
+  it(".vol-overlay 与 .panel 关闭态出场过渡:0.22s 缓入曲线 + visibility 延迟切换", () => {
+    const lines = srcLines();
+    for (const sel of [".vol-overlay { position: absolute;", ".panel { position: absolute;"]) {
+      const rule = ruleText(lines, sel);
+      expect(rule, sel + " 规则丢失").not.toBe("");
+      expect(rule).toContain("opacity: 0");
+      expect(rule).toContain("transform: translateY(20px)");
+      expect(rule).toContain("visibility: hidden");
+      expect(rule).toContain("opacity var(--dur-out) var(--anim-out)");
+      expect(rule).toContain("transform var(--dur-out) var(--anim-out)");
+      expect(rule).toContain("visibility 0s linear var(--dur-out)");
+    }
+  });
+
+  it("首页内容隐身规则(panelmode/volmode):opacity 0 + translateY(8px) 下沉淡出 + visibility 延迟", () => {
+    const lines = srcLines();
+    const rule = ruleText(lines, ".wrap.panelmode > .outputs,");
+    expect(rule).not.toBe("");
+    expect(rule).toContain(".wrap.panelmode > .now");
+    expect(rule).toContain(".lower.volmode > .controls");
+    expect(rule).toContain(".lower.volmode > .progress-row");
+    expect(rule).toContain("opacity: 0; transform: translateY(8px); visibility: hidden;");
+    expect(rule).toContain("visibility 0s linear var(--dur-out)");
+  });
+
+  it("极简模式三块 max-height 展开值被钉住(54/42/22px,防 0→none 不可插值回退)", () => {
+    const lines = srcLines();
+    expect(ruleText(lines, ".wrap > .outputs { max-height: 54px; }")).toContain("max-height: 54px;");
+    expect(ruleText(lines, ".wrap > .lower > .controls { max-height: 42px; }")).toContain("max-height: 42px;");
+    expect(ruleText(lines, ".wrap > .lower > .progress-row { max-height: 22px; }")).toContain("max-height: 22px;");
+    // 收缩态:三块一起 max-height:0 + 淡出 + visibility 延迟
+    const rule = ruleText(lines, ".wrap.mini > .outputs,");
+    expect(rule).toContain("max-height: 0");
+    expect(rule).toContain("opacity: 0");
+    expect(rule).toContain("visibility: hidden");
+    expect(rule).toContain("visibility 0s linear var(--dur-in)");
+  });
+
+  it("reduced-motion 覆盖全部新增过渡(面板/音量/极简收缩块直切)", () => {
+    const lines = srcLines();
+    // 第二个 reduce 块(第一个是 idlebg 的):锚定 .vol-overlay, .panel 直切行
+    const idxs = lines
+      .map((l, i) => [i, l])
+      .filter(([, l]) => l.includes(".vol-overlay, .panel { transition: none !important; }") && !/^\s*(\/\/|\/\*|\*)/.test(l))
+      .map(([i]) => i);
+    expect(idxs.length).toBe(1);
+    const block = lines.slice(idxs[0] - 8, idxs[0] + 2).join("\n");
+    expect(block).toContain(".wrap.mini > .outputs");
+    expect(block).toContain(".wrap.mini > .lower > .controls");
+    expect(block).toContain(".wrap.mini > .lower > .progress-row");
+    expect(block).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
   });
 });
