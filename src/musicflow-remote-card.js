@@ -39,8 +39,15 @@ const LYRIC_CUR_SLOT_MINI = 4;
 // 暂停去抖:isPlaying 变 false 后等这么久才退出极简。
 // 切歌/短暂暂停(几秒内恢复)都让 mini 保持;真暂停持续 20s 才回退完整模式。
 const MINI_PAUSE_REVERT_MS = 20000;
+// 极简歌词模式「退出后点击拦截窗口」(ms):退出 mini 后这段时间内的一击只用于退出极简模式,
+// 不落到刚(或正在)露出的控件上。根因:桌面 pointermove / 触屏 pointerenter 会在 click 之前
+// 就退出 mini,而控件退出瞬间即 visibility:visible —— 同一次手势的 click 于是命中播放/暂停等
+// 按钮,变成「点空白处却切了歌」。窗口取 300ms:盖住「移动即点」的连击,又短于人的反应时间,
+// 不影响看清控件后的正常点击。触屏另由 pointerType === "touch" 走「只在 click 退出」分支,
+// 长按也不漏(见 _onCardPointer / _onWrapClickCapture)。
+const MINI_CLICK_GUARD_MS = 300;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.11";
+const CARD_VERSION = "2.8.12";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -339,6 +346,10 @@ class MusicFlowRemoteCard extends LitElement {
     // 极简模式相关状态快照:仅当这些值真正变化时才重置计时(进度 tick 每秒都 requestUpdate,不能重置)
     this._miniWatch = { isPlaying: false, lyricCount: 0, showVolume: false, showQueue: false, showBrowser: false, transferOpen: false, songId: null };
     this._focusInside = false; // 键盘焦点是否在卡片内(焦点在内不进入极简,保证控件可达)
+    this._miniExitAt = 0; // 极简模式最近一次「退出」的时刻(ms):退出后一击只用于退出,不传给控件
+    // 极简模式点击守卫必须挂在 host 的捕获阶段:Lit 模板里同一个元素只能绑一个 @click,
+    // 而守卫要抢在控件 handler 之前执行;捕获阶段从 host 往影子根内部走,先于 .wrap 上任何监听。
+    this._hostClickCapture = (e) => this._onWrapClickCapture(e);
     this._miniFullH = 0; // 极简模式:完整模式下的 .wrap 实测高度(px),保证切换前后卡片尺寸一致
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
@@ -366,6 +377,8 @@ class MusicFlowRemoteCard extends LitElement {
     super.connectedCallback();
     // 控制台版本标记:核对实际加载的 JS 版本(排查 HACS/浏览器缓存导致的"更新了但没变化")
     if (typeof console !== "undefined") console.info(`[musicflow-remote-card] v${CARD_VERSION}`);
+    // 极简模式「一击只退出」守卫:捕获阶段注册在 host 上(见 _onWrapClickCapture)
+    this.addEventListener("click", this._hostClickCapture, true);
     if (this._ready && this._client && !this._client.connected) {
       this._client.connect();
     }
@@ -373,6 +386,7 @@ class MusicFlowRemoteCard extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.removeEventListener("click", this._hostClickCapture, true);
     this._teardown();
   }
 
@@ -1372,6 +1386,7 @@ class MusicFlowRemoteCard extends LitElement {
     if (this._ui.mini === on) return;
     if (on && this._focusInside) return; // 键盘焦点在卡片内:不进入极简,控件保持可达
     if (on && !this._canMini()) return; // 条件不满足时拒入,等可进入时机(如切歌后)
+    if (!on) this._miniExitAt = Date.now(); // 退出后短暂拦截一击(见 MINI_CLICK_GUARD_MS)
     this._ui.mini = on;
     this.requestUpdate();
   }
@@ -1393,9 +1408,26 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // pointerenter / pointermove / click / touch 统一入口:恢复完整模式并重新开始计时。
-  _onCardPointer() {
+  _onCardPointer(e) {
+    // 触屏(touch)不在按下/滑动阶段退出极简:手指一按下 pointerenter 就退出,同一次手势末尾的
+    // click 会命中刚露出(或正在淡入)的控件 —— 结果是「点空白却切了歌」。触屏改由 click 捕获
+    // 阶段统一退出并吞掉这一击(见 _onWrapClickCapture),长按同样不漏。
+    if (e && e.pointerType === "touch") { this._resetIdleTimer(); return; }
     if (this._ui.mini) this._setMini(false);
     this._resetIdleTimer();
+  }
+
+  // 极简歌词模式的「一击只退出」守卫(在 .wrap 的捕获阶段执行,先于任何控件的 click handler):
+  // 极简模式下控件虽然已收起淡出,但收缩动画期间仍 visible,退出瞬间更是立刻可交互 ——
+  // 同一手势里的 click 会穿透到播放/暂停/收藏/音量等按钮上。这里拦下它:只退出极简模式,
+  // 并重置空闲计时,这一击不产生任何其它副作用。
+  _onWrapClickCapture(e) {
+    const justExited = !!this._miniExitAt && Date.now() - this._miniExitAt <= MINI_CLICK_GUARD_MS;
+    if (!this._ui.mini && !justExited) return;
+    if (justExited) this._miniExitAt = 0; // 只拦一击,窗口过后恢复正常可点
+    e.preventDefault();
+    e.stopPropagation(); // 捕获阶段截断:目标按钮的 handler 根本不会执行
+    this._onCardPointer();
   }
 
   // 键盘焦点进入卡片(如 Tab 到进度条/控件):恢复完整模式,保证控件可达;
@@ -3991,13 +4023,14 @@ class MusicFlowRemoteCard extends LitElement {
     return css`
       :host { display: block;
         /* 面板/极简模式过渡的全局节奏(柔和档,主理人拍板):
-           进场 = 缓出曲线 cubic-bezier(0.2,0,0,1) 300ms —— 起步快收尾稳,面板像从底部滑上来;
-           出场 = 缓入曲线 cubic-bezier(0.4,0,1,1) 220ms —— 出场比进场短是 Material/HIG 通用做法,
-           用户关闭时意图已明确,不需要再铺垫情绪。 */
+           进场 = 缓出曲线 cubic-bezier(0.2,0,0,1) 600ms —— 起步快收尾稳,面板像从底部滑上来;
+           出场 = 缓入曲线 cubic-bezier(0.4,0,1,1) 440ms —— 出场比进场短是 Material/HIG 通用做法,
+           用户关闭时意图已明确,不需要再铺垫情绪。
+           (v2.8.12:主理人反馈 300/220ms 偏快,整套节奏翻倍 —— 只改这两个变量即可全局生效。) */
         --anim-in: cubic-bezier(0.2, 0, 0, 1);
         --anim-out: cubic-bezier(0.4, 0, 1, 1);
-        --dur-in: 0.3s;
-        --dur-out: 0.22s; }
+        --dur-in: 0.6s;
+        --dur-out: 0.44s; }
       ha-card {
         /* 颜色变量:默认浅色文字(暗背景);.dark 时整体切深色文字(亮背景封面) */
         --fg: #ffffff;
@@ -4159,10 +4192,10 @@ class MusicFlowRemoteCard extends LitElement {
       .lyricbox { position: absolute; left: 0; right: 0; top: 24px; height: 100px; overflow: hidden; z-index: 0;
         -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%);
         mask-image: linear-gradient(180deg, transparent 0%, #000 16%, #000 84%, transparent 100%); }
-      .lyricbox-track { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
+      .lyricbox-track { transition: transform 0.9s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
       .lyricbox-line { height: 20px; line-height: 20px; font-size: 13px; color: var(--fg-dim); opacity: 0.55;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        transition: color 0.3s ease, opacity 0.3s ease; }
+        transition: color 0.6s ease, opacity 0.6s ease; }
       .lyricbox-line.cur { color: #ffd400; opacity: 1; }
       /* 浅色封面(整卡切深色文字)时金色对比不足,换成深琥珀 */
       ha-card.dark .lyricbox-line.cur { color: #a3690a; }
@@ -4176,8 +4209,8 @@ class MusicFlowRemoteCard extends LitElement {
          .outputs ≈52px(chip 30px + out-list 上下各 10px padding)、.controls = 42px、
          .progress-row ≈20px;上限略放宽 2px 防字体测量差裁掉内容。残余的 flex gap
          (.wrap/.lower 各 12px)由 --mini-h 地板(min-height)吸收,不会撑高卡片。
-         进 mini:控件先收(0.3s,贴近歌词盒既有的 cubic-bezier(0.22,1,0.36,1) 观感),
-         歌词盒 0.42s 扩展(自带 0.18s delay)跟进;出 mini 反向(歌词盒 0.3s 先收,
+         进 mini:控件先收(0.6s,贴近歌词盒既有的 cubic-bezier(0.22,1,0.36,1) 观感),
+         歌词盒 0.84s 扩展(自带 0.36s delay)跟进;出 mini 反向(歌词盒 0.6s 先收,
          控件同步展开)。visibility 延迟到收缩结束再切 hidden —— 动画期间仍参与渲染,
          结束后真正不可点/不可 Tab,等价旧 display:none 的可达性行为。 */
       .wrap.mini { min-height: var(--mini-h, 250px); overflow: hidden; padding-top: 24px; padding-left: 20px; }
@@ -4200,10 +4233,10 @@ class MusicFlowRemoteCard extends LitElement {
       .wrap.mini > .lower > .controls,
       .wrap.mini > .lower > .progress-row {
         max-height: 0; opacity: 0; overflow: hidden; visibility: hidden;
-        transition: opacity 0.25s var(--anim-out), max-height var(--dur-in) cubic-bezier(0.22, 1, 0.36, 1),
+        transition: opacity 0.5s var(--anim-out), max-height var(--dur-in) cubic-bezier(0.22, 1, 0.36, 1),
           transform var(--dur-in) var(--anim-in), visibility 0s linear var(--dur-in); }
-      .wrap.mini .lyricbox { height: 188px; transition: height 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.18s; }
-      .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.3s ease; }
+      .wrap.mini .lyricbox { height: 188px; transition: height 0.84s cubic-bezier(0.22, 1, 0.36, 1) 0.36s; }
+      .wrap:not(.mini) .lyricbox { height: 100px; transition: height 0.6s ease; }
       /* 键盘可达性:焦点在卡片内时由 JS(focusin/focusout)恢复完整模式并暂停空闲隐藏。 */
       /* 动效偏好:reduced-motion → 全部直切(新加的面板/音量/极简过渡 + 歌词盒既有过渡),
          状态 class 照常生效,只是不再播动画 —— 保持直切瞬时的旧行为。 */
@@ -4273,7 +4306,7 @@ class MusicFlowRemoteCard extends LitElement {
       /* 音量面板层本身完全透明,只负责承载音量行 + 接管「点外部关闭」。
          inset:0 与 .lower 严格对齐,不再需要负 inset/padding 那套魔数补偿,
          音量条左右端与下方 seek 天然重合。
-         常驻渲染 + .open 开合:进场 = 从底部滑上来 + 淡入(0.3s);出场反向(0.22s)。
+         常驻渲染 + .open 开合:进场 = 从底部滑上来 + 淡入(--dur-in 0.6s);出场反向(--dur-out 0.44s)。
          visibility 延迟切换技巧同上:关闭动画播完才真正隐藏,期间仍可点静音键/拖音量。 */
       .vol-overlay { position: absolute; inset: 0; z-index: 6;
         display: flex; align-items: flex-start;
@@ -4301,8 +4334,8 @@ class MusicFlowRemoteCard extends LitElement {
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
       /* 面板无感全屏覆盖 + 带方向过渡(面板常驻 DOM,开合只切 .open):
-         关闭态 = 透明 + 下沉 20px + visibility:hidden(延迟 0.22s)—— 动画期间仍参与渲染,
-         结束后真正不可点/不可 Tab(等价旧条件渲染卸载);打开态 = 从底部滑上来 + 淡入(0.3s)。
+         关闭态 = 透明 + 下沉 20px + visibility:hidden(延迟 var(--dur-out) 0.44s)—— 动画期间仍参与渲染,
+         结束后真正不可点/不可 Tab(等价旧条件渲染卸载);打开态 = 从底部滑上来 + 淡入(0.6s)。
          首页内容(.outputs/.now/.lower 内两行)同步下沉淡出,见上方共享隐身规则。 */
       .panel { position: absolute; inset: 0; z-index: 5; background: transparent; border: none; border-radius: 0;
         padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;

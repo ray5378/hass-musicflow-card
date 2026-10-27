@@ -3215,10 +3215,10 @@ describe("流转按钮(∞)与圆形高亮底同心:静态守卫", () => {
 
 // ============ v2.8.11 面板/极简过渡动画:防回退静态守卫(QA 回归补强) ============
 // 背景:vol-overlay / 三个 .panel 从条件渲染改常驻 DOM + .open class 过渡;极简模式三块
-// 从 display:none 改 max-height 收缩。动画节奏为产品拍板的固定值(进场 0.3s
-// cubic-bezier(0.2,0,0,1) / 出场 0.22s cubic-bezier(0.4,0,1,1) / visibility 延迟切换),
-// 这里把曲线、时长、visibility 延迟、mini 三块 max-height 展开值全部钉进源码文本,
-// 任何一处被改掉(改时长/丢 visibility 延迟/丢展开上限)都会让守卫立即 FAIL。
+// 从 display:none 改 max-height 收缩。动画节奏为产品拍板的固定值(进场 cubic-bezier(0.2,0,0,1) /
+// 出场 cubic-bezier(0.4,0,1,1) / visibility 延迟切换),这里把曲线、时长、visibility 延迟、
+// mini 三块 max-height 展开值全部钉进源码文本,任何一处被改掉都会让守卫立即 FAIL。
+// (v2.8.12 起时长翻倍:0.3s→0.6s、0.22s→0.44s,守卫值同步更新。)
 describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
   const repoFile = (rel) => {
     const fromRoot = resolve(process.cwd(), rel);
@@ -3241,15 +3241,15 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     return t;
   };
 
-  it(":host 动画节奏四变量存在且值正确(进场 0.3s ease-out / 出场 0.22s ease-in)", () => {
+  it(":host 动画节奏四变量存在且值正确(进场 0.6s ease-out / 出场 0.44s ease-in,v2.8.12 翻倍)", () => {
     const lines = srcLines();
     expect(ruleText(lines, "--anim-in: cubic-bezier")).toContain("--anim-in: cubic-bezier(0.2, 0, 0, 1);");
     expect(ruleText(lines, "--anim-out: cubic-bezier")).toContain("--anim-out: cubic-bezier(0.4, 0, 1, 1);");
-    expect(ruleText(lines, "--dur-in: 0.3s")).toContain("--dur-in: 0.3s;");
-    expect(ruleText(lines, "--dur-out: 0.22s")).toContain("--dur-out: 0.22s;");
+    expect(ruleText(lines, "--dur-in: 0.6s")).toContain("--dur-in: 0.6s;");
+    expect(ruleText(lines, "--dur-out: 0.44s")).toContain("--dur-out: 0.44s;");
   });
 
-  it(".vol-overlay.open 与 .panel.open 进场过渡:0.3s 缓出曲线 + visibility 立即恢复", () => {
+  it(".vol-overlay.open 与 .panel.open 进场过渡:var(--dur-in) 缓出曲线 + visibility 立即恢复", () => {
     const lines = srcLines();
     for (const sel of [".vol-overlay.open {", ".panel.open {"]) {
       const rule = ruleText(lines, sel);
@@ -3260,7 +3260,7 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     }
   });
 
-  it(".vol-overlay 与 .panel 关闭态出场过渡:0.22s 缓入曲线 + visibility 延迟切换", () => {
+  it(".vol-overlay 与 .panel 关闭态出场过渡:var(--dur-out) 缓入曲线 + visibility 延迟切换", () => {
     const lines = srcLines();
     for (const sel of [".vol-overlay { position: absolute;", ".panel { position: absolute;"]) {
       const rule = ruleText(lines, sel);
@@ -3311,5 +3311,138 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     expect(block).toContain(".wrap.mini > .lower > .controls");
     expect(block).toContain(".wrap.mini > .lower > .progress-row");
     expect(block).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
+  });
+});
+
+// ============ v2.8.12 极简模式「一击只退出」+ 动画节奏翻倍:行为 + 静态守卫 ============
+// 背景(主理人实机反馈):极简歌词模式下点空白处会误触发播放/暂停等控件。
+// 根因:桌面 pointermove、触屏 pointerenter 都在 click 之前就把 mini 退掉了,而控件退出瞬间
+// 立刻 visibility:visible —— 同一次手势末尾的 click 于是命中刚露出的按钮。修复两步:
+//   1) 触屏(pointerType === "touch")不在按下/滑动阶段退出,留到 click 统一退出;
+//   2) host 捕获阶段的守卫 _onWrapClickCapture:极简中/刚退出(MINI_CLICK_GUARD_MS 窗口内)
+//      的那一击被吞掉(stopPropagation 截断,控件 handler 根本不执行),只退出极简模式。
+// 守卫分两层:行为测试直接驱动这两个方法(真回归),静态守卫把时长翻倍后的数值钉死。
+describe("v2.8.12 极简模式:一击只退出(点击守卫)", () => {
+  const mkEvt = () => ({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+  const miniCard = () => {
+    const c = mkCard();
+    c._ui.isPlaying = true;
+    c._ui.lyrics = [{ time: 0, text: "x" }];
+    return c;
+  };
+
+  it("极简模式下的点击被吞掉:只退出极简,不落到任何控件", () => {
+    const c = miniCard();
+    c._setMini(true);
+    expect(c._ui.mini).toBe(true);
+    const e = mkEvt();
+    c._onWrapClickCapture(e);
+    expect(e.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(e.preventDefault).toHaveBeenCalledTimes(1);
+    expect(c._ui.mini).toBe(false); // 仅仅退出极简,没有其它副作用
+  });
+
+  it("退出后窗口内那一击同样只用于退出;只拦一击,窗口过后放行", () => {
+    const c = miniCard();
+    c._miniExitAt = Date.now(); // 刚退出(桌面 pointermove 抢在 click 之前)
+    const e1 = mkEvt();
+    c._onWrapClickCapture(e1);
+    expect(e1.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(c._miniExitAt).toBe(0); // 拦完即清,不会持续吞点击
+    const e2 = mkEvt();
+    c._onWrapClickCapture(e2);
+    expect(e2.stopPropagation).not.toHaveBeenCalled();
+    // 超出窗口(手势早就结束)→ 正常放行
+    c._miniExitAt = Date.now() - 5000;
+    const e3 = mkEvt();
+    c._onWrapClickCapture(e3);
+    expect(e3.stopPropagation).not.toHaveBeenCalled();
+  });
+
+  it("非极简状态(不在窗口内)的点击一律放行,不干扰正常操作", () => {
+    const c = mkCard();
+    const e = mkEvt();
+    c._onWrapClickCapture(e);
+    expect(e.stopPropagation).not.toHaveBeenCalled();
+    expect(e.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("_setMini(false) 会打上退出时刻戳(守卫窗口的触发前提)", () => {
+    const c = miniCard();
+    expect(c._miniExitAt).toBe(0);
+    c._setMini(true);
+    expect(c._miniExitAt).toBe(0); // 进入极简不打戳
+    c._setMini(false);
+    expect(c._miniExitAt).toBeGreaterThan(0);
+    // 已经退出时再调用不刷新戳,避免一直移动鼠标把窗口无限延长
+    const t = c._miniExitAt;
+    c._setMini(false);
+    expect(c._miniExitAt).toBe(t);
+  });
+
+  it("触屏:按下/滑动阶段不退出极简,交给 click 守卫统一退出;鼠标仍保持悬停即退出", () => {
+    const c = miniCard();
+    c._setMini(true);
+    c._onCardPointer({ pointerType: "touch" });
+    expect(c._ui.mini).toBe(true); // 触屏不在 hover 阶段退出(否则随后的 tap 会命中控件)
+    const e = mkEvt();
+    c._onWrapClickCapture(e);
+    expect(c._ui.mini).toBe(false);
+    expect(e.stopPropagation).toHaveBeenCalledTimes(1);
+
+    const c2 = miniCard();
+    c2._setMini(true);
+    c2._onCardPointer({ pointerType: "mouse" });
+    expect(c2._ui.mini).toBe(false); // 鼠标悬停即唤出控件(既有行为不变)
+  });
+});
+
+describe("v2.8.12 动画节奏翻倍:防回退静态守卫", () => {
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const srcText = () => readFileSync(repoFile("src/musicflow-remote-card.js"), "utf8");
+  const codeLine = (needle) => {
+    const hit = srcText().split(/\r?\n/).filter((l) => l.includes(needle) && !/^\s*(\/\/|\/\*|\*)/.test(l));
+    expect(hit.length, "锚点必须唯一: " + needle).toBe(1);
+    return hit[0];
+  };
+
+  it("极简模式歌词盒高度过渡翻倍(0.42s→0.84s、delay 0.18s→0.36s、收缩 0.3s→0.6s)", () => {
+    expect(codeLine(".wrap.mini .lyricbox { height: 188px;")).toContain("height 0.84s cubic-bezier(0.22, 1, 0.36, 1) 0.36s");
+    expect(codeLine(".wrap:not(.mini) .lyricbox { height: 100px;")).toContain("height 0.6s ease");
+  });
+
+  it("歌词轨道滚动与当前行高亮过渡同步翻倍(0.45s→0.9s / 0.3s→0.6s)", () => {
+    expect(codeLine(".lyricbox-track { transition:")).toContain("transform 0.9s cubic-bezier(0.4, 0, 0.2, 1)");
+    expect(codeLine("transition: color 0.6s ease, opacity 0.6s ease; }")).toContain("color 0.6s ease, opacity 0.6s ease");
+  });
+
+  it("极简模式三块淡出时长翻倍(0.25s→0.5s),收缩/展开仍走全局变量", () => {
+    const lines = srcText().split(/\r?\n/);
+    const idx = lines
+      .map((l, i) => [i, l])
+      .filter(([, l]) => l.includes("transition: opacity 0.5s var(--anim-out)") && !/^\s*(\/\/|\/\*|\*)/.test(l))
+      .map(([i]) => i);
+    expect(idx.length, "锚点必须唯一").toBe(1);
+    // 规则跨两行:连同下一行一起断言
+    const rule = lines.slice(idx[0], idx[0] + 2).join(" ");
+    expect(rule).toContain("max-height var(--dur-in)");
+    expect(rule).toContain("visibility 0s linear var(--dur-in)");
+  });
+
+  it("点击守卫接线完整:常量 + 捕获阶段注册/注销 + stopPropagation 截断", () => {
+    const t = srcText();
+    expect(t).toContain("const MINI_CLICK_GUARD_MS = 300;");
+    expect(t).toContain('this.addEventListener("click", this._hostClickCapture, true);');
+    expect(t).toContain('this.removeEventListener("click", this._hostClickCapture, true);');
+    expect(t).toContain("this._hostClickCapture = (e) => this._onWrapClickCapture(e);");
+    expect(codeLine("const justExited =")).toContain("MINI_CLICK_GUARD_MS");
+    // 触屏分支:pointerType === "touch" 早退,不在 hover 阶段退出极简
+    expect(codeLine('if (e && e.pointerType === "touch")')).toContain("_resetIdleTimer()");
   });
 });
