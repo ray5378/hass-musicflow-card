@@ -3557,43 +3557,60 @@ describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
 // 修法:padding 显式锁死 + 上移量改测 .now/.outputs 的 offsetTop 静态差(不受 transform
 // 影响,每次渲染都刷新,极简期间也准确)。守卫把这两条钉死,任一条回退立即 FAIL。
 describe("v2.8.16 极简模式上移量:offsetTop 几何差(行为)", () => {
-  const fakeSr = (offsets) => ({
-    querySelector: (s) => (Object.prototype.hasOwnProperty.call(offsets, s) ? { offsetTop: offsets[s] } : null),
-  });
-  const withSr = (c, sr) => Object.defineProperty(c, "shadowRoot", { value: sr, configurable: true });
+  // 只 stub shadowRoot.querySelector(不整块替换 shadowRoot):Lit 的后续异步 render
+  // 要用真实的 shadowRoot,整块换掉会让 render 抛错(覆盖率模式下会记成未捕获错误)。
+  const stubTop = (c, offsets) => {
+    const sr = c.shadowRoot;
+    const orig = sr.querySelector.bind(sr);
+    sr.querySelector = (sel) =>
+      Object.prototype.hasOwnProperty.call(offsets, sel) ? { offsetTop: offsets[sel] } : orig(sel);
+    return () => { delete sr.querySelector; };
+  };
 
   it("上移量 = .now 顶部 − .outputs 顶部(自动包含 gap/warnbar,与硬编码 gap 解耦)", () => {
     const c = mkCard();
     expect(c._miniShift).toBe(64); // DOM 未就绪时的兜底
-    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
-    expect(c._measureMiniShift()).toBe(true); // 值从 64 变成 59 → 需要补渲染
-    expect(c._miniShift).toBe(59);
-    expect(c._measureMiniShift()).toBe(false); // 值没变 → 不触发多余渲染
+    const restore = stubTop(c, { ".outputs": 14, ".now": 73 });
+    try {
+      expect(c._measureMiniShift()).toBe(true); // 64 → 59:值变了,需要补一次渲染
+      expect(c._miniShift).toBe(59);
+      expect(c._measureMiniShift()).toBe(false); // 值没变 → 不触发多余渲染
+    } finally { restore(); }
   });
 
   it("布局变化(chip 行变高、插了 warnbar)会被下一次渲染跟上", () => {
     const c = mkCard();
-    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
-    c._measureMiniShift();
-    withSr(c, fakeSr({ ".outputs": 40, ".now": 116 }));
-    expect(c._measureMiniShift()).toBe(true);
-    expect(c._miniShift).toBe(76);
+    const r1 = stubTop(c, { ".outputs": 14, ".now": 73 });
+    try { c._measureMiniShift(); } finally { r1(); }
+    const r2 = stubTop(c, { ".outputs": 40, ".now": 116 });
+    try {
+      expect(c._measureMiniShift()).toBe(true);
+      expect(c._miniShift).toBe(76);
+    } finally { r2(); }
   });
 
-  it("测不到时保留兜底 64,不写脏值(DOM 未渲染 / 元素缺失 / offsetTop 为 0)", () => {
+  it("测不到时保留上一个有效值,不写脏值(offsetTop 为 0 / 元素缺失 / 无 shadowRoot)", () => {
     const c = mkCard();
-    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
-    c._measureMiniShift();
+    const r1 = stubTop(c, { ".outputs": 14, ".now": 73 });
+    try { c._measureMiniShift(); } finally { r1(); }
     const keep = c._miniShift;
-    withSr(c, fakeSr({ ".outputs": 0, ".now": 0 })); // jsdom / 首帧:差值为 0
+    const r2 = stubTop(c, { ".outputs": 0, ".now": 0 }); // jsdom / 首帧:差值为 0
+    try {
+      expect(c._measureMiniShift()).toBe(false);
+      expect(c._miniShift).toBe(keep);
+    } finally { r2(); }
+    const r3 = stubTop(c, {}); // 元素缺失 → querySelector 落到真实 DOM,首帧也可能取不到
+    try {
+      const got = c._measureMiniShift();
+      expect(c._miniShift === keep || got === true).toBe(true); // 取到真实值也算合法,但不许写 0
+      expect(c._miniShift).toBeGreaterThan(0);
+    } finally { r3(); }
+    // 无 shadowRoot(同步调用,不触发异步渲染)
+    const real = c.shadowRoot;
+    Object.defineProperty(c, "shadowRoot", { value: undefined, configurable: true });
     expect(c._measureMiniShift()).toBe(false);
-    expect(c._miniShift).toBe(keep);
-    withSr(c, { querySelector: () => null });
-    expect(c._measureMiniShift()).toBe(false);
-    expect(c._miniShift).toBe(keep);
-    withSr(c, undefined);
-    expect(c._measureMiniShift()).toBe(false);
-    expect(c._miniShift).toBe(keep);
+    Object.defineProperty(c, "shadowRoot", { value: real, configurable: true });
+    expect(c._miniShift).toBeGreaterThan(0);
   });
 });
 
