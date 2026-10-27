@@ -3506,9 +3506,13 @@ describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
     expect(r).not.toContain("margin");
   });
 
-  it(".wrap.mini 只保留 overflow:不得出现任何改变占位的属性", () => {
-    const r = ruleLine(".wrap.mini { overflow: hidden; }");
-    for (const bad of ["min-height", "max-height", "height:", "padding", "margin", "display", "gap"]) {
+  it(".wrap.mini 只保留 overflow + 锁死 padding(其余占位属性一律禁止)", () => {
+    const r = ruleLine(".wrap.mini { overflow: hidden; padding: 14px; }");
+    // padding 必须显式锁死:极简时 .outputs 向上移出会溢出到容器 block-start,
+    // Chrome 会吃掉 .wrap 的上下 padding(实测 14px→3px,整卡矮 20px、内容上移 11px),
+    // 歌词/封面于是顶到卡片上边缘。锁成与完整模式同值后高度与上移基准都不漂移。
+    expect(r).toContain("padding: 14px");
+    for (const bad of ["min-height", "max-height", "height:", "margin", "display", "gap"]) {
       expect(r, "不得出现 " + bad).not.toContain(bad);
     }
   });
@@ -3532,11 +3536,103 @@ describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
     expect(ruleLine(".panel { position: absolute;")).toContain("position: absolute");
   });
 
-  it("--mini-shift 由 JS 实测注入(切换器行高度 + gap),--mini-h 已彻底移除", () => {
+  it("--mini-shift 由 JS 实测注入(.now 与 .outputs 的静态布局差),--mini-h 已彻底移除", () => {
     const t = code().join("\n");
-    expect(t).toContain("this._miniShift = o.offsetHeight + 12;");
+    // v2.8.16:不再用 offsetHeight + 硬编码 gap,改测 offsetTop 差值(不受 transform 影响)
+    expect(t).toContain("const diff = now.offsetTop - outputs.offsetTop;");
+    expect(t).toContain("_measureMiniShift()");
     expect(t).toContain("--mini-shift:${this._miniShift}px");
     expect(t).not.toContain("var(--mini-h");
     expect(t).not.toContain("_miniFullH");
+  });
+});
+
+// ============ v2.8.16 极简模式「两种位置状态」根治:行为 + 静态守卫 ============
+// 主理人实机反馈:极简模式下歌词/封面有两种位置 —— 打开页面自动进入是对的,
+// 点击/选择过之后再进入就「左右和上面贴着卡片边缘」。无头 Chrome 实测定位到两条硬伤:
+//   ① .wrap.mini 的上下 padding 被 Chrome 从 14px 吃掉到 3px(切换器行向上移出会溢出到
+//      容器 block-start 之外)⇒ 整卡矮 20px、所有内容上移 11px,歌词/封面因此顶到卡边;
+//   ② 上移量用 offsetHeight + 硬编码 12px gap 近似,且只在「非 mini」时测 → 值滞后一帧,
+//      不同进入路径拿到的值不同(两种位置状态的直接成因)。
+// 修法:padding 显式锁死 + 上移量改测 .now/.outputs 的 offsetTop 静态差(不受 transform
+// 影响,每次渲染都刷新,极简期间也准确)。守卫把这两条钉死,任一条回退立即 FAIL。
+describe("v2.8.16 极简模式上移量:offsetTop 几何差(行为)", () => {
+  const fakeSr = (offsets) => ({
+    querySelector: (s) => (Object.prototype.hasOwnProperty.call(offsets, s) ? { offsetTop: offsets[s] } : null),
+  });
+  const withSr = (c, sr) => Object.defineProperty(c, "shadowRoot", { value: sr, configurable: true });
+
+  it("上移量 = .now 顶部 − .outputs 顶部(自动包含 gap/warnbar,与硬编码 gap 解耦)", () => {
+    const c = mkCard();
+    expect(c._miniShift).toBe(64); // DOM 未就绪时的兜底
+    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
+    expect(c._measureMiniShift()).toBe(true); // 值从 64 变成 59 → 需要补渲染
+    expect(c._miniShift).toBe(59);
+    expect(c._measureMiniShift()).toBe(false); // 值没变 → 不触发多余渲染
+  });
+
+  it("布局变化(chip 行变高、插了 warnbar)会被下一次渲染跟上", () => {
+    const c = mkCard();
+    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
+    c._measureMiniShift();
+    withSr(c, fakeSr({ ".outputs": 40, ".now": 116 }));
+    expect(c._measureMiniShift()).toBe(true);
+    expect(c._miniShift).toBe(76);
+  });
+
+  it("测不到时保留兜底 64,不写脏值(DOM 未渲染 / 元素缺失 / offsetTop 为 0)", () => {
+    const c = mkCard();
+    withSr(c, fakeSr({ ".outputs": 14, ".now": 73 }));
+    c._measureMiniShift();
+    const keep = c._miniShift;
+    withSr(c, fakeSr({ ".outputs": 0, ".now": 0 })); // jsdom / 首帧:差值为 0
+    expect(c._measureMiniShift()).toBe(false);
+    expect(c._miniShift).toBe(keep);
+    withSr(c, { querySelector: () => null });
+    expect(c._measureMiniShift()).toBe(false);
+    expect(c._miniShift).toBe(keep);
+    withSr(c, undefined);
+    expect(c._measureMiniShift()).toBe(false);
+    expect(c._miniShift).toBe(keep);
+  });
+});
+
+describe("v2.8.16 极简模式:padding 锁死 + 测量接线(防回退静态守卫)", () => {
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const code = () =>
+    readFileSync(repoFile("src/musicflow-remote-card.js"), "utf8")
+      .split(/\r?\n/)
+      .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l));
+  const one = (needle) => {
+    const hit = code().filter((l) => l.includes(needle));
+    expect(hit.length, "锚点必须唯一: " + needle).toBe(1);
+    return hit[0];
+  };
+
+  it(".wrap.mini 显式锁死 padding: 14px(与完整模式同值)", () => {
+    expect(one(".wrap.mini { overflow: hidden; padding: 14px; }")).toContain("padding: 14px");
+  });
+
+  it("上移量用 offsetTop 静态差,不用 rect(rect 会被正在播放的 transform 带偏)", () => {
+    const t = code().join("\n");
+    expect(one("const diff = now.offsetTop - outputs.offsetTop;")).toContain("offsetTop");
+    expect(t).not.toContain("offsetHeight + 12");
+    expect(t).not.toContain("getBoundingClientRect().top - outputs");
+  });
+
+  it("测量接线完整:每次渲染都测 + 值变补渲染 + 进入前再测一次", () => {
+    const t = code().join("\n");
+    expect(t).toContain("if (this._measureMiniShift()) this.requestUpdate();");
+    expect(t).toContain("if (on) this._measureMiniShift();");
+  });
+
+  it("兜底值 64 仍在(DOM 未就绪时不至于上移 0)", () => {
+    expect(one("this._miniShift = 64;")).toContain("64");
   });
 });

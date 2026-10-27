@@ -47,7 +47,7 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 长按也不漏(见 _onCardPointer / _onWrapClickCapture)。
 const MINI_CLICK_GUARD_MS = 300;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.15";
+const CARD_VERSION = "2.8.16";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -350,7 +350,7 @@ class MusicFlowRemoteCard extends LitElement {
     // 极简模式点击守卫必须挂在 host 的捕获阶段:Lit 模板里同一个元素只能绑一个 @click,
     // 而守卫要抢在控件 handler 之前执行;捕获阶段从 host 往影子根内部走,先于 .wrap 上任何监听。
     this._hostClickCapture = (e) => this._onWrapClickCapture(e);
-    this._miniShift = 0; // 极简模式:切换器行高度 + gap(px),进 mini 时歌词/封面上移这么多
+    this._miniShift = 64; // 极简模式上移量(px):.now 顶部 − .outputs 顶部的静态布局差;64 为 DOM 未就绪时的兜底
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
     this._seekAckAtMs = 0; // seek REST 响应返回时刻(ms)。服务端 seek 同步语义:响应=锚点已落位,
@@ -1382,10 +1382,33 @@ class MusicFlowRemoteCard extends LitElement {
     return !!(u.isPlaying && !u.showVolume && !u.showQueue && !u.showBrowser && !u.transferOpen && u.lyrics && u.lyrics.length);
   }
 
+  // 极简模式上移量 = 「.now 顶部 − .outputs 顶部」的**静态布局差**。
+  // 🔴 为什么用 offsetTop 而不是 offsetHeight + 硬编码 gap / getBoundingClientRect:
+  //   · offsetHeight + 12 是近似值:gap 一旦不是 12、或两行之间插了 .warnbar,位移就偏;
+  //   · rect 会被正在播放的进出场 transform 带偏 —— 动画中途测量必错;
+  //   · offsetTop 是「布局位置」,与 transform 无关 ⇒ **极简进行中测量也准确**。
+  // 因此这里每次渲染都测(不再限制「非 mini 才测」):--mini-shift 永远是当前的真实差值,
+  // 不存在「上一次进入时留下的旧值」—— 这正是 v2.8.15 出现两种位置状态的根因:
+  // 自动进入用的是加载完成后测得的值(对),点击后进入用的是上一次的旧值(错)。
+  // 上移后 .now 顶部与 .outputs 顶部严格重合,不会上移过头把歌词/封面顶出卡片。
+  _measureMiniShift() {
+    const sr = this.shadowRoot;
+    if (!sr) return false;
+    const outputs = sr.querySelector(".outputs");
+    const now = sr.querySelector(".now");
+    if (!outputs || !now) return false;
+    const diff = now.offsetTop - outputs.offsetTop;
+    if (!Number.isFinite(diff) || diff <= 0) return false; // 测不到(DOM 未就绪)时保留兜底 64
+    if (diff === this._miniShift) return false;
+    this._miniShift = diff;
+    return true; // 值变了:调用方需要补一次渲染,把新值写进 --mini-shift
+  }
+
   _setMini(on) {
     if (this._ui.mini === on) return;
     if (on && this._focusInside) return; // 键盘焦点在卡片内:不进入极简,控件保持可达
     if (on && !this._canMini()) return; // 条件不满足时拒入,等可进入时机(如切歌后)
+    if (on) this._measureMiniShift(); // 进入前用「当前完整模式布局」再测一次,双保险
     if (!on) this._miniExitAt = Date.now(); // 退出后短暂拦截一击(见 MINI_CLICK_GUARD_MS)
     this._ui.mini = on;
     this.requestUpdate();
@@ -2027,12 +2050,10 @@ class MusicFlowRemoteCard extends LitElement {
     if (pc) this._loadCoverInto(pc);
     const bg = this.shadowRoot?.querySelector(".coverbg-img");
     if (bg && this._ui.song?.coverArt) this._loadCoverInto(bg);
-    // 极简模式:非 mini 时实测切换器行高度 + flex gap(12px),进 mini 用 --mini-shift 把
-    // 歌词/封面上移到它腾出的位置(纯 transform,不改布局 → 卡片高度恒定)
-    if (!this._ui.mini) {
-      const o = this.shadowRoot?.querySelector(".outputs");
-      if (o) this._miniShift = o.offsetHeight + 12;
-    }
+    // 极简模式:上移量实测(见 _measureMiniShift)—— 每次渲染都刷新,值永远是最新的。
+    // 实测值变化(如 chip 行换行、warnbar 出现)会补一次渲染,把新值写进 --mini-shift,
+    // 否则极简期间布局一旦漂移,transform 仍用旧值 → 歌词/封面上移过头(顶出卡片)。
+    if (this._measureMiniShift()) this.requestUpdate();
     // 极简歌词模式:相关状态变化时重置空闲计时;条件不满足(暂停/开面板/无歌词)时强制恢复完整模式。
     this._updatedMiniWatch();
     // 未播放态流动底色:同步暂停态(不可见 / 后台 tab / 面板打开)。
@@ -4217,7 +4238,12 @@ class MusicFlowRemoteCard extends LitElement {
          用自身高度百分比而不用定值:卡片尺寸随内容变化时,位移量自动跟着变,永远够飞出卡片。
          visibility 延迟到淡出结束再切 hidden —— 动画期间仍参与渲染,结束后不可点/不可 Tab。
          --mini-shift 由 JS 在完整模式下实测 .outputs 高度 + 12px gap 写入(见 updated())。 */
-      .wrap.mini { overflow: hidden; }
+      /* 🔴 padding 必须显式锁死(与完整模式同值):极简时 .outputs 向上移出会溢出到
+         容器的 block-start 之外,Chrome 会因此把 .wrap 的上下 padding 从 14px 吃掉到 3px
+         (实测:padding-top/bottom 14→3,整卡矮 20px,所有内容上移 11px)—— 歌词/封面
+         于是顶到卡片上边缘、「贴边」。显式声明 .wrap.mini 的 padding 后前后一致,
+         卡片高度与上移基准都不再漂移。 */
+      .wrap.mini { overflow: hidden; padding: 14px; }
       /* 展开态(完整模式 / 回归)过渡:进场曲线 + 进场时长;visibility 立即恢复
          (动画一开始就可见可交互)。只过渡合成属性,不碰任何影响布局的属性。 */
       .wrap > .outputs,
