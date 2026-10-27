@@ -2302,10 +2302,14 @@ describe("杂项工具", () => {
     c8._syncIdleKeyframes(); // 二次 → 已存在
   });
 
-  it("updated():mini 高度测量与 miniWatch", async () => {
+  it("updated():极简模式上移量测量(--mini-shift)与 miniWatch", async () => {
     const c = mkCard();
     await c.updateComplete;
-    expect(c._miniFullH).toBeGreaterThanOrEqual(0);
+    // v2.8.15:不再测量整卡高度,改测切换器行高度 + gap(写进 --mini-shift)
+    expect(c._miniShift).toBeGreaterThanOrEqual(0);
+    const w = c.shadowRoot && c.shadowRoot.querySelector(".wrap");
+    expect(w).toBeTruthy();
+    expect(w.getAttribute("style") || "").toContain("--mini-shift");
     c._ui.mini = true;
     await c.updateComplete;
     c._updatedMiniWatch();
@@ -3285,17 +3289,18 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     expect(rule).toContain("visibility 0s linear var(--dur-out)");
   });
 
-  it("极简模式三块 max-height 展开值被钉住(54/42/22px,防 0→none 不可插值回退)", () => {
+  it("极简模式三块只位移/淡出,不收缩(占位不变 → 高度与动画进度无关)", () => {
     const lines = srcLines();
-    expect(ruleText(lines, ".wrap > .outputs { max-height: 54px; }")).toContain("max-height: 54px;");
-    expect(ruleText(lines, ".wrap > .lower > .controls { max-height: 42px; }")).toContain("max-height: 42px;");
-    expect(ruleText(lines, ".wrap > .lower > .progress-row { max-height: 22px; }")).toContain("max-height: 22px;");
-    // 收缩态:三块一起 max-height:0 + 淡出 + visibility 延迟
-    const rule = ruleText(lines, ".wrap.mini > .outputs,");
-    expect(rule).toContain("max-height: 0");
+    // 不再有展开态的 max-height 上限,也不再有收缩态的 max-height:0
+    expect(lines.filter((l) => /\.wrap > \.outputs \{ max-height/.test(l)).length).toBe(0);
+    expect(lines.filter((l) => /\.wrap > \.lower > \.controls \{ max-height/.test(l)).length).toBe(0);
+    const rule = ruleText(lines, ".wrap.mini > .outputs {");
     expect(rule).toContain("opacity: 0");
     expect(rule).toContain("visibility: hidden");
-    expect(rule).toContain("visibility 0s linear var(--dur-in)");
+    expect(rule).not.toContain("max-height");
+    expect(rule).not.toContain("display: none");
+    // --mini-h 地板整套机制已删除(高度不再靠 min-height 兜);注释里保留历史说明
+    expect(lines.join(String.fromCharCode(10))).not.toContain("var(--mini-h");
   });
 
   it("reduced-motion 覆盖全部新增过渡(面板/音量/极简收缩块直切)", () => {
@@ -3422,17 +3427,15 @@ describe("v2.8.12 动画节奏翻倍:防回退静态守卫", () => {
     expect(codeLine("transition: color 0.6s ease, opacity 0.6s ease; }")).toContain("color 0.6s ease, opacity 0.6s ease");
   });
 
-  it("极简模式三块淡出时长翻倍(0.25s→0.5s),收缩/展开仍走全局变量", () => {
+  it("极简模式收起态走 --dur-out 出场曲线(时长随变量翻倍)", () => {
     const lines = srcText().split(/\r?\n/);
-    const idx = lines
-      .map((l, i) => [i, l])
-      .filter(([, l]) => l.includes("transition: opacity 0.5s var(--anim-out)") && !/^\s*(\/\/|\/\*|\*)/.test(l))
-      .map(([i]) => i);
-    expect(idx.length, "锚点必须唯一").toBe(1);
-    // 规则跨两行:连同下一行一起断言
-    const rule = lines.slice(idx[0], idx[0] + 2).join(" ");
-    expect(rule).toContain("max-height var(--dur-in)");
-    expect(rule).toContain("visibility 0s linear var(--dur-in)");
+    const at = lines.findIndex((l) => l.includes(".wrap.mini > .outputs {"));
+    expect(at).toBeGreaterThan(-1);
+    const rule = lines.slice(at, at + 4).join(" "); // 规则跨多行
+    expect(rule).toContain("opacity var(--dur-out) var(--anim-out)");
+    expect(rule).toContain("transform var(--dur-out) var(--anim-out)");
+    expect(rule).toContain("visibility 0s linear var(--dur-out)");
+    expect(rule).not.toContain("0.5s");
   });
 
   it("点击守卫接线完整:常量 + 捕获阶段注册/注销 + stopPropagation 截断", () => {
@@ -3444,5 +3447,96 @@ describe("v2.8.12 动画节奏翻倍:防回退静态守卫", () => {
     expect(codeLine("const justExited =")).toContain("MINI_CLICK_GUARD_MS");
     // 触屏分支:pointerType === "touch" 早退,不在 hover 阶段退出极简
     expect(codeLine('if (e && e.pointerType === "touch")')).toContain("_resetIdleTimer()");
+  });
+});
+
+// ============ v2.8.15 极简模式带方向进出场 + 高度铁律:防回退静态守卫 ============
+// 主理人拍板(v2.8.13 因「歌词/封面位置偏移 + 无方向感」回退到 v2.8.12 后重做):
+//   ① 隐藏时上半部分(切换器行)**向上移出卡片**、下半部分(控件行/进度条)**向下移出卡片**,
+//      回归时全部反向;② 歌词 + 封面整体上移,填到切换器腾出的位置(解决位置偏移);
+//   ③ **动画任何时刻都不得改变卡片整体高度** —— 三块只做 transform/opacity/visibility,
+//      绝不碰 max-height / display / padding / margin / min-height。
+// 守卫把「方向」和「高度铁律」都钉死:方向反了(改成统一 translateY(8px))或又用收缩,
+// 都会立即 FAIL。
+describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
+  const repoFile = (rel) => {
+    const fromRoot = resolve(process.cwd(), rel);
+    if (existsSync(fromRoot)) return fromRoot;
+    const self = String(import.meta.url);
+    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
+    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
+  };
+  const allLines = () => readFileSync(repoFile("src/musicflow-remote-card.js"), "utf8").split(/\r?\n/);
+  const code = () => allLines().filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l));
+  const ruleLine = (anchor) => {
+    const hit = code().filter((l) => l.includes(anchor));
+    expect(hit.length, "锚点必须唯一: " + anchor).toBe(1);
+    return hit[0];
+  };
+  // 取某条规则的完整文本(从选择器行拼到收尾的 })
+  const rule = (anchor) => {
+    const lines = code();
+    const i = lines.findIndex((l) => l.includes(anchor));
+    expect(i, "找不到规则: " + anchor).toBeGreaterThan(-1);
+    let t = lines[i];
+    for (let j = i + 1; j < lines.length && !t.includes("}"); j++) t += " " + lines[j];
+    return t;
+  };
+
+  it("上半部分(切换器行):向上位移 → translateY 负值", () => {
+    const r = rule(".wrap.mini > .outputs {");
+    expect(r).toMatch(/transform:\s*translateY\(-/);
+    expect(r).not.toContain("max-height");
+    expect(r).not.toContain("display: none");
+  });
+
+  it("下半部分(控件行 / 进度条):向下位移 → translateY 正值", () => {
+    for (const anchor of [".wrap.mini > .lower > .controls {", ".wrap.mini > .lower > .progress-row {"]) {
+      const r = rule(anchor);
+      expect(r, anchor).toMatch(/transform:\s*translateY\((?!-)/);
+      expect(r, anchor).not.toContain("max-height");
+    }
+  });
+
+  it("歌词 + 封面(.now)用 --mini-shift 上移(负号),且不改布局", () => {
+    const r = rule(".wrap.mini > .now {");
+    expect(r).toContain("var(--mini-shift");
+    expect(r).toMatch(/translateY\(calc\(-1 \* var\(--mini-shift/);
+    expect(r).not.toContain("padding");
+    expect(r).not.toContain("margin");
+  });
+
+  it(".wrap.mini 只保留 overflow:不得出现任何改变占位的属性", () => {
+    const r = ruleLine(".wrap.mini { overflow: hidden; }");
+    for (const bad of ["min-height", "max-height", "height:", "padding", "margin", "display", "gap"]) {
+      expect(r, "不得出现 " + bad).not.toContain(bad);
+    }
+  });
+
+  it("全仓 transition 只过渡合成属性(布局属性与 all 一律禁止,.lyricbox 例外)", () => {
+    const banned = /\b(all|height|max-height|min-height|padding|margin|width|top|bottom|gap|flex)\b/;
+    const text = code().join("\n");
+    const offenders = [];
+    for (let i = text.indexOf("transition:"); i >= 0; i = text.indexOf("transition:", i + 11)) {
+      const rel = text.slice(i).search(/[;}]/);
+      const decl = text.slice(i, rel < 0 ? text.length : i + rel);
+      const pre = text.slice(Math.max(0, i - 140), i);
+      if (!pre.includes(".lyricbox") && banned.test(decl)) offenders.push(decl.trim());
+    }
+    expect(offenders, "这些过渡会改变布局/卡片高度: " + JSON.stringify(offenders)).toEqual([]);
+  });
+
+  it(".lyricbox / .vol-overlay / .panel 必须绝对定位(不参与卡片高度)", () => {
+    expect(ruleLine(".lyricbox { position: absolute;")).toContain("position: absolute");
+    expect(ruleLine(".vol-overlay { position: absolute;")).toContain("position: absolute");
+    expect(ruleLine(".panel { position: absolute;")).toContain("position: absolute");
+  });
+
+  it("--mini-shift 由 JS 实测注入(切换器行高度 + gap),--mini-h 已彻底移除", () => {
+    const t = code().join("\n");
+    expect(t).toContain("this._miniShift = o.offsetHeight + 12;");
+    expect(t).toContain("--mini-shift:${this._miniShift}px");
+    expect(t).not.toContain("var(--mini-h");
+    expect(t).not.toContain("_miniFullH");
   });
 });
