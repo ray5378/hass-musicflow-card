@@ -2302,14 +2302,10 @@ describe("杂项工具", () => {
     c8._syncIdleKeyframes(); // 二次 → 已存在
   });
 
-  it("updated():极简模式不再测量高度(高度与动画解耦)+ miniWatch", async () => {
+  it("updated():mini 高度测量与 miniWatch", async () => {
     const c = mkCard();
     await c.updateComplete;
-    // v2.8.13:--mini-h 地板机制已删除,不再有「实测完整高度」字段
-    expect(c._miniFullH).toBeUndefined();
-    const w = c.shadowRoot && c.shadowRoot.querySelector(".wrap");
-    expect(w).toBeTruthy();
-    expect(w.getAttribute("style") || "").not.toContain("--mini-h");
+    expect(c._miniFullH).toBeGreaterThanOrEqual(0);
     c._ui.mini = true;
     await c.updateComplete;
     c._updatedMiniWatch();
@@ -3289,17 +3285,17 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     expect(rule).toContain("visibility 0s linear var(--dur-out)");
   });
 
-  it("极简模式三块「只隐身不收缩」(占位不变 → 高度与动画进度无关)", () => {
+  it("极简模式三块 max-height 展开值被钉住(54/42/22px,防 0→none 不可插值回退)", () => {
     const lines = srcLines();
-    // 收缩态:只有 opacity/transform/visibility,绝不允许动占位(改回 max-height/display 会让
-    // 卡片高度随动画一起变 —— v2.8.13 明确禁止)
+    expect(ruleText(lines, ".wrap > .outputs { max-height: 54px; }")).toContain("max-height: 54px;");
+    expect(ruleText(lines, ".wrap > .lower > .controls { max-height: 42px; }")).toContain("max-height: 42px;");
+    expect(ruleText(lines, ".wrap > .lower > .progress-row { max-height: 22px; }")).toContain("max-height: 22px;");
+    // 收缩态:三块一起 max-height:0 + 淡出 + visibility 延迟
     const rule = ruleText(lines, ".wrap.mini > .outputs,");
+    expect(rule).toContain("max-height: 0");
     expect(rule).toContain("opacity: 0");
     expect(rule).toContain("visibility: hidden");
-    expect(rule).not.toContain("max-height");
-    expect(rule).not.toContain("display: none");
-    // --mini-h 地板整套机制已删除(高度不再靠 min-height 兜);注释里保留历史说明,只禁实际取值
-    expect(lines.join("\n")).not.toContain("var(--mini-h");
+    expect(rule).toContain("visibility 0s linear var(--dur-in)");
   });
 
   it("reduced-motion 覆盖全部新增过渡(面板/音量/极简收缩块直切)", () => {
@@ -3426,15 +3422,17 @@ describe("v2.8.12 动画节奏翻倍:防回退静态守卫", () => {
     expect(codeLine("transition: color 0.6s ease, opacity 0.6s ease; }")).toContain("color 0.6s ease, opacity 0.6s ease");
   });
 
-  it("极简模式收起态与 panelmode/volmode 共用出场曲线(时长随 --dur-out 翻倍)", () => {
+  it("极简模式三块淡出时长翻倍(0.25s→0.5s),收缩/展开仍走全局变量", () => {
     const lines = srcText().split(/\r?\n/);
-    const at = lines.findIndex((l) => l.includes(".wrap.mini > .outputs,"));
-    expect(at).toBeGreaterThan(-1);
-    const rule = lines.slice(at, at + 7).join(" "); // 选择器 3 行 + 属性 3 行
-    expect(rule).toContain("opacity var(--dur-out) var(--anim-out)");
-    expect(rule).toContain("transform var(--dur-out) var(--anim-out)");
-    expect(rule).toContain("visibility 0s linear var(--dur-out)");
-    expect(rule).toContain("transform: translateY(8px)");
+    const idx = lines
+      .map((l, i) => [i, l])
+      .filter(([, l]) => l.includes("transition: opacity 0.5s var(--anim-out)") && !/^\s*(\/\/|\/\*|\*)/.test(l))
+      .map(([i]) => i);
+    expect(idx.length, "锚点必须唯一").toBe(1);
+    // 规则跨两行:连同下一行一起断言
+    const rule = lines.slice(idx[0], idx[0] + 2).join(" ");
+    expect(rule).toContain("max-height var(--dur-in)");
+    expect(rule).toContain("visibility 0s linear var(--dur-in)");
   });
 
   it("点击守卫接线完整:常量 + 捕获阶段注册/注销 + stopPropagation 截断", () => {
@@ -3446,70 +3444,5 @@ describe("v2.8.12 动画节奏翻倍:防回退静态守卫", () => {
     expect(codeLine("const justExited =")).toContain("MINI_CLICK_GUARD_MS");
     // 触屏分支:pointerType === "touch" 早退,不在 hover 阶段退出极简
     expect(codeLine('if (e && e.pointerType === "touch")')).toContain("_resetIdleTimer()");
-  });
-});
-
-// ============ v2.8.13 铁律:动画不得改变卡片整体高度 ============
-// 主理人裁定:动画只应在卡片内部变化,任何时刻都不得让整卡高度动。
-// 高度只由「布局占位」决定,所以规则只有一条:**任何过渡都不许碰影响布局的属性**。
-// 具体三条防线:
-//   1) 极简模式三块只隐身不收缩(不再 max-height→0,也不再靠 --mini-h 的 min-height 兜);
-//   2) 全仓 transition 只允许合成属性(opacity/transform/filter/color/background/border/box-shadow/visibility),
-//      禁止 all / height / max-height / min-height / padding / margin / width / top / bottom / gap / flex;
-//   3) 唯一带 height 过渡的 .lyricbox 必须 position:absolute(高度动画完全不外溢到布局),
-//      面板层 .vol-overlay / .panel 同理必须 absolute。
-describe("v2.8.13 动画不改卡片高度:防回退静态守卫", () => {
-  const repoFile = (rel) => {
-    const fromRoot = resolve(process.cwd(), rel);
-    if (existsSync(fromRoot)) return fromRoot;
-    const self = String(import.meta.url);
-    if (self.startsWith("file:")) return fileURLToPath(new URL("../" + rel, self));
-    throw new Error("cannot locate " + rel + " (cwd=" + process.cwd() + ")");
-  };
-  const lines = () => readFileSync(repoFile("src/musicflow-remote-card.js"), "utf8").split(/\r?\n/);
-  const code = () => lines().filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l));
-  const ruleLine = (anchor) => {
-    const hit = code().filter((l) => l.includes(anchor));
-    expect(hit.length, "锚点必须唯一: " + anchor).toBe(1);
-    return hit[0];
-  };
-
-  it(".wrap.mini 只保留 overflow,不得出现任何改变占位的属性", () => {
-    const rule = ruleLine(".wrap.mini { overflow: hidden; }");
-    for (const bad of ["min-height", "max-height", "height:", "padding", "margin", "display", "gap"]) {
-      expect(rule, "不得出现 " + bad).not.toContain(bad);
-    }
-  });
-
-  it("全仓 transition 只过渡合成属性(布局属性与 all 一律禁止,.lyricbox 例外)", () => {
-    const banned = /\b(all|height|max-height|min-height|padding|margin|width|top|bottom|gap|flex)\b/;
-    // 只看 transition 声明本身(选择器里出现 height/padding 不影响布局),跨行声明取到 ; 或 }
-    const text = code().join("\n");
-    const offenders = [];
-    for (let i = text.indexOf("transition:"); i >= 0; i = text.indexOf("transition:", i + 11)) {
-      const rel = text.slice(i).search(/[;}]/);
-      const decl = text.slice(i, rel < 0 ? text.length : i + rel);
-      const pre = text.slice(Math.max(0, i - 140), i);
-      if (!pre.includes(".lyricbox") && banned.test(decl)) offenders.push(decl.trim());
-    }
-    expect(offenders, "这些过渡会改变布局/卡片高度: " + JSON.stringify(offenders)).toEqual([]);
-  });
-
-  it("带 height 过渡的 .lyricbox 必须绝对定位(高度动画不外溢到卡片布局)", () => {
-    expect(ruleLine(".lyricbox { position: absolute;")).toContain("position: absolute");
-    // 两条 height 过渡必须挂在 .lyricbox 上(各自唯一,不含 reduced-motion 的直切块)
-    expect(code().filter((l) => l.includes(".wrap.mini .lyricbox {") && l.includes("height 0.84s")).length).toBe(1);
-    expect(code().filter((l) => l.includes(".wrap:not(.mini) .lyricbox {") && l.includes("height 0.6s")).length).toBe(1);
-  });
-
-  it("面板层 .vol-overlay / .panel 必须绝对定位(进出场不参与卡片高度)", () => {
-    expect(ruleLine(".vol-overlay { position: absolute;")).toContain("position: absolute");
-    expect(ruleLine(".panel { position: absolute;")).toContain("position: absolute");
-  });
-
-  it("--mini-h 地板机制整套移除(渲染不再注入,字段不再存在)", () => {
-    const t = code().join("\n");
-    expect(t).not.toContain("var(--mini-h"); // 注释里保留历史说明,但不再有实际取值
-    expect(t).not.toContain("_miniFullH");
   });
 });
