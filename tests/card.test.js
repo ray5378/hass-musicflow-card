@@ -1151,6 +1151,32 @@ describe("队列虚拟滚动", () => {
     await c.updateComplete;
     expect(c.shadowRoot.querySelector(".qitem")).toBeTruthy();
   });
+
+  // 回归(2026-10-28「队列页偶发一片空白」):流转/切端后 WS 先推来全量 items(len===total)
+  // 把稀疏缓存填满、窗口留在未初始化(-1);此时用户打开队列页,那一次 render 用 -1 算出
+  // 零行,而所需块已在缓存 ⇒ 没有 fetch 回调 ⇒ 再也不会 requestUpdate ⇒ 整页空白。
+  it("窗口未初始化(qWinEnd<0)时打开队列页:必须渲染出行", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    c._ui.showQueue = false;
+    c._ui.queue = { total: 0 };
+    c._applyQueue({
+      items: [
+        { songId: "a", title: "A", artist: "x", coverArt: "c1" },
+        { songId: "b", title: "B", artist: "y", coverArt: "c2" },
+      ],
+      total: 2, currentIndex: 0, playMode: "order", isActive: true,
+    });
+    expect(c._ui.qCache.size).toBe(2);
+    expect(c._ui.qWinEnd).toBe(-1);
+    c._ui.showQueue = true;
+    c.requestUpdate();
+    await c.updateComplete;
+    await flush();
+    expect(c._ui.qWinEnd).toBeGreaterThanOrEqual(0);
+    expect(c.shadowRoot.querySelectorAll(".vs-row").length).toBe(2);
+    expect(c.shadowRoot.querySelectorAll(".qitem").length).toBe(2);
+  });
 });
 
 describe("媒体库浏览", () => {

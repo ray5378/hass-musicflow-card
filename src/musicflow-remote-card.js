@@ -24,6 +24,9 @@ const CHUNK = 200;
 const ROW_STEP = 50;
 const VS_OVERSCAN = 6;
 const VS_CONCURRENCY = 2;
+// 队列窗口尚未初始化(qWinEnd<0)时的首屏兜底行数:保证打开队列页一定有行渲染,
+// 不会出现「有 total、有缓存、但零行」的整页空白(2026-10-28 缺陷)。
+const Q_FIRST_ROWS = 12;
 // 首屏行数(px 高度 ≥ 一屏):这些行的封面给 fetchpriority=high 提前拉,加快首屏观感;
 // 其余行保持懒加载,不设高优先级。
 const VS_PRIO_ROWS = 8;
@@ -2974,10 +2977,14 @@ class MusicFlowRemoteCard extends LitElement {
     const total = q.total || 0;
     const cur = typeof q.currentIndex === "number" ? q.currentIndex : (this._ui.currentIndex ?? -1);
     // 虚拟滚动窗口:只渲染 [qWinStart, qWinEnd](行高 ROW_STEP 与媒体库一致)。
+    // 兜底(2026-10-28):窗口未初始化(qWinEnd<0,典型=WS 全量 items 已入缓存后刚打开
+    // 队列页)时按 Q_FIRST_ROWS 渲染首屏;否则 .qlist 里只有一个撑高的 spacer、零行,
+    // 用户看到的就是「队列页一片空白」。
     const win = [];
-    if (total > 0 && (this._ui.qWinStart ?? -1) >= 0) {
-      const s = Math.max(0, this._ui.qWinStart);
-      const e = Math.min(total - 1, this._ui.qWinEnd ?? s);
+    if (total > 0) {
+      const s = (this._ui.qWinStart ?? -1) >= 0 ? Math.max(0, this._ui.qWinStart) : 0;
+      const rawEnd = this._ui.qWinEnd ?? -1;
+      const e = Math.min(total - 1, Math.max(s, rawEnd >= 0 ? rawEnd : Q_FIRST_ROWS - 1));
       for (let i = s; i <= e; i++) win.push(i);
     }
     return html`
@@ -3061,6 +3068,7 @@ class MusicFlowRemoteCard extends LitElement {
     const meta = this._ui.queue || { total: 0 };
     const total = meta.total || 0;
     if (total <= 0) return;
+    const winUnset = (this._ui.qWinEnd ?? -1) < 0;
     if (!this._ui.qLoaded) this._qReset();
     if ((this._ui.qWinEnd ?? -1) < 0) {
       const el = this.shadowRoot?.querySelector(".qlist");
@@ -3068,6 +3076,10 @@ class MusicFlowRemoteCard extends LitElement {
       this._ui.qWinStart = 0;
       this._ui.qWinEnd = Math.floor(vh / ROW_STEP) + VS_OVERSCAN;
     }
+    // 窗口刚从「未初始化」算出来时必须主动重渲染:打开队列页的那次 update 已用 -1 渲染过,
+    // 若所需块已在缓存(WS 全量 items)就没有任何 fetch 回调来触发下一次 update ⇒ 整页空白。
+    // 仅在窗口由未初始化→有值时触发,避免 updated()→_qEnsureLoaded→requestUpdate 死循环。
+    if (winUnset) this.requestUpdate();
     // currentIndex 所在块优先(当前行高亮不依赖数据,但行内容要尽快可见)
     const ci = typeof meta.currentIndex === "number" && meta.currentIndex >= 0 ? meta.currentIndex : -1;
     const start = Math.max(0, (this._ui.qWinStart || 0) - VS_OVERSCAN);
