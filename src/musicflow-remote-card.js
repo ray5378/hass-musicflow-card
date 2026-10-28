@@ -50,7 +50,7 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 长按也不漏(见 _onCardPointer / _onWrapClickCapture)。
 const MINI_CLICK_GUARD_MS = 300;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.20";
+const CARD_VERSION = "2.8.21";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -1574,7 +1574,13 @@ class MusicFlowRemoteCard extends LitElement {
             <div class="vol-track"></div>
             <div class="vol-fill" style="width:${vpct}%"></div>
             <div class="vol-knob" style="left:${vpct}%"></div>
-            <span class="vol-value" style="left:${vpct}%">${vpct}%</span>
+            <!-- 🔴 数值只能走 data-v 属性(+ CSS ::before content:attr(data-v)),
+                 绝不写成 ${vpct}% 这类文本子节点:拖动时为跟手会直改 DOM(见 _volPointerMove),
+                 而 textContent / innerHTML 赋值会把 Lit 在该处的 ChildPart 标记一并删掉,
+                 下一次任何渲染都会抛 "Cannot set properties of null (setting 'data')"
+                 → 整张卡片渲染中断、一片空白且无法操作(2026-10-29 实机 BUG)。
+                 属性绑定改的是 attribute,Lit 的 AttributePart 不受影响。 -->
+            <span class="vol-value" style="left:${vpct}%" data-v="${vpct}%"></span>
           </div>
           <span class="vol-gap"></span>
         </div>
@@ -1606,7 +1612,9 @@ class MusicFlowRemoteCard extends LitElement {
       const val = el.querySelector(".vol-value");
       if (fill) fill.style.width = pct + "%";
       if (knob) knob.style.left = pct + "%";
-      if (val) { val.style.left = pct + "%"; val.textContent = Math.round(pct) + "%"; }
+      // 🔴 只写 style / attribute,绝不写 textContent / innerHTML:见模板里 .vol-value 的
+      //    注解 —— 它们会抹掉 Lit 的 ChildPart 标记,让后续任意一次渲染崩溃(整卡空白)。
+      if (val) { val.style.left = pct + "%"; val.setAttribute("data-v", Math.round(pct) + "%"); }
     }
     this._commitVolume(v);
   }
@@ -4408,6 +4416,9 @@ class MusicFlowRemoteCard extends LitElement {
       .vol-knob { position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid rgb(var(--acc)); transform: translate(-50%, -50%); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
       .vol-slider:active .vol-knob { transform: translate(-50%, -50%) scale(1.15); }
       /* 实时数值气泡:默认隐藏,拖动/悬停时显示;位置跟随滑块把手(translateX 居中)。 */
+      /* 数值由 data-v 属性经 ::before 渲染:拖动手改属性即可跟手,不动 DOM 结构
+         (= 不碰 Lit 的 ChildPart 标记,见 _volPointerMove 注解)。 */
+      .vol-value::before { content: attr(data-v); }
       .vol-value { position: absolute; bottom: calc(100% + 2px); transform: translateX(-50%);
         font-size: 12px; font-weight: 600; color: #fff; background: rgba(20, 20, 24, 0.92);
         border: 1px solid rgba(var(--acc), 0.55); border-radius: 8px; padding: 1px 7px;

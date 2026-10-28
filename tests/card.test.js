@@ -860,6 +860,33 @@ describe("播放控制", () => {
     c._volPointerUp();
   });
 
+  it("拖动音量后仍能正常渲染:不得直改 Lit 文本节点(2026-10-29 实机 BUG)", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    c._ui.peers = PEERS;
+    c._ui.volume = 0.5;
+    c._ui.showVolume = true;
+    await c.updateComplete;
+    const sl = c.shadowRoot.querySelector(".vol-slider");
+    expect(sl).toBeTruthy();
+    // 走真实元素(不用 stub):拖动分支会直改 .vol-value 的 DOM。
+    // 若用 textContent / innerHTML 写数值,会连带删掉 Lit 在该处的 ChildPart 标记,
+    // 下一次任意渲染都抛 "Cannot set properties of null (setting 'data')"
+    // → 整卡一片空白且无法操作;数值只能走 data-v 属性(由 CSS ::before 渲染)。
+    c._volPointerDown({ currentTarget: sl, pointerId: 1, clientX: 10 });
+    c._volPointerMove({ clientX: 60 });
+    c._volPointerUp();
+    await c.updateComplete;
+    const val = c.shadowRoot.querySelector(".vol-value");
+    expect(val.getAttribute("data-v")).toBe("100%");
+    // 判据:拖动之后再打开流转页,渲染必须照常产出内容(不抛错、不空白)。
+    c._openTransfer();
+    await c.updateComplete;
+    const panel = c.shadowRoot.querySelector(".panel.transfer");
+    expect(panel.classList.contains("open")).toBe(true);
+    expect(c.shadowRoot.querySelectorAll(".tp-peer").length).toBeGreaterThan(0);
+  });
+
   it("_commitVolume:immediate 与防抖", async () => {
     vi.useFakeTimers();
     try {
