@@ -536,6 +536,27 @@ describe("peer 解析与选择", () => {
     await flush();
   });
 
+  it("_selectPeer 切目标后音量被新目标真实值纠正(跨端污染修复)", async () => {
+    const c = mkCard({}, {
+      // 按端回不同音量:旧端(DLNA)=88,新端(群组)=30 —— 复刻流转污染现场
+      getStatus: vi.fn(async (pid) => pid === "dlna:d1"
+        ? { state: "PLAYING", position: 1, duration: 100, volume: 88, media: {} }
+        : { state: "PLAYING", position: 1, duration: 100, volume: 30, media: {} }),
+    });
+    c._ui.peers = PEERS;
+    c._selectPeer("dlna:d1");
+    await flush();
+    expect(c._ui.volume).toBeCloseTo(0.88); // 旧目标真实音量进单例
+    c._ui.volume = 0.88; // 模拟流转前滑条残留旧端 88%
+    c._selectPeer("group:g1"); // 流转:遥控目标切到群组
+    expect(c._volumeIssuedAt).toBe(0); // 旧目标的音量命令保护窗不跨目标
+    await flush();
+    expect(c._ui.volume).toBeCloseTo(0.3); // 群组真实音量纠正单例
+    expect(c._client.setVolume).not.toHaveBeenCalled(); // 只读不写:流转绝不 POST 音量
+    c._stopTracking();
+    await flush();
+  });
+
   it("_refreshPeers:成功与失败", async () => {
     const c = mkCard({}, { getPeers: vi.fn(async () => ({ peers: PEERS })) });
     c._refreshPeers();

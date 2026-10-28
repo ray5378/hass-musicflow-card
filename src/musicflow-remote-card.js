@@ -1145,6 +1145,29 @@ class MusicFlowRemoteCard extends LitElement {
     }
   }
 
+  // 音量单例的跨端隔离(对齐 Web 前端 v4.9.3 的 resyncVolumeForPeer):
+  // _ui.volume 是跨受控目标共享的;流转/切换目标后残留旧目标音量(如主卧 DLNA 的
+  // 88%),用户一碰滑条就把旧值 POST 给新目标(240 日志实证:HA 通道向群组 POST 88
+  // 两次,群组落库音量被改)。切换目标后立即用新目标的真实音量纠正 _ui.volume:
+  //   - **只读不写**:采纳真实值,绝不主动调 setVolume;
+  //   - 拖拽中(_ui.volDragging)不覆盖手指值;
+  //   - _isStaleSample 口径:保护窗内的陈旧采样不采纳 —— _volumeIssuedAt 已在
+  //     _selectPeer 清零,这里只剩「切过来之后用户对新目标的下发窗口」。
+  // 音量浮层开着时切换目标:采纳后 requestUpdate,浮层显示值跟随真实值。
+  // (无独立 status 缓存可复用,_refreshCurrentPeerView 的拉取走 _applyStatus 同一套
+  // 守卫;此处显式发一次 status 请求保证纠正一定发生,切换动作低频,代价可忽略。)
+  _resyncVolumeForPeer(peerId) {
+    if (!peerId || !this._client) return;
+    this._client.getStatus(peerId).then((status) => {
+      if (this._ui.currentPeerId !== peerId) return; // 已切走:不写单例
+      if (!status || typeof status.volume !== "number") return;
+      if (this._ui.volDragging) return; // 手指优先
+      if (this._isStaleSample(status, this._volumeIssuedAt)) return; // 刚下发过,不回顶
+      this._ui.volume = Math.max(0, Math.min(100, status.volume)) / 100;
+      this.requestUpdate();
+    }).catch((e) => err("volume resync failed", e));
+  }
+
   _selectPeer(peerId, silent) {
     // 被活跃组托管的成员设备 ⇒ 遥控目标收敛到该组(服务端唯一出口 decoratePeersForClient
     // 的 `managedByGroup` 口径,注释写明「三端据此把成员渲染成『跟随某组』」)。理由:
@@ -1166,6 +1189,12 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.currentTime = 0;
     this._ui.duration = 0;
     this._lastPos = -1; // 切换设备后重置前进基线,避免沿用旧设备误判播放态
+    // 音量单例的跨端隔离(缺陷与修法见 _resyncVolumeForPeer 注释):_ui.volume 不随
+    // 目标切换重置,流转后滑条残留旧目标音量,一碰就把旧值 POST 给新目标。
+    // ①旧目标的音量命令保护窗不得跨目标生效 → 清零(_isStaleSample 对 0 恒放行);
+    // ②立即从新目标状态重新拉取真实音量(群组=群组音量,设备=设备音量)。
+    this._volumeIssuedAt = 0;
+    this._resyncVolumeForPeer(peerId);
     this._refreshCurrentPeerView();
     this._startTracking();
     this.requestUpdate();
