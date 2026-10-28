@@ -3270,6 +3270,9 @@ describe("流转按钮(∞)与圆形高亮底同心:静态守卫", () => {
 // 出场 cubic-bezier(0.4,0,1,1) / visibility 延迟切换),这里把曲线、时长、visibility 延迟、
 // mini 三块 max-height 展开值全部钉进源码文本,任何一处被改掉都会让守卫立即 FAIL。
 // (v2.8.12 起时长翻倍:0.3s→0.6s、0.22s→0.44s,守卫值同步更新。)
+// 2026-10-29 定调:**覆盖层只滑不淡** —— .panel / .vol-overlay 去掉 opacity 过渡与
+// visibility 延迟(出场瞬切,滑动只保留进场,时长独立为 --dur-panel-in 0.26s);
+// 首页内容(panelmode/volmode)改为瞬隐;极简 ↔ 控制模式的淡入淡出**保留不动**。
 describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
   const repoFile = (rel) => {
     const fromRoot = resolve(process.cwd(), rel);
@@ -3292,48 +3295,59 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     return t;
   };
 
-  it(":host 动画节奏四变量存在且值正确(进场 0.6s ease-out / 出场 0.44s ease-in,v2.8.12 翻倍)", () => {
+  it(":host 动画节奏变量(极简 0.6s/0.44s 不变 + 覆盖层滑动 0.26s 独立)", () => {
     const lines = srcLines();
     expect(ruleText(lines, "--anim-in: cubic-bezier")).toContain("--anim-in: cubic-bezier(0.2, 0, 0, 1);");
     expect(ruleText(lines, "--anim-out: cubic-bezier")).toContain("--anim-out: cubic-bezier(0.4, 0, 1, 1);");
+    // 极简模式 ↔ 控制模式的淡入淡出时长:产品拍板值,不得被覆盖层的改动带偏
     expect(ruleText(lines, "--dur-in: 0.6s")).toContain("--dur-in: 0.6s;");
     expect(ruleText(lines, "--dur-out: 0.44s")).toContain("--dur-out: 0.44s;");
+    // 覆盖层专属:只滑不淡,时长独立(0.26s)
+    expect(ruleText(lines, "--dur-panel-in: 0.26s")).toContain("--dur-panel-in: 0.26s;");
   });
 
-  it(".vol-overlay.open 与 .panel.open 进场过渡:var(--dur-in) 缓出曲线 + visibility 立即恢复", () => {
+  // 2026-10-29 定调:覆盖层**只滑不淡** —— 进场只过渡 transform(滑动),不再淡入;
+  // visibility 立即恢复(0s)保证「点开就在」。反向钉:任何 opacity 过渡回流 = 交错逗留复发。
+  it(".vol-overlay.open 与 .panel.open 进场:只过渡 transform(var(--dur-panel-in)) + visibility 立即恢复 + 无 opacity 过渡", () => {
     const lines = srcLines();
     for (const sel of [".vol-overlay.open {", ".panel.open {"]) {
       const rule = ruleText(lines, sel);
       expect(rule, sel + " 规则丢失").not.toBe("");
-      expect(rule).toContain("opacity var(--dur-in) var(--anim-in)");
-      expect(rule).toContain("transform var(--dur-in) var(--anim-in)");
+      expect(rule).toContain("transform var(--dur-panel-in) var(--anim-in)");
       expect(rule).toContain("visibility 0s linear 0s");
+      expect(rule).not.toContain("opacity");
     }
   });
 
-  it(".vol-overlay 与 .panel 关闭态出场过渡:var(--dur-out) 缓入曲线 + visibility 延迟切换", () => {
+  // 关闭必须瞬切:延迟隐藏会让透明覆盖层在 0.44s 内「看不见却能点」(幽灵层),
+  // 因此关闭态不得声明任何 transition,更不得有 visibility 延迟切换。
+  it(".vol-overlay 与 .panel 关闭态:translateY(20px) + visibility:hidden 瞬切(无任何过渡)", () => {
     const lines = srcLines();
     for (const sel of [".vol-overlay { position: absolute;", ".panel { position: absolute;"]) {
       const rule = ruleText(lines, sel);
       expect(rule, sel + " 规则丢失").not.toBe("");
-      expect(rule).toContain("opacity: 0");
       expect(rule).toContain("transform: translateY(20px)");
       expect(rule).toContain("visibility: hidden");
-      expect(rule).toContain("opacity var(--dur-out) var(--anim-out)");
-      expect(rule).toContain("transform var(--dur-out) var(--anim-out)");
-      expect(rule).toContain("visibility 0s linear var(--dur-out)");
+      expect(rule).not.toContain("transition");
+      expect(rule).not.toContain("opacity");
+      expect(rule).not.toContain("var(--dur-out)");
     }
   });
 
-  it("首页内容隐身规则(panelmode/volmode):opacity 0 + translateY(8px) 下沉淡出 + visibility 延迟", () => {
+  // 被盖住的旧内容必须瞬隐:它若还在淡出/下沉,就会与覆盖层的滑入同时进行 = 交错逗留帧。
+  // 仍只改 visibility(不卸载、不改 display)⇒ 卡片高度全程零跳变。
+  it("首页内容隐身规则(panelmode/volmode):直接 visibility:hidden 瞬隐,无 opacity/位移/过渡", () => {
     const lines = srcLines();
     const rule = ruleText(lines, ".wrap.panelmode > .outputs,");
     expect(rule).not.toBe("");
     expect(rule).toContain(".wrap.panelmode > .now");
     expect(rule).toContain(".lower.volmode > .controls");
     expect(rule).toContain(".lower.volmode > .progress-row");
-    expect(rule).toContain("opacity: 0; transform: translateY(8px); visibility: hidden;");
-    expect(rule).toContain("visibility 0s linear var(--dur-out)");
+    expect(rule).toContain("visibility: hidden;");
+    expect(rule).not.toContain("opacity");
+    expect(rule).not.toContain("translateY(8px)");
+    expect(rule).not.toContain("transition");
+    expect(rule).not.toContain("var(--dur-out)");
   });
 
   it("极简模式三块只位移/淡出,不收缩(占位不变 → 高度与动画进度无关)", () => {
@@ -3344,6 +3358,10 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     const rule = ruleText(lines, ".wrap.mini > .outputs {");
     expect(rule).toContain("opacity: 0");
     expect(rule).toContain("visibility: hidden");
+    // 反向钉(2026-10-29):极简 ↔ 控制模式的淡入淡出是**要保留**的,
+    // 去掉覆盖层淡入淡出时不得误删这一条。
+    expect(rule).toContain("opacity var(--dur-out) var(--anim-out)");
+    expect(rule).toContain("visibility 0s linear var(--dur-out)");
     expect(rule).not.toContain("max-height");
     expect(rule).not.toContain("display: none");
     // --mini-h 地板整套机制已删除(高度不再靠 min-height 兜);注释里保留历史说明

@@ -2163,14 +2163,14 @@ class MusicFlowRemoteCard extends LitElement {
               <span class="t">${this._fmtTime(u.duration)}</span>
             </div>
 
-            <!-- 音量面板常驻渲染:开合只切 .open,CSS transition 负责进出场动画
-                 (关闭态 visibility:hidden 延迟切换,不可点/不可 Tab,行为与旧条件渲染一致) -->
+            <!-- 音量面板常驻渲染:开合只切 .open,CSS 只播进场滑动(--dur-panel-in),
+                 关闭为 visibility 瞬切,不可点/不可 Tab,行为与旧条件渲染一致 -->
             ${this._renderVolumeOverlay()}
           </div>
 
-          <!-- 三个面板常驻渲染:开合只切各自的 .open class,让 CSS transition 播放
-               「从底部滑上来 + 淡入」的进出场动画。关闭态 visibility:hidden(延迟切换)
-               保证不可点/不可 Tab;互斥与数据加载守卫(仅 .open 时 observe)不变。 -->
+          <!-- 三个面板常驻渲染:开合只切各自的 .open class,CSS 只播「从底部滑上来」
+               的进场动画(不淡入);关闭是 visibility 瞬切,不可点/不可 Tab。
+               互斥与数据加载守卫(仅 .open 时 observe)不变。 -->
           ${this._renderQueue()}
           ${this._renderMediaBrowser()}
           ${this._renderTransfer()}
@@ -3991,7 +3991,7 @@ class MusicFlowRemoteCard extends LitElement {
     // ⚠️ 必须用**同一个模板**输出壳(壳常驻、内部内容用 ${level ? ... : ""} 条件渲染),
     // 不能按 level 有无返回两个不同模板 —— Lit 会把两个模板当不同结构直接换节点,
     // 换出来的新节点同样没有起始渲染态,首开照样不播动画(实测踩过这个坑)。
-    // 空壳不带 open,走 .panel 关闭态(visibility:hidden 延迟切换),不可见不可点,
+    // 空壳不带 open,走 .panel 关闭态(visibility:hidden 瞬切),不可见不可点,
     // 与旧的「不渲染任何节点」行为等价;_openBrowser 会在置 showBrowser=true 的同一帧
     // 同步压入根级 stack,不会出现「开着但壳是空」的状态。
     const isRoot = !!level && level.type === "root";
@@ -4093,7 +4093,11 @@ class MusicFlowRemoteCard extends LitElement {
         --anim-in: cubic-bezier(0.2, 0, 0, 1);
         --anim-out: cubic-bezier(0.4, 0, 1, 1);
         --dur-in: 0.6s;
-        --dur-out: 0.44s; }
+        --dur-out: 0.44s;
+        /* 覆盖层(.panel / .vol-overlay)进场滑动时长,与极简模式的淡入淡出解耦:
+           覆盖层是「只滑不淡」(见 .panel 注释),0.6s 的慢滑在失去淡入衬托后明显发黏,
+           取原生弹层手感的 0.26s;极简模式的 --dur-in/--dur-out 保持不变。 */
+        --dur-panel-in: 0.26s; }
       ha-card {
         /* 颜色变量:默认浅色文字(暗背景);.dark 时整体切深色文字(亮背景封面) */
         --fg: #ffffff;
@@ -4363,35 +4367,32 @@ class MusicFlowRemoteCard extends LitElement {
       .ctl.vol-open { background: transparent; color: var(--ctl); }
       /* 下半区容器:音量遮罩以它为定位参照,盖住控件行 + 进度条 + 队列面板 */
       .lower { position: relative; display: flex; flex-direction: column; gap: 12px; }
-      /* 音量态/面板态的首页内容隐身 + 带方向过渡(主理人拍板的「旧内容下沉淡出」):
-         不盖蒙层,而是把被盖住的块 opacity→0 + translateY(8px) 下沉淡出。
+      /* 音量态/面板态的首页内容**瞬隐**(2026-10-29 定调,取代旧的「下沉淡出」):
+         被覆盖层盖住的块直接 visibility:hidden,不播任何淡出/下沉动画。
          仍占位(没动 max-height/display)→ 卡片高度全程零跳变,露出的就是卡片自身
          那层模糊封面背景,与上半部分同源,不可能有色差/边界。
-         下沉只给 8px(面板本体是 20px):面板是「主体」,旧内容只是退居幕后,位移浅一点
-         才有层次感。visibility 延迟到淡出结束再切 hidden —— 动画期间不挡新面板,
-         结束后真正不可点/不可 Tab。 */
+         为什么不再渐变:旧内容一边淡出、覆盖层一边滑入 = 两层各跑各的,中途必然出现
+         「半透明旧内容 + 新面板」的交错逗留帧(主理人实机反馈)。旧内容瞬隐后观感是
+         「一层换一层」,与覆盖层的纯滑动进场不再重叠。 */
       .wrap.panelmode > .outputs,
       .wrap.panelmode > .now,
       .wrap.panelmode > .lower > .controls,
       .wrap.panelmode > .lower > .progress-row,
       .lower.volmode > .controls,
       .lower.volmode > .progress-row {
-        opacity: 0; transform: translateY(8px); visibility: hidden;
-        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
-          visibility 0s linear var(--dur-out); }
+        visibility: hidden; }
       /* 音量面板层本身完全透明,只负责承载音量行 + 接管「点外部关闭」。
          inset:0 与 .lower 严格对齐,不再需要负 inset/padding 那套魔数补偿,
          音量条左右端与下方 seek 天然重合。
-         常驻渲染 + .open 开合:进场 = 从底部滑上来 + 淡入(--dur-in 0.6s);出场反向(--dur-out 0.44s)。
-         visibility 延迟切换技巧同上:关闭动画播完才真正隐藏,期间仍可点静音键/拖音量。 */
+         常驻渲染 + .open 开合:**只滑不淡**(2026-10-29 定调)。
+         进场 = 从底部 20px 滑上来(--dur-panel-in);出场 = visibility 立即 hidden 瞬切。
+         出场不再走动画的原因:本层完全透明,只要还「可见」就在顶层接事件,淡出的那 0.44s
+         会变成「看不见却能点」的幽灵层(点外部关闭后还能拖到音量/点到静音)。 */
       .vol-overlay { position: absolute; inset: 0; z-index: 6;
         display: flex; align-items: flex-start;
-        opacity: 0; transform: translateY(20px); visibility: hidden;
-        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
-          visibility 0s linear var(--dur-out); }
-      .vol-overlay.open { opacity: 1; transform: none; visibility: visible;
-        transition: opacity var(--dur-in) var(--anim-in), transform var(--dur-in) var(--anim-in),
-          visibility 0s linear 0s; }
+        transform: translateY(20px); visibility: hidden; }
+      .vol-overlay.open { transform: none; visibility: visible;
+        transition: transform var(--dur-panel-in) var(--anim-in), visibility 0s linear 0s; }
       /* 静音键占最左 42px(顶替进度条左侧时间标签的位置),右侧留 42px 空位,
          使音量条与下方 seek 严格等长、左右端上下重合。gap 必须为 0。 */
       .vol-row { display: flex; align-items: center; gap: 0; width: 100%; height: 42px; }
@@ -4409,18 +4410,16 @@ class MusicFlowRemoteCard extends LitElement {
         font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 5; }
       .vol-slider.dragging .vol-value, .vol-slider:hover .vol-value { opacity: 1; }
       /* 歌词/队列/媒体库已移入控件行(.ctl),不再需要 .actions/.act */
-      /* 面板无感全屏覆盖 + 带方向过渡(面板常驻 DOM,开合只切 .open):
-         关闭态 = 透明 + 下沉 20px + visibility:hidden(延迟 var(--dur-out) 0.44s)—— 动画期间仍参与渲染,
-         结束后真正不可点/不可 Tab(等价旧条件渲染卸载);打开态 = 从底部滑上来 + 淡入(0.6s)。
-         首页内容(.outputs/.now/.lower 内两行)同步下沉淡出,见上方共享隐身规则。 */
+      /* 面板无感全屏覆盖 + **只滑不淡**(面板常驻 DOM,开合只切 .open;2026-10-29 定调):
+         关闭态 = 下沉 20px + visibility:hidden(无延迟,瞬切);打开态 = 从底部滑上来(--dur-panel-in)。
+         去掉淡入淡出的原因:①面板背景透明,淡入期间与下方旧内容叠出半透明交错帧;
+         ②淡出期间面板仍在顶层接事件 = 看不见却能点的幽灵层。现在开关都是「一层换一层」。
+         首页内容(.outputs/.now/.lower 内两行)同步瞬隐,见上方共享隐身规则。 */
       .panel { position: absolute; inset: 0; z-index: 5; background: transparent; border: none; border-radius: 0;
         padding: 14px; width: 100%; height: 100%; display: flex; flex-direction: column; box-sizing: border-box;
-        opacity: 0; transform: translateY(20px); visibility: hidden;
-        transition: opacity var(--dur-out) var(--anim-out), transform var(--dur-out) var(--anim-out),
-          visibility 0s linear var(--dur-out); }
-      .panel.open { opacity: 1; transform: none; visibility: visible;
-        transition: opacity var(--dur-in) var(--anim-in), transform var(--dur-in) var(--anim-in),
-          visibility 0s linear 0s; }
+        transform: translateY(20px); visibility: hidden; }
+      .panel.open { transform: none; visibility: visible;
+        transition: transform var(--dur-panel-in) var(--anim-in), visibility 0s linear 0s; }
       /* 流转播放页:沿用 .panel 的整卡 inset:0 覆盖(尺寸 = 卡片尺寸),头部固定,
          内容区 .tp-scroll 独立滚动 —— A4 的网格与 B 的上下隐形热区都以这层滚动容器为准。 */
       .tp-title { font-weight: 600; font-size: 14px; }
