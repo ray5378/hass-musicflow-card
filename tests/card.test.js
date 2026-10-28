@@ -3338,9 +3338,13 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
   // 仍只改 visibility(不卸载、不改 display)⇒ 卡片高度全程零跳变。
   it("首页内容隐身规则(panelmode/volmode):直接 visibility:hidden 瞬隐,无 opacity/位移/过渡", () => {
     const lines = srcLines();
-    const rule = ruleText(lines, ".wrap.panelmode > .outputs,");
+    const rule = ruleText(lines, ".wrap.panelmode > :not(.panel),");
     expect(rule).not.toBe("");
-    expect(rule).toContain(".wrap.panelmode > .now");
+    // 整块覆盖:漏掉一块就从全透明面板背后透出来 = 「媒体库和首页叠加」
+    expect(rule).toContain(":not(.panel)");
+    expect(rule).not.toContain(".wrap.panelmode > .now");
+    expect(rule).not.toContain(".wrap.panelmode > .outputs");
+    expect(rule).not.toContain(".wrap.panelmode > .lower > .controls");
     expect(rule).toContain(".lower.volmode > .controls");
     expect(rule).toContain(".lower.volmode > .progress-row");
     expect(rule).toContain("visibility: hidden;");
@@ -3572,7 +3576,7 @@ describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
   });
 
   it(".wrap.mini 只保留 overflow + 锁死 padding(其余占位属性一律禁止)", () => {
-    const r = ruleLine(".wrap.mini { overflow: hidden; padding: 14px; }");
+    const r = ruleLine(".wrap.mini { overflow: hidden; overflow: clip; padding: 14px; }");
     // padding 必须显式锁死:极简时 .outputs 向上移出会溢出到容器 block-start,
     // Chrome 会吃掉 .wrap 的上下 padding(实测 14px→3px,整卡矮 20px、内容上移 11px),
     // 歌词/封面于是顶到卡片上边缘。锁成与完整模式同值后高度与上移基准都不漂移。
@@ -3580,6 +3584,17 @@ describe("v2.8.15 极简模式带方向进出场:防回退静态守卫", () => {
     for (const bad of ["min-height", "max-height", "height:", "margin", "display", "gap"]) {
       expect(r, "不得出现 " + bad).not.toContain(bad);
     }
+  });
+
+  // 极简态的 .wrap 绝不能是可滚动容器:hidden 会撑出几十 px 可滚动溢出区,
+  // 任何浏览器自发滚动(焦点揭示 / scrollIntoView / 滚动锚定)都会把歌词+封面整体顶走,
+  // 表现为「极简时左右留白和完整模式不一样」。clip 裁剪范围相同但不可滚动。
+  it(".wrap.mini 必须 overflow: clip(不可滚动容器,极简态留白不漂移)", () => {
+    const r = ruleLine(".wrap.mini { overflow: hidden; overflow: clip; padding: 14px; }");
+    expect(r).toContain("overflow: clip");
+    // hidden 必须写在 clip 之前,作为老浏览器不认 clip 时的兜底
+    expect(r.indexOf("overflow: hidden")).toBeLessThan(r.indexOf("overflow: clip"));
+    expect(r).toContain("padding: 14px");
   });
 
   it("全仓 transition 只过渡合成属性(布局属性与 all 一律禁止,.lyricbox 例外)", () => {
@@ -3698,7 +3713,7 @@ describe("v2.8.16 极简模式:padding 锁死 + 测量接线(防回退静态守�
   };
 
   it(".wrap.mini 显式锁死 padding: 14px(与完整模式同值)", () => {
-    expect(one(".wrap.mini { overflow: hidden; padding: 14px; }")).toContain("padding: 14px");
+    expect(one(".wrap.mini { overflow: hidden; overflow: clip; padding: 14px; }")).toContain("padding: 14px");
   });
 
   it("上移量用 offsetTop 静态差,不用 rect(rect 会被正在播放的 transform 带偏)", () => {

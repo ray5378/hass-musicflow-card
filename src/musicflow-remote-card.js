@@ -4287,8 +4287,15 @@ class MusicFlowRemoteCard extends LitElement {
          容器的 block-start 之外,Chrome 会因此把 .wrap 的上下 padding 从 14px 吃掉到 3px
          (实测:padding-top/bottom 14→3,整卡矮 20px,所有内容上移 11px)—— 歌词/封面
          于是顶到卡片上边缘、「贴边」。显式声明 .wrap.mini 的 padding 后前后一致,
-         卡片高度与上移基准都不再漂移。 */
-      .wrap.mini { overflow: hidden; padding: 14px; }
+         卡片高度与上移基准都不再漂移。
+         (2026-10-29 修「极简态左右留白会变」)overflow 必须是 clip 而不是 hidden:
+         hidden 会把 .wrap 变成**可滚动容器** —— 常驻渲染的三个 .panel 与移出卡外的三块
+         一起撑出几十 px 可滚动溢出区(实测 scrollH 288~339 / clientH 268),任何浏览器
+         自发滚动(焦点揭示 / scrollIntoView / 滚动锚定)都会把整块内容顶走;且可滚动容器
+         的内容盒会被滚动条槽改动(实测 .now 392px → 390px,左右各缩 1px)。
+         clip 裁剪范围与 hidden 一致(都在 padding 边)但**不产生滚动容器**:不可滚动 ⇒
+         不可能位移,内容盒与完整模式严格同值。hidden 保留在前作兜底(老 Safari 不认 clip)。 */
+      .wrap.mini { overflow: hidden; overflow: clip; padding: 14px; }
       /* 展开态(完整模式 / 回归)过渡:进场曲线 + 进场时长;visibility 立即恢复
          (动画一开始就可见可交互)。只过渡合成属性,不碰任何影响布局的属性。 */
       .wrap > .outputs,
@@ -4374,10 +4381,8 @@ class MusicFlowRemoteCard extends LitElement {
          为什么不再渐变:旧内容一边淡出、覆盖层一边滑入 = 两层各跑各的,中途必然出现
          「半透明旧内容 + 新面板」的交错逗留帧(主理人实机反馈)。旧内容瞬隐后观感是
          「一层换一层」,与覆盖层的纯滑动进场不再重叠。 */
-      .wrap.panelmode > .outputs,
-      .wrap.panelmode > .now,
-      .wrap.panelmode > .lower > .controls,
-      .wrap.panelmode > .lower > .progress-row,
+      /* 🔴 必须整块覆盖(:not(.panel)),不能逐个列名 —— .panel 背景是全透明的,漏掉任何一块都会从面板背后透出来(如断线时 .warnbar 透在媒体库列表底下)= 主理人实机反馈的「媒体库和首页两种显示叠加」。.lower 整块隐藏也顺带盖住 .vol-overlay,避免音量浮层(z-index 6)压在面板之上。 */
+      .wrap.panelmode > :not(.panel),
       .lower.volmode > .controls,
       .lower.volmode > .progress-row {
         visibility: hidden; }
