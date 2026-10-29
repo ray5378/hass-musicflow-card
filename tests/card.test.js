@@ -3399,6 +3399,26 @@ describe("v2.8.11 面板/极简过渡动画:防回退静态守卫", () => {
     expect(lines.join(String.fromCharCode(10))).not.toContain("var(--mini-h");
   });
 
+  // 根因(2026-10-29 本机 Chrome 实机复现):.wrap 进入极简歌词模式时会加上 mini 类,
+  // 而 .mini 同时是「队列/媒体库列表里的小按钮」类名 ⇒ 整张卡吃到小按钮样式:
+  // border:1px(左右留白 14→15)、background / color / font-size / cursor 被改写;
+  // 更要命的是 .mini:hover{transform:scale(1.06)} 让**整张卡**随指针悬停放大 6% ——
+  // 实测极简态歌词/封面距卡片左右边缘 15px → 2.1px(贴边),指针移开又回到 15px,
+  // 正是「打开页面不做任何操作进极简正常、做过任意操作(指针停在卡上)再进极简就贴边」。
+  // 故小按钮样式必须限定为 button.mini,不得留下裸 .mini 选择器。
+  it("小按钮样式必须限定 button.mini:裸 .mini 会让极简态整卡吃到边框 + hover 放大", () => {
+    const lines = srcLines();
+    const bare = [];
+    lines.forEach((l, i) => {
+      const m = l.match(/^\s*(\.mini(?:\.imp)?(?::hover|:active|:disabled)?)\s*\{/);
+      if (m) bare.push("L" + (i + 1) + ": " + m[1]);
+    });
+    expect(bare, "裸 .mini 选择器会命中极简态的 .wrap.mini").toEqual([]);
+    expect(lines.some((l) => /^\s*button\.mini \{/.test(l))).toBe(true);
+    expect(lines.some((l) => /^\s*button\.mini:hover \{/.test(l))).toBe(true);
+    expect(lines.some((l) => /^\s*button\.mini:active \{/.test(l))).toBe(true);
+  });
+
   it("reduced-motion 覆盖全部新增过渡(面板/音量/极简收缩块直切)", () => {
     const lines = srcLines();
     // 第二个 reduce 块(第一个是 idlebg 的):锚定 .vol-overlay, .panel 直切行

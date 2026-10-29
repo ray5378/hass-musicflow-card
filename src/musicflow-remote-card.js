@@ -50,7 +50,7 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 长按也不漏(见 _onCardPointer / _onWrapClickCapture)。
 const MINI_CLICK_GUARD_MS = 300;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.21";
+const CARD_VERSION = "2.8.22";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -4576,11 +4576,22 @@ class MusicFlowRemoteCard extends LitElement {
       .qitem .idx { width: 18px; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
       .qitem .qt, .sitem .st { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--fg); }
       .qitem .qa, .sitem .sa { width: 90px; color: var(--fg-faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .mini { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
+      /* 🔴 必须限定为 button:.mini 是「小按钮」类名(队列/媒体库列表里的 ▶ ✕ 等),
+         而 .wrap 进入极简歌词模式时也会加上同名 mini 类(见 render 里 u.mini 为真时输出的 mini)。
+         两者同名 ⇒ 不限定标签时,整张卡片的 .wrap 会吃到这套小按钮样式。本机 Chrome 实测极简态:
+           · border:1px  ⇒ .wrap 内容盒左右各缩 1px(距卡片边缘 14px → 15px)
+           · border-radius:8px / background:var(--panel-bg) / color:var(--ctl) / font-size:12px /
+             cursor:pointer  ⇒ 卡片外框、底色、文字色、字号全被小按钮样式改写
+           · .mini:hover{transform:scale(1.06)} / .mini:active{transform:scale(0.94)}
+             ⇒ **整张卡**随鼠标悬停放大 6%(按下缩 6%):极简态歌词/封面距卡片左右边缘
+               由 15px 塌到 2.1px(贴边);指针不在卡片上时又是 15px —— 这正是「打开页面不做
+               任何操作进极简正常、做过任意操作(指针停在卡上)再进极简就贴边」的根因。
+         所有 .mini 元素都是 <button>(共 12 处),故限定 button 即可彻底隔离。 */
+      button.mini { border: 1px solid var(--line); background: var(--panel-bg); color: var(--ctl);
         border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer;
         transition: box-shadow 0.18s ease, transform 0.18s ease, color 0.2s; }
-      .mini:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
-      .mini:active { transform: scale(0.94); }
+      button.mini:hover { transform: scale(1.06); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+      button.mini:active { transform: scale(0.94); }
       .search-input { flex: 1; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px;
         padding: 7px 10px; background: rgba(0, 0, 0, 0.3); color: #fff; outline: none;
         transition: border-color 0.2s, box-shadow 0.2s; }
@@ -4608,8 +4619,8 @@ class MusicFlowRemoteCard extends LitElement {
       .br-src:focus { border-color: rgb(var(--acc)); box-shadow: 0 0 0 1px rgb(var(--acc)); }
       .br-src option { background: #1b1b1f; color: #fff; }
       /* 远程结果「加入库」小按钮(与 .mini 播放按钮区分:更紧凑、主色描边) */
-      .mini.imp { border-color: rgba(var(--acc), 0.55); color: rgb(var(--acc)); padding: 3px 6px; font-size: 11px; }
-      .mini.imp:disabled { opacity: 0.5; cursor: default; }
+      button.mini.imp { border-color: rgba(var(--acc), 0.55); color: rgb(var(--acc)); padding: 3px 6px; font-size: 11px; }
+      button.mini.imp:disabled { opacity: 0.5; cursor: default; }
       /* 远程结果平台标签(歌名后小徽标) */
       .rtag { display: inline-block; vertical-align: middle; margin-left: 6px; padding: 0 6px;
         border-radius: 6px; font-size: 10px; font-weight: 500; line-height: 1.7;
