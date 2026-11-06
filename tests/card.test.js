@@ -1732,11 +1732,11 @@ describe("渲染", () => {
     c5._ui.wsState = "rest";
     await c5.updateComplete;
     // v2.7.1:REST 兜底(REST 通、WS 未连上)不再显示任何提示条 —— 用户要求去掉。
-    expect(c5.shadowRoot.querySelector(".warnbar")).toBeFalsy();
+    expect(c5.shadowRoot.querySelector(".lyricwarn")).toBeFalsy();
     c5._ui.wsState = "down";
     c5.requestUpdate();
     await c5.updateComplete;
-    expect(c5.shadowRoot.querySelector(".warnbar.bad")).toBeTruthy();
+    expect(c5.shadowRoot.querySelector(".lyricwarn")).toBeTruthy();
 
     document.body.removeChild(c);
     document.body.removeChild(c2);
@@ -3778,5 +3778,63 @@ describe("v2.8.16 极简模式:padding 锁死 + 测量接线(防回退静态守�
 
   it("兜底值 64 仍在(DOM 未就绪时不至于上移 0)", () => {
     expect(one("this._miniShift = 64;")).toContain("64");
+  });
+});
+
+describe("v2.8.23 HA 2026.11:重挂载恢复 + 群组当前曲由队列推导", () => {
+  it("detach 后重新 attach 会补回轮询/探测/可见性监听,并立即刷新一次状态", async () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    c._ui.peers = [{ peerId: "dlna:d1", available: true }];
+    c._startTracking();
+    expect(c._pollTimer).toBeTruthy();
+
+    c.remove(); // 前端重建卡片元素 / 条件可见性翻转时的 detach
+    expect(c._pollTimer).toBeFalsy();
+    expect(c._probeTimer).toBeFalsy();
+    expect(c._visHandler).toBeFalsy();
+
+    document.body.appendChild(c); // 重新 attach
+    expect(c._pollTimer).toBeTruthy();
+    expect(c._tickTimer).toBeTruthy();
+    expect(c._probeTimer).toBeTruthy();
+    expect(c._visHandler).toBeTruthy();
+    await flush();
+    expect(c._client.getStatus).toHaveBeenCalledWith("dlna:d1");
+  });
+
+  it("群组 status 不带 media 时,当前曲由队列项推导(歌名/封面跟随换曲)", async () => {
+    const c = mkCard({}, {
+      getStatus: vi.fn(async () => ({ state: "PLAYING", position: 3, duration: 100, volume: 50, muted: false })),
+      getQueue: vi.fn(async (pid, opts = {}) => {
+        const off = opts.offset || 0;
+        const size = opts.size || 0;
+        const items = [];
+        for (let i = 0; i < size; i++) {
+          items.push({ songId: "s" + (off + i), title: "T" + (off + i), artist: "A", album: "B", coverArt: "c" + (off + i), duration: 100 });
+        }
+        return { items, total: 3000, currentIndex: 1500, playMode: "order", isActive: true };
+      }),
+    });
+    c._ui.currentPeerId = "group:g1";
+    c._applyStatus({ state: "PLAYING", position: 3, duration: 100, volume: 50, muted: false });
+    c._applyQueue({ items: [], total: 3000, currentIndex: 1500, playMode: "order", isActive: true });
+    await flush();
+    expect(c._ui.song).toBeTruthy();
+    expect(c._ui.song.songId).toBe("s1500");
+    expect(c._ui.song.title).toBe("T1500");
+  });
+
+  it("status 自带 media 的 peer(DLNA)以 status 为准,不额外拉队列块", async () => {
+    const c = mkCard({}, {
+      getStatus: vi.fn(async () => ({ state: "PLAYING", position: 1, duration: 100, media: { songId: "s9", title: "九", coverArt: "c9", duration: 100 } })),
+      getQueue: vi.fn(async () => ({ items: [], total: 3000, currentIndex: 2500, playMode: "order", isActive: true })),
+    });
+    c._ui.currentPeerId = "dlna:d1";
+    c._applyStatus({ state: "PLAYING", position: 1, duration: 100, media: { songId: "s9", title: "九", coverArt: "c9", duration: 100 } });
+    c._applyQueue({ items: [], total: 3000, currentIndex: 2500, playMode: "order", isActive: true });
+    await flush();
+    expect(c._client.getQueue).not.toHaveBeenCalled();
+    expect(c._ui.song.songId).toBe("s9");
   });
 });

@@ -353,6 +353,8 @@ class MusicFlowRemoteCard extends LitElement {
     // 极简模式点击守卫必须挂在 host 的捕获阶段:Lit 模板里同一个元素只能绑一个 @click,
     // 而守卫要抢在控件 handler 之前执行;捕获阶段从 host 往影子根内部走,先于 .wrap 上任何监听。
     this._hostClickCapture = (e) => this._onWrapClickCapture(e);
+    this._qSongFetch = -1; // 当前队列项补拉中的索引(见 _syncSongFromQueue)
+    this._statusHasMedia = false; // 最近一次 status 是否自带 media(群组不带,见 _syncSongFromQueue)
     this._miniShift = 64; // 极简模式上移量(px):.now 顶部 − .outputs 顶部的静态布局差;64 为 DOM 未就绪时的兜底
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
@@ -382,8 +384,13 @@ class MusicFlowRemoteCard extends LitElement {
     if (typeof console !== "undefined") console.info(`[musicflow-remote-card] v${CARD_VERSION}`);
     // 极简模式「一击只退出」守卫:捕获阶段注册在 host 上(见 _onWrapClickCapture)
     this.addEventListener("click", this._hostClickCapture, true);
-    if (this._ready && this._client && !this._client.connected) {
-      this._client.connect();
+    // HA 前端会在面板切换 / 卡片重建 / 条件可见性翻转时 detach 再 attach 卡片元素
+    // (2026.11 起 hui-card 以 setter 直接下发 hass,元素重建更频繁)。
+    // _teardown() 摘掉了轮询/探测/可见性监听,过去这里只重连 client 就撒手,
+    // 卡片会永久停在重挂载前的旧数据(封面/歌名/歌词不跟随当前播放)。
+    if (this._ready && this._client) {
+      if (!this._client.connected) this._client.connect();
+      this._armRuntime();
     }
   }
 
@@ -465,6 +472,27 @@ class MusicFlowRemoteCard extends LitElement {
       }
     };
     document.addEventListener("visibilitychange", this._visHandler);
+  }
+
+  /** 运行时接线(定时器 + 可见性监听 + 追踪 + 一次权威刷新)。
+   *  幂等:首次 bootstrap 与每次 detach 后重新 attach 都走这里 ——
+   *  _teardown() 会把这里挂的东西全部摘掉,重新挂载必须原样补回。 */
+  _armRuntime() {
+    if (!this._client) return;
+    if (!this._probeTimer) {
+      this._probeTimer = setInterval(() => { if (!this._ui.connected) this._probeServer(); }, 15000);
+    }
+    if (!this._visHandler) {
+      this._visHandler = () => {
+        if (document.visibilityState === "visible" && this._client) {
+          this._refreshCurrentPeerView();
+        }
+      };
+      document.addEventListener("visibilitychange", this._visHandler);
+    }
+    this._ensureTracking();
+    // 重挂载后立即取一次权威状态,不等 2s 轮询:首帧就应是当前播放那首。
+    this._refreshCurrentPeerView();
   }
 
   // REST 探测服务器是否可达(只在 WS 断开时调用);成功=能和服务器通信,不变暗。
@@ -797,7 +825,57 @@ class MusicFlowRemoteCard extends LitElement {
       this._qReset();
     }
     if (this._ui.showQueue) this._qEnsureLoaded();
+    this._syncSongFromQueue();
     this.requestUpdate();
+  }
+
+  // 群组/桥组 peer 的 /peers/:id/status **不带 media**(只有「可听显示延迟」窗口内由
+  // displayHold 临时下发),队列快照也只给 currentIndex、不含当前项。这类 peer 的
+  // 「当前播放」只能由队列项推导,否则卡片会长期停在旧的封面/歌名/歌词。
+  // 队列是分块的(服务端只回 offset/size 窗口):命中块未缓存时按 CHUNK 补拉一次,
+  // 只在换曲时发生,稳态轮询不增加请求。
+  _syncSongFromQueue() {
+    if (this._statusHasMedia) return; // status 自带 media 的 peer(DLNA/AirPlay/Sendspin)以 status 为准
+    const pid = this._ui.currentPeerId;
+    const q = this._ui.queue || {};
+    const ci = typeof q.currentIndex === "number" ? q.currentIndex : -1;
+    if (!pid || ci < 0 || !(q.total > 0) || q.isActive !== true) return;
+    const cached = this._ui.qCache.get(ci);
+    if (cached && cached.songId) {
+      this._applyQueueItemMedia(cached);
+      return;
+    }
+    if (this._qSongFetch === ci) return; // 同一切点已在拉取,不重复打
+    this._qSongFetch = ci;
+    const chunk = Math.floor(ci / CHUNK);
+    this._client
+      .getQueue(pid, { offset: chunk * CHUNK, size: CHUNK })
+      .then((res) => {
+        if (pid !== this._ui.currentPeerId) return; // 已切走:结果不写
+        const items = (res && res.items) || [];
+        items.forEach((it, j) => { if (it) this._ui.qCache.set(chunk * CHUNK + j, it); });
+        if (this._ui.queue?.currentIndex !== ci) return; // 拉取期间已换曲
+        const cur = this._ui.qCache.get(ci);
+        if (cur && cur.songId) this._applyQueueItemMedia(cur);
+      })
+      .catch((e) => err("queue current item fetch failed", e))
+      .finally(() => { if (this._qSongFetch === ci) this._qSongFetch = -1; });
+  }
+
+  // 队列项 → now-playing。已是同一首且封面在手时不重复写,避免 2s 轮询反复触发
+  // _setMedia(歌词重载 / 封面重渲染)。
+  _applyQueueItemMedia(item) {
+    if (!item || !item.songId) return;
+    const cur = this._ui.song;
+    if (cur && cur.songId === item.songId && cur.coverArt) return;
+    this._setMedia({
+      songId: item.songId,
+      title: item.title,
+      artist: item.artist,
+      album: item.album,
+      coverArt: item.coverArt,
+      duration: item.duration,
+    });
   }
 
   _applyDeviceState(deviceId, state) {
@@ -941,6 +1019,7 @@ class MusicFlowRemoteCard extends LitElement {
     // 快照的 items 里(见服务端 GET /peers/:id/status)。这里用当前队列项补全成完整 media,
     // 否则 now-playing 永远显示「未知」且无封面,收藏/歌词也定位不到具体歌曲。
     // DLNA/airplay/sendspin 的 status 不带 items,走原本就完整的 media,不受影响。
+    this._statusHasMedia = !!status.media;
     if (status.media) {
       let media = status.media;
       if (statusItem) {
@@ -1185,6 +1264,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._ui.queue = { total: 0, currentIndex: -1, playMode: "shuffle", isActive: false, ended: false };
     this._ui.currentIndex = -1;
     this._qReset();
+    this._qSongFetch = -1;
     this._ui.song = null;
     this._ui.lyrics = [];
     this._ui.currentLyric = "";
@@ -2134,7 +2214,6 @@ class MusicFlowRemoteCard extends LitElement {
             ${IDLE_GROUPS.map((g, i) => html`<i style="--c1:${g.c1};--c2:${g.c2};--dly:${(-(i * pal.cycle) / IDLE_GROUP_COUNT).toFixed(2)}s"></i>`)}
           </div>` : ""}
         <div class="wrap ${u.connected || u.serverOk ? "" : "off"} ${u.showQueue || u.showBrowser || u.transferOpen ? "panelmode" : ""} ${u.mini ? "mini" : ""}" style="--mini-shift:${this._miniShift}px" @click=${this._onWrapClick} @pointerenter=${this._onCardPointer} @pointermove=${this._onCardPointer} @focusin=${this._onWrapFocusIn} @focusout=${this._onWrapFocusOut}>
-          ${!u.connected && u.wsState === "down" ? html`<div class="warnbar bad">${this._t("connection.cannotConnect")}</div>` : ""}
           ${this._renderOutputs()}
 
           <div class="now">
@@ -2963,6 +3042,11 @@ class MusicFlowRemoteCard extends LitElement {
   // 歌词滚动:视口固定 LYRIC_VIEW_LINES 行高,整条歌词轨道按当前行整体上移,
   // 让当前行始终停在第 LYRIC_CUR_SLOT 槽(即第二行),上方 1 行已唱、下方 2 行待唱。
   _renderLyricBox() {
+    // 断线提示渲染在歌词视口内:视图是绝对定位的固定 100px 视口,提示出现/消失
+    // 都不改变卡片高度(放在标题上方会撑高卡片)。提示激活时暂不渲染歌词。
+    if (!this._ui.connected && this._ui.wsState === "down") {
+      return html`<div class="lyricbox"><div class="lyricwarn">${this._t("connection.cannotConnect")}</div></div>`;
+    }
     const lines = this._ui.lyrics || [];
     if (!lines.length) return html`<div class="lyricbox"></div>`;
     const idx = this._ui.lyricIndex;
@@ -4188,8 +4272,9 @@ class MusicFlowRemoteCard extends LitElement {
       .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
       .ic svg { display: block; }
       .err { color: #f05672; padding: 12px; }
-      .warnbar { padding: 5px 12px; font-size: 12px; color: #b8860b; background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid rgba(255, 180, 0, 0.25); }
-      .warnbar.bad { color: #f05672; background: rgba(240, 86, 114, 0.12); border-bottom-color: rgba(240, 86, 114, 0.25); }
+      /* 断线提示(.lyricwarn):歌词视口内居中显示,零布局高度。 */
+      .lyricwarn { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        padding: 0 12px; font-size: 12px; color: #f05672; text-align: center; }
       /* 播放设备切换按钮区:gap 加大(12px)补偿选中态 scale(1.1) 放大后的视觉间距,
          避免相邻按钮放大后贴在一起。 */
       /* 正常态恒单行:flex 换行按「未收缩宽度」排线 —— 列表内容再宽也会独占第一行、
