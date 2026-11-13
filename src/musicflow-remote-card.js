@@ -50,7 +50,7 @@ const MINI_PAUSE_REVERT_MS = 20000;
 // 长按也不漏(见 _onCardPointer / _onWrapClickCapture)。
 const MINI_CLICK_GUARD_MS = 300;
 // 卡片版本(发版时与 package.json 同步;控制台可见,用于核对实际加载的版本,排查 HACS/浏览器缓存)
-const CARD_VERSION = "2.8.23";
+const CARD_VERSION = "2.8.24";
 
 // 流转页拖拽/边缘自动滚动参数(与客户端 PlayerTransferPage 同一套手感):
 // - TP_DRAG_THRESHOLD: 指针位移超过它才算「拖拽」,否则按单击(切遥控目标)处理。
@@ -357,6 +357,7 @@ class MusicFlowRemoteCard extends LitElement {
     this._statusHasMedia = false; // 最近一次 status 是否自带 media(群组不带,见 _syncSongFromQueue)
     this._miniShift = 64; // 极简模式上移量(px):.now 顶部 − .outputs 顶部的静态布局差;64 为 DOM 未就绪时的兜底
     this._lastPos = -1; // position 前进自愈基线(播放状态判定,见 _applyStatus)
+    this._lastTickAt = 0; // 上一帧 tick 的墙钟时刻(真实经过时间推进进度/歌词)
     this._seekIssuedAt = 0; // 本卡片最近一次发起 seek 的时刻(ms);用于丢弃"seek 之前采样的"陈旧 position
     this._seekAckAtMs = 0; // seek REST 响应返回时刻(ms)。服务端 seek 同步语义:响应=锚点已落位,
     // 故「在此之前发起」的状态拉取数据可能早于 seek → 丢弃(MA 因果判定,无固定窗口)
@@ -906,15 +907,19 @@ class MusicFlowRemoteCard extends LitElement {
   // 修法:按 `采样值 + (现在 - reportedAt)` 外推到此刻再写入 —— 两次上报之间连续推进,
   // 新上报只重新对齐锚点,不再回退。暂停时保持上报值原样(不推进,避免暂停态漂移)。
   //
-  // 边界:只有客户端实例的 status 带 `reportedAt`。DLNA / AirPlay / Sendspin / 群组的
-  // status 走各自实时查询(SOAP / 进程内状态),没有该字段 → 原样返回,行为完全不变。
+  // 时间锚点:客户端实例用 `reportedAt`(周期上报的采样时刻);DLNA / AirPlay /
+  // Sendspin / 群组没有 reportedAt,但服务端 status 都带 `updatedAt`(状态采样时刻)。
+  // 旧实现只认 reportedAt,导致设备型 peer 把「最多 2s 前的采样」当成此刻写进进度,
+  // 歌词稳定滞后 1~3s 且每次轮询回跳 —— 这里补上 updatedAt 兜底。
   _projectStatusPosition(status, playing) {
     const pos = status.position;
     if (!playing) return pos;
-    const at = status.reportedAt;
-    if (typeof at !== "number" || !isFinite(at)) return pos;
+    const reportedAt = typeof status.reportedAt === "number" && isFinite(status.reportedAt) ? status.reportedAt : null;
+    const updatedAt = typeof status.updatedAt === "number" && isFinite(status.updatedAt) ? status.updatedAt : null;
+    const at = reportedAt ?? updatedAt;
+    if (at === null) return pos;
     const ageSec = (Date.now() - at) / 1000;
-    // 上报过旧(TTL 30s,见服务端 getLocalStatusReport)或时钟异常 → 原样,不做外推。
+    // 采样过旧(客户端上报 TTL 30s)或时钟异常 → 原样,不做外推。
     if (!(ageSec > 0) || ageSec > 30) return pos;
     const projected = pos + ageSec;
     const dur = typeof status.duration === "number" ? status.duration : 0;
@@ -994,6 +999,8 @@ class MusicFlowRemoteCard extends LitElement {
         dbg("拖拽中:不覆盖手指值", { peer: this._ui.currentPeerId, finger: this._ui.currentTime, reported: status.position });
       }
       if (!stale && !this._ui.seekDragging) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
+      // 刚用状态锚点校准过进度 → 下一帧 tick 从此刻起算,避免把轮询间隔重复加一遍。
+      this._lastTickAt = Date.now();
     }
     // 客户端本机实例(local)经 /status 回传的 duration 来自它本地上报,真实可用;
     // 若上报 duration 为 0(旧端/上报空窗),回退到队列快照里当前曲的时长,避免进度条分母恒为 0。
@@ -1303,6 +1310,8 @@ class MusicFlowRemoteCard extends LitElement {
     this._stopTracking();
     const pid = this._ui.currentPeerId;
     if (!pid) return;
+    // 从启动时刻开始计:第一帧 tick 也能拿到真实的 ~250ms,而不是 dt=0。
+    this._lastTickAt = Date.now();
     this._pollTimer = setInterval(async () => {
       try {
         const [status, queue] = await Promise.all([
@@ -1316,10 +1325,17 @@ class MusicFlowRemoteCard extends LitElement {
       }
     }, 2000);
     this._tickTimer = setInterval(() => {
+      const now = Date.now();
+      const last = this._lastTickAt || now;
+      this._lastTickAt = now;
       // 拖拽 seek 中手指值优先,tick 不推进(否则边拖边涨,跟手打架;对标 volDragging)。
       if (this._ui.seekDragging) return;
       if (this._ui.isPlaying && this._ui.duration > 0 && this._ui.currentTime < this._ui.duration) {
-        this._ui.currentTime = Math.min(this._ui.duration, this._ui.currentTime + 0.25);
+        // 按**真实经过时间**推进,而不是固定 +0.25:HA 平板/后台标签页的定时器会被
+        // 节流或延后,固定步长会让歌词时钟越走越慢(实测面板亮屏时也可能偏几百 ms)。
+        // 单帧最多补 2s(轮询周期),避免长时间后台后一次跳过头;下一次轮询会再校准。
+        const dt = Math.min(2, Math.max(0, (now - last) / 1000));
+        this._ui.currentTime = Math.min(this._ui.duration, this._ui.currentTime + dt);
         this._updateLyric();
         this.requestUpdate();
       }
@@ -1329,6 +1345,7 @@ class MusicFlowRemoteCard extends LitElement {
   _stopTracking() {
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    this._lastTickAt = 0;
   }
 
   // 进度百分比:进度条的**填充**(内联 linear-gradient)与**小圆点**(range 的 thumb)
