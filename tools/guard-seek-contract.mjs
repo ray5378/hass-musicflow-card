@@ -108,13 +108,17 @@ check(
 //   ① terser 折叠形态 `!this._ui.seekDragging && this._ui.isPlaying`
 //      （`&&isPlaying` 是 tick 独有搭配：_applyStatus 那条是 `!seekDragging && (赋值)`，
 //       不会串台，所以放宽后仍只认「tick 里拖拽中跳过」这一语义）；
-//   ② 旧压缩形态 `_ui.seekDragging ||`。
+//   ② 未压缩形态 `if (seekDragging) return;` + 紧邻的 `if (isPlaying`
+//      —— 必须连**下一句**一起锚定：_syncSeekThumb 里也有逐字相同的
+//      `if (this._ui.seekDragging) return;`（下一句是 const prog=…），只认单句会被它满足，
+//      反向验证（删掉 tick 那句）就红不了 = 守卫等于没修；
+//   ③ 旧压缩形态 `_ui.seekDragging ||`。
 // src 侧（第三个参数）不放宽：源码是我们自己的，必须原样保留那句早返回。
 check(
   "tick 遇 seekDragging 直接返回",
   "只置位不消费 = 等于没修",
   /if\s*\(\s*this\._ui\.seekDragging\s*\)\s*return;/,
-  /!this\._ui\.seekDragging\s*&&\s*this\._ui\.isPlaying|_ui\.seekDragging\s*\|\|/,
+  /!this\._ui\.seekDragging\s*&&\s*this\._ui\.isPlaying|if\s*\(\s*this\._ui\.seekDragging\s*\)\s*return;\s*if\s*\(\s*this\._ui\.isPlaying|_ui\.seekDragging\s*\|\|/,
 );
 check(
   "_applyStatus 遇 seekDragging 跳过位置覆盖",
