@@ -1074,6 +1074,9 @@ describe("Subsonic / v1 端点 URL 拼接", () => {
     expect(path(c)).toBe("/api/v1/home/playlist-count");
     await c.getHomeCards();
     expect(path(c)).toBe("/api/v1/recommend/home-cards");
+    await c.getHomeRecommendSection();
+    expect(path(c)).toBe("/api/v1/home/recommend-section");
+    expect(c.rest.mock.calls.at(-1)[1]).toBeUndefined(); // 纯 GET,无 method/body
     await c.getRecommend();
     expect(path(c)).toBe("/api/v1/recommend");
     await c.getLocalRecommend();

@@ -1298,6 +1298,111 @@ describe("媒体库浏览", () => {
     expect(level3._homeAll || level3._homeStage1).toBeTruthy();
   });
 
+  // ===== /v1/home/recommend-section 换源 + 老服务端回落(2026-11-15) =====
+  it("为你推荐:新端点成功 → 固定卡零门槛 + random 原序,且不触发 getPlaylistsV2", async () => {
+    const section = {
+      success: true, hourBucket: 498541, homeCount: 12, degraded: false,
+      fixed: [
+        { playlistId: "pl-fix-1", name: "每日推荐", playlistName: "每日推荐", position: 1, songCount: 779, coverArt: "pl-pl-fix-1", isCombo: false },
+        { playlistId: "pl-fix-10", name: "十首小卡", playlistName: "十首小卡", position: 2, songCount: 10, coverArt: "pl-pl-fix-10", isCombo: false },
+        { playlistId: "pl-fix-0", name: "缺行卡", playlistName: "", position: 3, songCount: 0, coverArt: null, isCombo: true, missing: true },
+      ],
+      random: [
+        { id: "pl-rand-c", name: "C", songCount: 303, coverArt: "pl-pl-rand-c" },
+        { id: "pl-rand-a", name: "A", songCount: 88, coverArt: "pl-pl-rand-a" },
+        { id: "pl-rand-b", name: "B", songCount: 120, coverArt: "pl-pl-rand-b" },
+      ],
+    };
+    const getHomeRecommendSection = vi.fn(async () => section);
+    const getPlaylistsV2 = vi.fn(async () => { throw new Error("新路径不该拉 200 条全量"); });
+    const c = mkCard({}, { getHomeRecommendSection, getPlaylistsV2 });
+    const r = await c._fetchHomeItems(lvl("home", { vSeq: 1 }));
+    expect(getHomeRecommendSection).toHaveBeenCalledTimes(1);
+    expect(getPlaylistsV2).not.toHaveBeenCalled();
+    expect(r.items.map((i) => i.id)).toEqual([
+      "pl-fix-1", "pl-fix-10", "pl-fix-0", "pl-rand-c", "pl-rand-a", "pl-rand-b",
+    ]);
+    // 零门槛:10 首的固定卡照样在,且曲目数原样带出
+    expect(r.items[1].songCount).toBe(10);
+    expect(r.items[2].songCount).toBe(0);
+    // random 顺序逐项原样(服务端已确定性洗牌 + 快照冻结)
+    expect(r.items.slice(3).map((i) => i.id)).toEqual(["pl-rand-c", "pl-rand-a", "pl-rand-b"]);
+    expect(r.total).toBe(6);
+    await flush();
+  });
+
+  it("为你推荐:新端点 404 → 回落老逻辑,home-cards + getPlaylistsV2 都调用且 >30 门槛保留", async () => {
+    const getHomeRecommendSection = vi.fn(async () => { throw new Error("MusicFlow REST GET /api/v1/home/recommend-section -> 404"); });
+    const getHomeCards = vi.fn(async () => ({ cards: [
+      { playlistId: "pl-c1", playlistName: "固定 1", coverArt: "c1", songCount: 50, isCombo: true },
+      { playlistId: "pl-c-small", playlistName: "十首固定卡", coverArt: "c2", songCount: 10, isCombo: false },
+    ] }));
+    const getPlaylistsV2 = vi.fn(async () => ({ items: [
+      { id: "pl-p1", name: "池 1", songCount: 40, coverArt: "x" },
+      { id: "pl-p2", name: "池 2(20 首)", songCount: 20, coverArt: "x" },
+    ] }));
+    const getHomePlaylistCount = vi.fn(async () => ({ count: 3 }));
+    const c = mkCard({}, { getHomeRecommendSection, getHomeCards, getPlaylistsV2, getHomePlaylistCount });
+    const r = await c._fetchHomeItems(lvl("home", { vSeq: 1 }));
+    expect(getHomeRecommendSection).toHaveBeenCalledTimes(1);
+    expect(getHomeCards).toHaveBeenCalledTimes(1);
+    expect(getPlaylistsV2).toHaveBeenCalledWith({ page: 1, pageSize: 200 });
+    // 回落口径原样:固定卡 >30、随机池 >=30 ⇒ 10 首固定卡与 20 首池项都被挡掉
+    expect(r.items.map((i) => i.id)).toEqual(["pl-c1", "pl-p1"]);
+    expect(r.items[0].badge).toBeTruthy();
+    await flush();
+  });
+
+  it("为你推荐:fixed 缺 pluginId 不崩,degraded 只 console.warn 不做 UI 提示", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fixed = { playlistId: "pl-x", name: "缺行卡", playlistName: "", position: 1, songCount: 0, coverArt: null, isCombo: false, missing: true };
+    expect("pluginId" in fixed).toBe(false);
+    const c = mkCard({}, {
+      getHomeRecommendSection: vi.fn(async () => ({
+        success: true, hourBucket: 1, homeCount: 1, degraded: true, fixed: [fixed], random: [],
+      })),
+    });
+    const r = await c._fetchHomeItems(lvl("home", { vSeq: 1 }));
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0].id).toBe("pl-x");
+    expect(r.items[0].kind).toBe("playlist");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("degraded=true");
+    expect(String(warn.mock.calls[0][0])).toContain("pl-x");
+    warn.mockRestore();
+    await flush();
+  });
+
+  it("为你推荐:响应形状不对 → 回落,不渲染空白首页", async () => {
+    const getHomeCards = vi.fn(async () => ({ cards: [] }));
+    const getPlaylistsV2 = vi.fn(async () => ({ items: [{ id: "pl-ok", name: "OK", songCount: 40, coverArt: "x" }] }));
+    const badShapes = [
+      null,
+      {},
+      { success: true, fixed: "not-an-array", random: [] },
+      { success: true, fixed: [{ name: "无 id" }], random: [] },
+      { success: true, fixed: [], random: [{ name: "无 id" }] },
+    ];
+    for (const bad of badShapes) {
+      const c = mkCard({}, {
+        getHomeRecommendSection: vi.fn(async () => bad),
+        getHomeCards,
+        getPlaylistsV2,
+      });
+      const r = await c._fetchHomeItems(lvl("home", { vSeq: 1 }));
+      expect(r.items.map((i) => i.id)).toContain("pl-ok");
+      await flush();
+    }
+    expect(getPlaylistsV2).toHaveBeenCalledTimes(badShapes.length);
+  });
+
+  it("为你推荐:客户端无新方法(老桩)→ 直接走回落,不抛异常", async () => {
+    const c = mkCard();
+    expect(typeof c._client.getHomeRecommendSection).toBe("undefined");
+    await expect(c._fetchHomeItems(lvl("home", { vSeq: 1 }))).resolves.toBeTruthy();
+    await flush();
+  });
+
   it("_appendHomeSections / _pushHomePlaylist", () => {
     const c = mkCard();
     const items = [];

@@ -729,6 +729,16 @@ export class BackendClient {
   async getHomeCards() {
     return this.rest("/api/v1/recommend/home-cards");
   }
+  /**
+   * 首页「为你推荐」聚合:服务端确定性组装(固定卡零门槛 + 随机位按小时快照冻结)。
+   * 响应 { success, hourBucket, homeCount, degraded, fixed[], random[] };fixed[] 不含 pluginId。
+   * HACS 独立发版,用户可能配老服务端:该端点 404 / 网络失败 / 形状不对时,
+   * _fetchHomeItems 会回落到 getHomeCards + getPlaylistsV2 的老逻辑(见卡片源码)。
+   * rest() 已统一处理鉴权、401 续期重试与非 2xx 抛错,故与 getPlaylistsV2 写法一致。
+   */
+  async getHomeRecommendSection() {
+    return this.rest("/api/v1/home/recommend-section");
+  }
   async getRecommend() {
     return this.rest("/api/v1/recommend");
   }

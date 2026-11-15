@@ -3492,7 +3492,9 @@ class MusicFlowRemoteCard extends LitElement {
   }
 
   // 首页推荐数据:与 Web 首页同源(能力驱动,不写死插件名)。两阶段返回:
-  // - 阶段一(快):歌单 / 固定卡计数 / 固定卡三路请求先回,顶部固定卡 + 侧栏随机立即渲染;
+  // - 阶段一(快):新服务端走 GET /v1/home/recommend-section 一次拿齐「固定卡 + 随机位」;
+  //   老服务端(404 / 网络失败 / 形状不对)回落到原有的歌单 / 计数 / 固定卡三路请求,
+  //   本地拼装顶部固定卡 + 侧栏随机(HACS 独立发版,不能假定服务端已升级)。
   // - 阶段二(慢):平台精选 / 本地随机两路请求(冷启动可能 2.5s+)到达后,把两个分区
   //   追加到同一列表尾,再复用虚拟滚动「失效首块 + 重载」就地补齐,不整页重载、不白屏。
   // 最终聚合顺序/字段与旧版逐字节一致:固定卡 → 侧栏随机 → 平台精选分区 → 本地随机分区。
@@ -3507,29 +3509,66 @@ class MusicFlowRemoteCard extends LitElement {
     if (level && level._homeStage1 && level._homeStage1Seq === seq) {
       return { items: level._homeStage1, total: level._homeStage1.length };
     }
-    const [plRes, cntRes, cardRes] = await Promise.all([
-      this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
-      this._client.getHomePlaylistCount().catch(() => null),
-      this._client.getHomeCards().catch(() => null),
-    ]);
-    const pls = plRes?.items || [];
-    let homeCount = 8;
-    const n = parseInt(String(cntRes?.count), 10);
-    if (Number.isFinite(n) && n >= 1 && n <= 24) homeCount = n;
-    // 固定卡:后端已按位次排序;前端保持 >30 首门槛,只展示有内容的卡。
-    // 旧版后端无 home-cards 端点时回落「今日漫游」名匹配(兼容 v1.7.21 及更早)。
-    let cards = (cardRes?.cards || []).filter((c) => (c.songCount || 0) > 30);
-    if (!cardRes || !Array.isArray(cardRes.cards)) {
-      const legacy = pls.find((p) => p.name === "今日漫游" && (p.songCount || 0) > 30) || null;
-      if (legacy) cards = [{ playlistId: legacy.id, playlistName: legacy.name, coverArt: legacy.coverArt, songCount: legacy.songCount, isCombo: true }];
+    // ===== 新端点:服务端确定性组装「为你推荐」(2026-11-15) =====
+    // 服务端已按 (position, pluginId) 排好固定卡、按 md5(userId|hourBucket|id) 洗好随机位
+    // 并按小时快照冻结;卡片只做字段归一,不再过滤门槛、不再本地洗牌、不再拉 200 条全量。
+    // 老客户端桩/老服务端里可能压根没有这个方法,故先做能力探测。
+    let sectionRes = null;
+    if (typeof this._client.getHomeRecommendSection === "function") {
+      try {
+        sectionRes = await this._client.getHomeRecommendSection();
+      } catch (e) {
+        // 老服务端无该端点(404)、网络失败、代理转发失败:静默走下面的回落,绝不打断首屏。
+      }
     }
-    const fixedIds = new Set(cards.map((c) => c.playlistId));
-    const pool = pls.filter((p) => !fixedIds.has(p.id) && (p.songCount || 0) >= 30);
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
+    const section = this._validHomeSection(sectionRes);
     const items = [];
-    cards.forEach((c) => this._pushHomePlaylist(items, c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name)));
-    side.forEach((p) => this._pushHomePlaylist(items, p.id, p.name, p.coverArt, p.songCount, ""));
+    if (section) {
+      // degraded = 至少一张固定卡指向不存在的歌单;本轮只告警,不做 UI 提示。
+      if (section.degraded === true) {
+        const broken = section.fixed.filter((c) => c.missing === true).map((c) => c.playlistId);
+        console.warn(
+          `[musicflow-card] recommend-section degraded=true: ${broken.length} fixed card(s) point to missing playlists` +
+          ` (${broken.join(",") || "no missing detail"}); warn only, no UI prompt this round`,
+        );
+      }
+      // 固定卡零门槛:服务端给几张就渲染几张(songCount=10 的卡同样展示),顺序原样。
+      // 身份字段用 playlistId(新端点不返回 pluginId),与 _pushHomePlaylist 的 id 语义一致。
+      section.fixed.forEach((c) => this._pushHomePlaylist(
+        items, c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount,
+        c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name),
+      ));
+      // 随机位:服务端已确定性洗牌 + 冻结,顺序原样,不重排、不截断。
+      section.random.forEach((r) => this._pushHomePlaylist(
+        items, r.id, r.name, r.coverArt, r.songCount, "",
+      ));
+    } else {
+      // ===== 回落:老服务端没有新端点 / 网络失败 / 响应形状不对 =====
+      // 下面这段是改动前的阶段一逻辑,**逐字保留**(含 >30 门槛与本地 Math.random 洗牌):
+      // 那是老服务端的兼容口径,删掉会让配旧后端的 HACS 用户首页直接空白。
+      const [plRes, cntRes, cardRes] = await Promise.all([
+        this._client.getPlaylistsV2({ page: 1, pageSize: 200 }).catch(() => null),
+        this._client.getHomePlaylistCount().catch(() => null),
+        this._client.getHomeCards().catch(() => null),
+      ]);
+      const pls = plRes?.items || [];
+      let homeCount = 8;
+      const n = parseInt(String(cntRes?.count), 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 24) homeCount = n;
+      // 固定卡:后端已按位次排序;前端保持 >30 首门槛,只展示有内容的卡。
+      // 旧版后端无 home-cards 端点时回落「今日漫游」名匹配(兼容 v1.7.21 及更早)。
+      let cards = (cardRes?.cards || []).filter((c) => (c.songCount || 0) > 30);
+      if (!cardRes || !Array.isArray(cardRes.cards)) {
+        const legacy = pls.find((p) => p.name === "今日漫游" && (p.songCount || 0) > 30) || null;
+        if (legacy) cards = [{ playlistId: legacy.id, playlistName: legacy.name, coverArt: legacy.coverArt, songCount: legacy.songCount, isCombo: true }];
+      }
+      const fixedIds = new Set(cards.map((c) => c.playlistId));
+      const pool = pls.filter((p) => !fixedIds.has(p.id) && (p.songCount || 0) >= 30);
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      const side = shuffled.slice(0, Math.max(0, homeCount - fixedIds.size));
+      cards.forEach((c) => this._pushHomePlaylist(items, c.playlistId, c.playlistName || c.name, c.coverArt, c.songCount, c.isCombo ? this._t("browser.todayMix") : (c.playlistName || c.name)));
+      side.forEach((p) => this._pushHomePlaylist(items, p.id, p.name, p.coverArt, p.songCount, ""));
+    }
     if (level) { level._homeStage1 = items; level._homeStage1Seq = seq; }
     // 阶段二:同一 seq 只补一次慢请求;到达后合并 + 失效重载。期间若 level 被重置/刷新/搜索
     // (vSeq 变化)则整段丢弃,绝不覆盖更新的状态(复用 _vsReset 的序号令牌纪律)。
@@ -3556,6 +3595,20 @@ class MusicFlowRemoteCard extends LitElement {
       });
     }
     return { items, total: items.length };
+  }
+
+  /**
+   * 校验 /v1/home/recommend-section 的响应形状。任何一项不满足都返回 null,
+   * 由 _fetchHomeItems 回落到老逻辑 —— 绝不把半成品 / HTML 错误页当成空 section
+   * 渲染成空白首页。fixed[] 刻意不含 pluginId,这里只用 playlistId 做身份校验。
+   */
+  _validHomeSection(res) {
+    if (!res || res.success !== true) return null;
+    if (!Array.isArray(res.fixed) || !Array.isArray(res.random)) return null;
+    const hasId = (v) => v !== null && v !== undefined && String(v).length > 0;
+    if (!res.fixed.every((c) => c && hasId(c.playlistId))) return null;
+    if (!res.random.every((r) => r && hasId(r.id))) return null;
+    return res;
   }
 
   // 首页推荐:固定卡 / 侧栏随机 / 本地随机 共用的歌单行(字段与旧版 pushPl 逐字节一致)。
