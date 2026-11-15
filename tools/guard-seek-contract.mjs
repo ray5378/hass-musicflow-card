@@ -101,11 +101,20 @@ check(
   /this\._ui\.seekDragging\s*=\s*true/,
   /seekDragging=!0/,
 );
+// 注意：dist 侧不能只钉「一种文本形态」。terser 会把 `if (x) return;` 折叠进紧邻的
+// 条件判断（`!x && ...`）—— 语义完全不变，文本形态却变了，只钉 `x||` 会因压缩器
+// 输出变化而假红。本仓 2026-09-24 已在同类坑上吃过一次（commit 9f47e91：dist 侧
+// 不再钉死参数名 e）。故 dist 侧同时接受两种等价形态：
+//   ① terser 折叠形态 `!this._ui.seekDragging && this._ui.isPlaying`
+//      （`&&isPlaying` 是 tick 独有搭配：_applyStatus 那条是 `!seekDragging && (赋值)`，
+//       不会串台，所以放宽后仍只认「tick 里拖拽中跳过」这一语义）；
+//   ② 旧压缩形态 `_ui.seekDragging ||`。
+// src 侧（第三个参数）不放宽：源码是我们自己的，必须原样保留那句早返回。
 check(
   "tick 遇 seekDragging 直接返回",
   "只置位不消费 = 等于没修",
   /if\s*\(\s*this\._ui\.seekDragging\s*\)\s*return;/,
-  /seekDragging\|\|/,
+  /!this\._ui\.seekDragging\s*&&\s*this\._ui\.isPlaying|_ui\.seekDragging\s*\|\|/,
 );
 check(
   "_applyStatus 遇 seekDragging 跳过位置覆盖",
