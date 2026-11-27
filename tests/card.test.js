@@ -653,6 +653,90 @@ describe("队列与状态应用", () => {
     expect(c._isStaleSample({}, Date.now())).toBe(false); // 无 reportedAt
   });
 
+  it("_adoptProjectedPosition:轮询回写单向防抖", () => {
+    const c = mkCard();
+    // 同曲内小回退（≤0.5s）→ 保留本地值，吞掉 0.1s 精度抖动
+    expect(c._adoptProjectedPosition(10.0, 10.3)).toBeCloseTo(10.3);
+    expect(c._adoptProjectedPosition(10.2, 10.5)).toBeCloseTo(10.5);
+    expect(c._adoptProjectedPosition(10.0, 10.5)).toBeCloseTo(10.5); // 恰好 0.5
+    // 前进 → 采纳服务端值，不影响真前进
+    expect(c._adoptProjectedPosition(10.5, 10.0)).toBeCloseTo(10.5);
+    expect(c._adoptProjectedPosition(10.0, 10.0)).toBeCloseTo(10.0);
+    // 大回退（>0.5s）→ 采纳，真 seek 不被吞
+    expect(c._adoptProjectedPosition(9.0, 10.0)).toBeCloseTo(9.0);
+    expect(c._adoptProjectedPosition(0.0, 10.0)).toBeCloseTo(0.0);
+    // 非同一首歌 → 一律采纳，换歌起点不被吞
+    expect(c._adoptProjectedPosition(0.0, 0.3, false)).toBeCloseTo(0.0);
+    expect(c._adoptProjectedPosition(2.0, 200.0, false)).toBeCloseTo(2.0);
+    // 容差可调
+    expect(c._adoptProjectedPosition(10.0, 10.4, true, 0.3)).toBeCloseTo(10.0);
+    // 刚超出容差（0.6s）→ 采纳，防抖不是无界吞并
+    expect(c._adoptProjectedPosition(10.0, 10.6)).toBeCloseTo(10.0);
+  });
+
+  it("_applyStatus:同曲内被 0.1s 精度往回拽一小格时不回跳", () => {
+    const c = mkCard();
+    c._ui.currentPeerId = "dlna:d1";
+    c._ui.song = { songId: "s1", title: "T" };
+    c._ui.currentTime = 10.3; // 本地 tick 已推进到的值
+    c._ui.isPlaying = true;
+    c._lastPos = 10.0;
+    // 服务端采样 10.0(0.1s 精度),无 reportedAt/updatedAt → 不外推,projected=10.0;
+    // 同曲、back=0.3≤0.5 → 保留本地 10.3,不写回。
+    c._applyStatus({
+      state: "PLAYING", position: 10.0, duration: 100,
+      media: { songId: "s1", title: "T" },
+      items: [{ songId: "s1", title: "T", duration: 100 }],
+      currentIndex: 0,
+    });
+    expect(c._ui.currentTime).toBeCloseTo(10.3);
+
+    // 换曲:新曲从 0 起,即便旧歌进度仅 0.3s 也必须采纳新起点(同曲判据兜底)
+    c._ui.song = { songId: "s1", title: "T" };
+    c._ui.currentTime = 0.3;
+    c._applyStatus({
+      state: "PLAYING", position: 0.0, duration: 100,
+      media: { songId: "s2", title: "T2" },
+      items: [{ songId: "s2", title: "T2", duration: 100 }],
+      currentIndex: 0,
+    });
+    expect(c._ui.currentTime).toBeCloseTo(0.0);
+  });
+
+  it("_applyStatus:外推门 = statePlaying || advancing（错报仍外推 / 冻结不外推）", () => {
+    // A. state 错报 STOPPED 但 position 真实前进 → 必须外推。
+    //    否则外推值退化成原始采样，采样年龄 3s 会原样变成 3s 的进度后跳。
+    const a = mkCard();
+    a._ui.currentPeerId = "dlna:d1";
+    a._ui.song = { songId: "s1", title: "T" };
+    a._ui.currentTime = 10.0;
+    a._ui.isPlaying = true;
+    a._lastPos = 9.0; // 上一拍 9.0 → 本拍 10.0 = 真实前进
+    a._applyStatus({
+      state: "STOPPED", position: 10.0, duration: 100, updatedAt: Date.now() - 3000,
+      media: { songId: "s1", title: "T" },
+      items: [{ songId: "s1", title: "T", duration: 100 }],
+      currentIndex: 0,
+    });
+    expect(a._ui.currentTime).toBeCloseTo(13.0, 0); // 10.0 + 3s 采样年龄
+
+    // B. BUFFERING 且 position 冻结（与上一拍相同）→ 绝不外推。
+    //    对冻结值外推会让 projected 虚涨，PLAYING 到达那一刻整体回跳。
+    const b = mkCard();
+    b._ui.currentPeerId = "dlna:d1";
+    b._ui.song = { songId: "s1", title: "T" };
+    b._ui.currentTime = 10.0;
+    b._ui.isPlaying = true;
+    b._lastPos = 10.0; // 与 status.position 相同 = 冻结
+    b._applyStatus({
+      state: "BUFFERING", position: 10.0, duration: 100, updatedAt: Date.now() - 3000,
+      media: { songId: "s1", title: "T" },
+      items: [{ songId: "s1", title: "T", duration: 100 }],
+      currentIndex: 0,
+    });
+    expect(b._ui.currentTime).toBeCloseTo(10.0);
+  });
+
   it("_applyStatus:播放中 + media 补全 + 音量/静音", () => {
     const c = mkCard();
     c._ui.currentPeerId = "dlna:d1";

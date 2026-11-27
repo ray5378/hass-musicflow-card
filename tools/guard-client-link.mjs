@@ -48,7 +48,36 @@ check(
 check(
   "_applyStatus 真的调用了外推函数（不是只定义不调用）",
   "定义了却不在赋值处调用 = 等于没修",
-  /this\._ui\.currentTime\s*=\s*this\._projectStatusPosition\(/,
+  /this\._projectStatusPosition\(status,\s*extrapolate\)/,
+  // dist 被压缩后局部变量名改掉，只认方法名
+  /this\._projectStatusPosition\(/,
+);
+// ★ 外推门必须是 statePlaying || advancing —— 两个口径各有实测过的坑，见源码同名长注释：
+//   · 裸 statePlaying：设备 GENA 缓存错报 STOPPED 而 position 在前进时外推被关掉，
+//     采样年龄 ageSec 变成进度后跳（v2.8.24 歌词对齐要消灭的形态）。
+//   · this._ui.isPlaying：它含 BUFFERING，切歌/seek 后服务端冻结 position，
+//     对冻结值外推会让 PLAYING 到达时整体回跳。
+// dist 压缩后变量名丢失，只校验 src。
+results.push({
+  name: "外推门 = statePlaying || advancing（错报仍外推 / 冻结不外推）",
+  why: "退回裸 statePlaying 会因 state 错报让进度后跳 ageSec；换成 _ui.isPlaying 会把 BUFFERING 冻结值外推",
+  src: /const extrapolate\s*=\s*statePlaying\s*\|\|\s*advancing;/.test(src) &&
+    /this\._projectStatusPosition\(status,\s*extrapolate\)/.test(src),
+  dist: true,
+});
+const nakedGate = /this\._projectStatusPosition\(\s*status\s*,\s*(statePlaying|this\._ui\.isPlaying)\s*\)/.test(src);
+results.push({
+  name: "外推门不得退回裸 statePlaying / _ui.isPlaying",
+  why: "两个错误口径的回归症状分别是「错报时进度后跳」和「BUFFERING 冻结值外推后回跳」",
+  src: !nakedGate,
+  dist: true,
+});
+check(
+  "_applyStatus 的进度回写经过单向防抖（不把 0.1s 精度抖动写回 currentTime）",
+  "外推值必须经 _adoptProjectedPosition 才写 currentTime，否则进度条往前走时会被 0.1s 上报精度往回拽一小格",
+  /this\._ui\.currentTime\s*=\s*this\._adoptProjectedPosition\(\s*projected,\s*this\._ui\.currentTime/,
+  // dist: currentTime 赋值必须经 _adoptProjectedPosition（变量名 m 被压缩，不认）
+  /this\._ui\.currentTime\s*=\s*this\._adoptProjectedPosition\(/,
 );
 // 反向断言：currentTime 不得再直接写 status.position（那正是 v2.4.0 的形态）。
 const directAssign = /this\._ui\.currentTime\s*=\s*status\.position/.test(src);

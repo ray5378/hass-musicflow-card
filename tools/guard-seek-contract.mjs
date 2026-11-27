@@ -105,7 +105,8 @@ check(
   "tick 遇 seekDragging 直接返回",
   "只置位不消费 = 等于没修",
   /if\s*\(\s*this\._ui\.seekDragging\s*\)\s*return;/,
-  /seekDragging\|\|/,
+  // dist 压缩后 if 括号与 || 都可被改写；只认 seekDragging + return 相邻出现
+  /seekDragging[)]?return|seekDragging\|\|/,
 );
 check(
   "_applyStatus 遇 seekDragging 跳过位置覆盖",

@@ -926,6 +926,18 @@ class MusicFlowRemoteCard extends LitElement {
     return dur > 0 ? Math.min(projected, dur) : projected;
   }
 
+  // 轮询回写的单向防抖:吞掉「往前走时被 0.1s 上报精度往回拽一小格」。
+  // 服务端 position 报到 0.1s,外推值每 2s 重对齐;截断误差+网络往返让它有时比
+  // 本地 tick 已推进的 _ui.currentTime 小 0.1~0.3s,写回即「进度条轻微后跳」。
+  // 只拦「同曲内的小回退」:前进/大回退/换歌一律采纳。换歌靠 sameSong=false 兜底
+  // (切歌极快、旧歌进度尚 <0.5s 时不吞新曲起点);seek 由 _applyStatus 的 stale
+  // /seekDragging 守卫在前挡住,不走这里。容差 0.5s 覆盖精度抖动又不掩盖真跑偏。
+  _adoptProjectedPosition(projected, local, sameSong = true, toleranceSec = 0.5) {
+    if (!sameSong) return projected;
+    const back = local - projected;
+    return back > 0 && back <= toleranceSec ? local : projected;
+  }
+
   // 该上报是不是「命令下发**之前**采的样」—— 即尚未包含本次命令的结果。
   //
   // 客户端实例的音量 / 静音 / 播放态与 position 一样,都是**周期性上报**的采样
@@ -998,7 +1010,40 @@ class MusicFlowRemoteCard extends LitElement {
       } else if (this._ui.seekDragging) {
         dbg("拖拽中:不覆盖手指值", { peer: this._ui.currentPeerId, finger: this._ui.currentTime, reported: status.position });
       }
-      if (!stale && !this._ui.seekDragging) this._ui.currentTime = this._projectStatusPosition(status, statePlaying);
+      if (!stale && !this._ui.seekDragging) {
+        // ★★ [2026-11-27 独立复核，勿删] 外推门 = 「state 说在播」**或**「position 真的在前进」。
+        //    一行都不能"简化"，三个口径的差别是实测出来的：
+        //
+        // ① 为什么不是裸 statePlaying：部分 DLNA/AirPlay 设备的 GENA 事件缓存会把 state
+        //    错报成 STOPPED/PAUSED，而 SOAP 的 position 明明在前进（240 实测 2h：HiVi 8 次、
+        //    纯AP组 15 次，例 13:14:05 pos 195.9→197.1 而 state=STOPPED）。此时若关掉外推，
+        //    外推值退化成"原始采样 pos"，而本地 tick 已按 advancing 推过去了 —— 一旦采样
+        //    年龄 ageSec > 0（GENA 时间戳更旧 / HA 主机与服务端时钟有偏差），差值就是 ageSec，
+        //    超过 _adoptProjectedPosition 的 0.5s 容差 → 被采纳 → 进度后跳。这正是 v2.8.24
+        //    歌词对齐要消灭的形态，所以错报时必须继续外推。
+        //
+        // ② 为什么不是 this._ui.isPlaying：它表达的是**按钮态**（"看起来在播"），切歌/seek
+        //    后服务端报 BUFFERING 2~5s 期间 position 是被**刻意冻结**的（静默预填充 / hold）。
+        //    对冻结值外推会让 projected 虚涨，PLAYING 到达那一刻整体回跳。所以 BUFFERING
+        //    只能算"在播"，不能算"允许外推"——两个概念必须分开（见备份分支 2fc8daa
+        //    「BUFFERING 算在播但不外推位置」）。
+        //
+        // ③ advancing 的定义就要求「position 相比上一拍真实前进」== 「值没被冻结」，
+        //    所以把它并入外推门是安全的；冻结时 advancing 自然为 false，门自动关上，
+        //    无需再单独判 BUFFERING。
+        //
+        // 实测口径（240 / v4.15.11 / 2026-11-27 12:00–13:59，4322 条采样）：设备型 peer
+        // 的 ageSec 中位≈0、max 0.000、>0.5s 零次 ⇒ 本门当前与裸 statePlaying 结果相同，
+        // 它守的是"服务端 updatedAt 变旧 / 跨机时钟偏差 / GENA 时间戳更旧"那类边界。
+        const extrapolate = statePlaying || advancing;
+        const projected = this._projectStatusPosition(status, extrapolate);
+        // 同曲判据:两边都有 songId 且不同 = 换歌(新曲起点原样采纳);缺任一默认同曲。
+        // 换歌通常是大回退本就穿透,这里只兜底「切歌极快、旧歌进度尚 <0.5s」的窄边界。
+        const incomingSongId = status.media && status.media.songId;
+        const currentSongId = this._ui.song && this._ui.song.songId;
+        const sameSong = !incomingSongId || !currentSongId || incomingSongId === currentSongId;
+        this._ui.currentTime = this._adoptProjectedPosition(projected, this._ui.currentTime, sameSong);
+      }
       // 刚用状态锚点校准过进度 → 下一帧 tick 从此刻起算,避免把轮询间隔重复加一遍。
       this._lastTickAt = Date.now();
     }
